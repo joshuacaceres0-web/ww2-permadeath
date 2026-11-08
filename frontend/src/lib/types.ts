@@ -106,3 +106,11 @@ export interface BattleResult {
   commander_promoted: boolean;
   commander_rank: string;
 }
+
+export type ReinforcementKind = "rifle" | "heavy";
+
+export interface ReinforceOut {
+  kind: ReinforcementKind;
+  cost: number;
+  requisition: number;
+}

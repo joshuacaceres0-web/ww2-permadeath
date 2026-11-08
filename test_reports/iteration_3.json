@@ -1,0 +1,78 @@
+{
+  "iteration": 3,
+  "mode": "generate",
+  "summary": "New v5 mobile-battle criteria (briefing engage-btn tappability, rotate-prompt, drag box-select, formations, reinforcements, destructible cover) each got a fresh browser check; reinforcements also got a backend pytest file. Regression lane re-ran the existing retreat-autosave check. All 7 criteria exercised across 7 new browser checks (one ran twice: once on localhost, once through the public preview ingress) + 1 backend test file (5 tests) + 1 re-run of a pre-existing browser check. 7 new/rerun browser checks passed, 5 backend tests passed, 1 pre-existing regression check passed.",
+  "passed": 9,
+  "failed": 0,
+  "flaky": 0,
+  "blocked": 0,
+  "test_error": 0,
+  "bugs": [],
+  "action_items": [],
+  "retest_needed": false,
+  "checks": [
+    {
+      "criterion": "User bug: BEGIN THE ASSAULT button pushed off-screen by the troop list on phone",
+      "name": "briefing-engage-btn-tappable-mobile",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "At 390x664 portrait and (fresh context) 844x390 landscape: briefing-scroll scrolled to bottom, engage-btn boundingBox fully inside the viewport both times, click removed briefing-panel (battle started) in both viewports."
+    },
+    {
+      "criterion": "User bug cross-check through public ingress",
+      "name": "briefing-engage-btn-tappable-mobile-preview",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Same flow run against https://ww2-permadeath--19wbuck3.preview.emergentagent.com at 390x664: engage-btn visible on-screen after scrolling the roster, click starts the battle (briefing-panel gone)."
+    },
+    {
+      "criterion": "Game plays sideways on phone after deployment (rotate prompt)",
+      "name": "rotate-prompt-pauses-and-clears-landscape",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Portrait 390x664 touch after engage: rotate-prompt visible, window.__vanguard.paused===true. Same page rotated to 844x390 (exitFullscreen before setViewportSize, per the briefing's known headless-fullscreen pitfall): rotate-prompt gone, header (a[href=\"/\"]) hidden, combat-log hidden, engine stays paused until player resumes (intentional per spec_deviations)."
+    },
+    {
+      "criterion": "Mobile drag-select box (touch pointer events on battle-canvas)",
+      "name": "mobile-drag-select-box",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "touch-box-select toggled window.__vanguard.touchBox=true; synthetic PointerEvent(pointerType:'touch') drag over the ally cluster selected them (selected.length>0), matching dock cards carry the #4ECDC4 selected border. Deselected, then pointerdown+450ms wait+drag (press-and-hold >350ms) also produced a non-empty selection via the engine's touchPan->marquee path."
+    },
+    {
+      "criterion": "Quick formation buttons (mobile touch-formation-* and desktop formation-*, F key)",
+      "name": "quick-formation-buttons-mobile-and-desktop",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Desktop 1280x720: formation-line click -> engine.formation==='line' + #4ECDC4 active class; F key cycled to 'column'; formation-wedge after selectAll() re-formed the squad (orders>0). Mobile 390x844: touch-formation-column activated (engine.formation==='column', active class), touch-formation-spread re-formed the selected squad."
+    },
+    {
+      "criterion": "Allied reinforcements cost RP (UI)",
+      "name": "reinforcements-cost-rp-and-counter",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "reinforce-rifle (15 RP) and reinforce-heavy (25 RP) each deducted the exact cost from battle-rp and grew debugAllies() npc count; reinforce-btn counter went 3/3->2/3->1/3->0/3 then became disabled after the 3rd call."
+    },
+    {
+      "criterion": "Allied reinforcements cost RP (API)",
+      "name": "test_tscheck_battle_reinforce.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "cd /app/backend && python -m pytest -q test_tscheck_battle_reinforce.py -> 5 passed: POST /api/battle/reinforce rifle -> 200 {kind:rifle,cost:15,requisition:rp-15}; heavy -> 200 cost:25; wrong mission_id (op_04 while current is op_01) -> 409; kind:'tank' -> 422; draining RP below 25 then calling heavy -> 402 Insufficient requisition points."
+    },
+    {
+      "criterion": "Destructible cover",
+      "name": "destructible-cover-blast-reduces-hp",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "window.__vanguard.debugCover() sample before {count:49,hp:5390}; after debugBlast(x,y) at that sample point {count:49,hp:5048} (hp dropped, no Vite error overlay, battle-timer still live)."
+    },
+    {
+      "criterion": "No regression in save/battle flow (retreat files a report)",
+      "name": "battle-retreat-autosaves-loss",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran pre-existing check unchanged: retreat-btn -> debrief-panel shown, debrief-return-btn reads 'REPORT FILED \u2014 RETURN TO HQ', battles_lost incremented by 1 via /api/state poll, no console errors."
+    }
+  ]
+}

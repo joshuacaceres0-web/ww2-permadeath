@@ -10,6 +10,8 @@ from models.models import (
     CommanderIn,
     GameStateOut,
     MissionOut,
+    ReinforceIn,
+    ReinforceOut,
     WipeIn,
 )
 from lib.db import db
@@ -37,6 +39,26 @@ async def rename_commander(input: CommanderIn):
 @router.get("/missions", response_model=List[MissionOut])
 async def get_missions():
     return mission_list()
+
+
+REINFORCEMENT_COST = {"rifle": 15, "heavy": 25}
+
+
+@router.post("/battle/reinforce", response_model=ReinforceOut)
+async def battle_reinforce(input: ReinforceIn):
+    """Spend requisition mid-battle to call in an AI-controlled 2nd Platoon team."""
+    state = await get_state()
+    mission = mission_by_index(state["mission_index"])
+    if state["campaign_complete"] or not mission or mission.id != input.mission_id:
+        raise HTTPException(status_code=409, detail="That mission is not the current operation")
+    cost = REINFORCEMENT_COST[input.kind]
+    res = await S.game_state.update_one(
+        {"id": STATE_ID, "requisition": {"$gte": cost}}, {"$inc": {"requisition": -cost}}
+    )
+    if res.modified_count == 0:
+        raise HTTPException(status_code=402, detail="Insufficient requisition points")
+    after = await get_state()
+    return ReinforceOut(kind=input.kind, cost=cost, requisition=after["requisition"])
 
 
 @router.post("/battle/complete", response_model=BattleResultOut)

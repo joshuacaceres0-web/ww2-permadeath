@@ -163,3 +163,17 @@ class BattleResultOut(BaseModel):
     medals_awarded: List[str] = []  # "Name — Silver Star"
     commander_promoted: bool = False
     commander_rank: str = ""
+
+
+ReinforcementKind = Literal["rifle", "heavy"]
+
+
+class ReinforceIn(BaseModel):
+    mission_id: str
+    kind: ReinforcementKind
+
+
+class ReinforceOut(BaseModel):
+    kind: ReinforcementKind
+    cost: int
+    requisition: int

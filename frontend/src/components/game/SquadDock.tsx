@@ -29,7 +29,7 @@ function UnitCard({
     <div
       data-testid={`unit-dock-card-${index}`}
       onClick={() => onSelect(unit.id)}
-      className={`group relative w-44 shrink-0 cursor-pointer border px-3 py-2 text-left transition-colors duration-150 ${
+      className={`group relative w-44 shrink-0 cursor-pointer border px-3 py-2 short:w-full short:px-2 short:py-1 text-left transition-colors duration-150 ${
         unit.alive ? "bg-[#1A1D17]" : "bg-[#15170F] opacity-60"
       } ${selected ? "border-[#4ECDC4]" : "border-[#2E3628] hover:border-[#E5A93C]"}`}
     >
@@ -47,7 +47,7 @@ function UnitCard({
           style={{ width: `${unit.alive ? hpPct : 0}%` }}
         />
       </div>
-      <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-[#8D9A83]">
+      <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-[#8D9A83] short:hidden">
         <span data-testid={`unit-dock-hp-${index}`}>
           {unit.alive ? `${unit.hp}/${unit.maxHp}` : "—"}
         </span>
@@ -85,7 +85,7 @@ function UnitCard({
 
 export default function SquadDock({ hud, onSelect, onAbility }: Props) {
   return (
-    <div className="flex gap-2 overflow-x-auto px-3 py-2" data-testid="squad-dock">
+    <div className="flex gap-2 overflow-x-auto px-3 py-2 short:h-full short:flex-col short:gap-1 short:overflow-y-auto short:px-1.5 short:py-1.5" data-testid="squad-dock">
       {hud.units.map((u, i) => (
         <UnitCard
           key={u.id}

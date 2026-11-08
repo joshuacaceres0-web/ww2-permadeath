@@ -86,6 +86,13 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
   PAUSE); tap own soldier = select, tap ground/enemy = order, drag = scroll map. Combat log/legend
   hidden on small screens.
 
+## v5 additions
+- **Mobile squad orders**: touch BOX button (next drag draws a selection box, auto-off after) and press-and-hold (>350ms) then drag = box. Formation buttons WEDGE / LINE / COLUMN / SPREAD (touch row + desktop status-bar picker, `F` cycles). Formation shapes every move order (slots oriented along travel direction); picking one re-forms the selected men on their current objective.
+- **Allied reinforcements**: status-bar RADIO menu, max 3 calls per battle. Rifle squad (3 riflemen) 15 RP, Heavy team (MG + bazooka) 25 RP. `POST /api/battle/reinforce {mission_id, kind: "rifle"|"heavy"}` → `{kind, cost, requisition}`; atomic RP deduction (402 if insufficient, 409 if mission isn't current). Engine `spawnReinforcements(kind)` adds AI 2nd Platoon units at the allied (west) edge level with the squad. No permadeath for them.
+- **Destructible cover**: sandbags (110 hp) and crates (70 hp, also blockers) take explosion damage (grenades, rockets, mortars); protection scales down with hp; at 0 they're removed (crates free the path) and debris is painted. Ruins, wrecks, walls, trees are indestructible.
+- **Briefing fix**: briefing panel scrolls; BEGIN THE ASSAULT sits in a fixed footer so it's always tappable regardless of squad size.
+- **Landscape on phones**: BEGIN requests fullscreen + `screen.orientation.lock("landscape")` (Android); if still portrait during battle, a "Turn your phone sideways" overlay pauses the fight. Short landscape (`short:` variant = landscape & max-height 520px) hides the app header and the combat log, docks the squad list as a right-hand column.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD
@@ -109,6 +116,7 @@ panzerfaust (rocket), flak (static autocannon). Threat tiers LOW→CRITICAL.
 - `status_checks` — template leftover, harmless.
 
 ## API (all on api_router, prefix /api)
+- POST /battle/reinforce — spend RP mid-battle for an AI team (v5)
 - GET `/state` → GameStateOut; GET `/missions` → [MissionOut]; GET `/squad` → [SoldierOut]
 - POST `/squad/hire` {type} → SoldierOut (402 if broke; free if roster empty)
 - POST `/squad/{id}/status` {status} → SoldierOut (409 if active squad full)

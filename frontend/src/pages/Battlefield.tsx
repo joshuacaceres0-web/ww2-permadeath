@@ -7,11 +7,12 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
 import SquadDock from "@/components/game/SquadDock";
 import CombatLog from "@/components/game/CombatLog";
-import TouchControls from "@/components/game/TouchControls";
-import { Shield } from "lucide-react";
+import TouchControls, { FORMATIONS } from "@/components/game/TouchControls";
+import ReinforceMenu, { REINFORCEMENTS } from "@/components/game/ReinforceMenu";
+import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
-import { apiGet, apiPost, saveId } from "@/lib/api";
-import type { BattleResult, GameState, Mission, Soldier } from "@/lib/types";
+import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
+import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
 import { UNIT_TYPES } from "@/game/data";
 
@@ -30,6 +31,33 @@ export default function Battlefield() {
     () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
   );
 
+  // Phones play the battle sideways: try to lock landscape, otherwise ask them to rotate.
+  const [portrait, setPortrait] = useState(
+    () => typeof window !== "undefined" && window.matchMedia("(orientation: portrait)").matches
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(orientation: portrait)");
+    const on = () => setPortrait(mq.matches);
+    mq.addEventListener("change", on);
+    return () => {
+      mq.removeEventListener("change", on);
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
+    };
+  }, []);
+  const goLandscape = () => {
+    if (!touch) return;
+    const el = document.documentElement;
+    const lock = () => {
+      const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      return o?.lock ? o.lock("landscape") : Promise.reject(new Error("no lock"));
+    };
+    (el.requestFullscreen ? el.requestFullscreen() : Promise.resolve())
+      .then(lock)
+      .catch(() => {
+        /* iOS / desktop: no orientation lock — the rotate prompt covers it */
+      });
+  };
+
   const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
   const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
   const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
@@ -44,6 +72,28 @@ export default function Battlefield() {
     }
   }, [deployed, liveMission, activeSquad, state?.campaign_complete]);
   const mission = deployed?.mission ?? liveMission;
+
+  const mustRotate = touch && portrait && !!hud && !hud.briefing && hud.state === "active";
+  useEffect(() => {
+    if (mustRotate) engineRef.current?.setPaused(true);
+  }, [mustRotate]);
+
+  const reinforce = useMutation({
+    mutationFn: (kind: ReinforcementKind) =>
+      apiPost<ReinforceOut>("/battle/reinforce", { mission_id: mission?.id, kind }),
+    onSuccess: (res) => {
+      engineRef.current?.spawnReinforcements(res.kind);
+      qc.setQueryData<GameState>(["state"], (old) => (old ? { ...old, requisition: res.requisition } : old));
+      const r = REINFORCEMENTS.find((x) => x.kind === res.kind);
+      toast.success(`${r?.label ?? "Team"} inbound — ${res.cost} RP spent (${res.requisition} RP left)`);
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError && e.status === 402 ? "Not enough requisition for that team" : "Radio is dead — try again"),
+  });
+  const callIn = (kind: ReinforcementKind) => {
+    if (!engineRef.current?.canReinforce()) return;
+    reinforce.mutate(kind);
+  };
 
   const onHud = useCallback((h: HudSnapshot) => setHud(h), []);
 
@@ -194,11 +244,14 @@ export default function Battlefield() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col short:h-svh">
       {/* CRT status bar */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-[#2E3628] bg-[#0D0F0C] px-4 py-2 font-mono text-xs">
-        <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB]">
+      <div className="flex flex-wrap items-center gap-3 border-b border-[#2E3628] bg-[#0D0F0C] px-4 py-2 font-mono text-xs short:flex-nowrap short:gap-2 short:px-2 short:py-1">
+        <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
           {mission.code}
+        </span>
+        <span className="text-[#E5A93C]" data-testid="battle-rp">
+          {state?.requisition ?? "—"} RP
         </span>
         <span className="text-[#8D9A83]" data-testid="battle-timer">
           T+{mmss(hud?.elapsed ?? 0)}
@@ -218,6 +271,31 @@ export default function Battlefield() {
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">
+          {!touch && (
+            <div className="flex items-center gap-0.5" data-testid="formation-picker" title="Formation (F)">
+              {FORMATIONS.map((f) => (
+                <button
+                  key={f.id}
+                  data-testid={`formation-${f.id}`}
+                  onClick={() => engineRef.current?.setFormation(f.id)}
+                  className={`border px-1.5 py-0.5 text-[10px] tracking-wider transition-colors duration-150 ${
+                    (hud?.formation ?? "wedge") === f.id
+                      ? "border-[#4ECDC4] text-[#4ECDC4]"
+                      : "border-[#2E3628] text-[#8D9A83] hover:text-[#E3E7DC]"
+                  }`}
+                >
+                  {f.glyph} {f.label}
+                </button>
+              ))}
+            </div>
+          )}
+          <ReinforceMenu
+            rp={state?.requisition ?? 0}
+            left={hud?.reinforcementsLeft ?? 3}
+            disabled={!!hud?.briefing || hud?.state !== "active"}
+            pending={reinforce.isPending}
+            onCall={callIn}
+          />
           <Button
             data-testid="tactical-pause-btn"
             variant="outline"
@@ -226,7 +304,7 @@ export default function Battlefield() {
             disabled={hud?.briefing || hud?.state !== "active"}
           >
             {hud?.paused ? <Play size={12} className="mr-1" /> : <Pause size={12} className="mr-1" />}
-            {hud?.paused ? "RESUME" : "PAUSE (SPACE)"}
+            {hud?.paused ? "RESUME" : touch ? "PAUSE" : "PAUSE (SPACE)"}
           </Button>
           <Button
             data-testid="take-cover-btn"
@@ -250,6 +328,7 @@ export default function Battlefield() {
         </div>
       </div>
 
+      <div className="flex min-h-0 flex-1 flex-col short:flex-row">
       {/* Battlefield */}
       <div className="scanlines relative min-h-0 flex-1 overflow-hidden bg-[#080A08]">
         <BattleCanvas
@@ -262,22 +341,24 @@ export default function Battlefield() {
           engineRef={engineRef}
         />
 
-        <div className="absolute right-3 top-3 z-10 hidden md:block">
+        <div className="absolute right-3 top-3 z-10 hidden md:block short:hidden">
           <CombatLog log={hud?.log ?? []} />
         </div>
 
         {/* Order hints */}
         {touch ? (
-          <div className="pointer-events-none absolute left-2 top-2 z-10 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px] text-[#A2B29A]">
-            TAP A SOLDIER TO SELECT · TAP GROUND/ENEMY TO ORDER · DRAG TO SCROLL
+          <div className="pointer-events-none absolute left-2 top-2 z-10 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px] text-[#A2B29A]" data-testid="touch-hint">
+            {hud?.touchBox
+              ? "DRAG A BOX AROUND YOUR MEN"
+              : "TAP SOLDIER: SELECT · TAP GROUND/ENEMY: ORDER · DRAG: SCROLL · HOLD+DRAG: BOX"}
           </div>
         ) : (
           <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
-            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-8: SOLDIER · Q: ABILITY · C: COVER · SPACE: PAUSE
+            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-8: SOLDIER · Q: ABILITY · C: COVER · F: FORMATION · SPACE: PAUSE
           </div>
         )}
         {touch && hud && !hud.briefing && hud.state === "active" && (
-          <TouchControls engineRef={engineRef} paused={hud.paused} disabled={false} />
+          <TouchControls engineRef={engineRef} paused={hud.paused} disabled={false} formation={hud.formation} touchBox={hud.touchBox} />
         )}
         <div
           data-testid="terrain-legend"
@@ -287,28 +368,30 @@ export default function Battlefield() {
           <span><span className="mr-1 inline-block h-2.5 w-3 rounded-full bg-[#5C4A30] align-middle" />GAP — walk through</span>
           <span><span className="mr-1 inline-block h-2.5 w-2.5 bg-[#5A3A2A] align-middle" />BUILDING</span>
           <span>✕ HEDGEHOG</span>
-          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / RUINS / WRECKS — cover</span>
+          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — cover, blown apart by explosions</span>
+          <span>RUINS / WRECKS — solid cover</span>
           <span className="text-[#4ECDC4]">◆ IN COVER</span>
           <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
         </div>
 
         {/* Briefing overlay */}
         {hud?.briefing && hud.state === "active" && (
-          <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0D0F0C]/80 p-6">
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#0D0F0C]/80 p-2 sm:p-6">
             <div
-              className="max-w-xl border border-[#2E3628] bg-[#1A1D17] p-6"
+              className="flex max-h-full w-full max-w-xl flex-col border border-[#2E3628] bg-[#1A1D17]"
               data-testid="briefing-panel"
             >
+              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 short:p-3" data-testid="briefing-scroll">
               <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#8D9A83]">
                 Operation orders · {mission.location}
               </p>
               <h2 className="mt-1 font-heading text-2xl font-bold tracking-tight text-[#F0F5EB]">
                 {mission.code}
               </h2>
-              <p className="mt-3 font-mono text-[13px] leading-relaxed text-[#A2B29A]">
+              <p className="mt-3 font-mono text-[13px] leading-relaxed text-[#A2B29A] short:text-[11px]">
                 {mission.brief}
               </p>
-              <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+              <div className="mt-4 grid grid-cols-2 gap-1.5">
                 {(deployed?.squad ?? activeSquad).map((s, i) => (
                   <div
                     key={s.id}
@@ -325,14 +408,25 @@ export default function Battlefield() {
                   </div>
                 ))}
               </div>
-              <Button
-                data-testid="engage-btn"
-                size="lg"
-                className="mt-5 w-full"
-                onClick={() => engineRef.current?.begin()}
-              >
-                BEGIN THE ASSAULT
-              </Button>
+              </div>
+              <div className="shrink-0 border-t border-[#2E3628] bg-[#1A1D17] p-3">
+                <Button
+                  data-testid="engage-btn"
+                  size="lg"
+                  className="w-full"
+                  onClick={() => {
+                    goLandscape();
+                    engineRef.current?.begin();
+                  }}
+                >
+                  BEGIN THE ASSAULT
+                </Button>
+                {touch && (
+                  <p className="mt-1.5 text-center font-mono text-[10px] text-[#8D9A83]">
+                    Turn your phone sideways — the battle plays in landscape
+                  </p>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -423,7 +517,7 @@ export default function Battlefield() {
       </div>
 
       {/* Squad command dock */}
-      <div className="border-t border-[#2E3628] bg-[#0D0F0C]">
+      <div className="border-t border-[#2E3628] bg-[#0D0F0C] short:w-40 short:shrink-0 short:border-l short:border-t-0">
         <SquadDock
           hud={
             hud ?? {
@@ -438,12 +532,32 @@ export default function Battlefield() {
               waves: 1,
               aimUnitId: null,
               log: [],
+              formation: "wedge",
+              touchBox: false,
+              reinforcementsLeft: 3,
             }
           }
           onSelect={(id) => engineRef.current?.selectUnit(id)}
           onAbility={(id) => engineRef.current?.startAim(id)}
         />
       </div>
+      </div>
+
+      {mustRotate && (
+        <div
+          data-testid="rotate-prompt"
+          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-[#0D0F0C]/95 p-8 text-center"
+        >
+          <RotateCw size={44} className="animate-spin-slow text-[#E5A93C]" />
+          <h2 className="font-heading text-2xl font-bold tracking-tight text-[#F0F5EB]">TURN YOUR PHONE SIDEWAYS</h2>
+          <p className="max-w-xs font-mono text-xs leading-relaxed text-[#A2B29A]">
+            The battle is played in landscape. The fight is paused until you rotate.
+          </p>
+          <Button data-testid="rotate-lock-btn" variant="outline" size="sm" onClick={goLandscape}>
+            GO FULLSCREEN SIDEWAYS
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

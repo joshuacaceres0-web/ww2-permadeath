@@ -24,7 +24,7 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-svh flex-col bg-[#121411] text-[#E3E7DC]">
-      <header className="sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur">
+      <header className={cn("sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur", inGame && "short:hidden")}>
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
           <Link to="/" className="flex items-center gap-2.5" data-testid="brand-link">
             <span className="flex h-8 w-8 items-center justify-center border border-[#E5A93C] text-[#E5A93C]">

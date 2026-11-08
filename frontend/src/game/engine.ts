@@ -15,6 +15,9 @@ const UNIT_R = 9;
 const PAN_SPEED = 900;
 
 export type Variant = "beach" | "airborne" | "";
+export type Formation = "wedge" | "line" | "column" | "spread";
+export type Reinforcement = "rifle" | "heavy";
+export const MAX_REINFORCEMENTS = 3;
 
 interface Order {
   x: number;
@@ -77,6 +80,12 @@ interface Cover {
   y: number;
   r: number;
   q: number; // chance a bullet from the far side is stopped
+  // Destructible cover (sandbags, crates): explosions wear it down until it's gone.
+  kind?: "sandbag" | "crate";
+  hp?: number;
+  maxHp?: number;
+  q0?: number;
+  blocker?: Blocker;
 }
 
 interface Bullet {
@@ -166,6 +175,9 @@ export interface HudSnapshot {
   waves: number;
   aimUnitId: number | null;
   log: LogLine[];
+  formation: Formation;
+  touchBox: boolean;
+  reinforcementsLeft: number;
 }
 
 export interface FallenReport {
@@ -359,7 +371,11 @@ export class GameEngine {
   private blockers: Blocker[] = [];
   private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
   private covers: Cover[] = [];
-  private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean } | null = null;
+  private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean; t0: number } | null = null;
+  private touchBox = false;
+  private formation: Formation = "wedge";
+  private reinforcements = 0;
+  private coverLogT = 0;
   private holdPan = { x: 0, y: 0 };
   private cam = { x: 0, y: 0 };
   private viewW = VIEW_W;
@@ -420,6 +436,8 @@ export class GameEngine {
     this.battleState = "active";
     this.waveIndex = 0;
     this.nextWaveT = 0;
+    this.reinforcements = 0;
+    this.touchBox = false;
 
     // Group enemy specs into waves.
     const byWave = new Map<number, Array<{ type: EnemyTypeId; count: number }>>();
@@ -545,6 +563,12 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  setPaused(p: boolean) {
+    if (this.phase !== "battle" || this.paused === p) return;
+    this.paused = p;
+    this.dirty = true;
+  }
+
   selectAll() {
     this.selected = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc).map((u) => u.id);
     this.dirty = true;
@@ -579,19 +603,44 @@ export class GameEngine {
   private spawnNpcAllies(n: number, rng: () => number) {
     const types: UnitTypeId[] = ["rifleman", "rifleman", "mg", "rifleman", "at"];
     for (let i = 0; i < n; i++) {
-      const type = types[i % types.length];
+      this.addNpc(types[i % types.length], 90 + rng() * 80, 120 + rng() * (MAP_H - 240), i, rng());
+    }
+  }
+
+  canReinforce(): boolean {
+    return this.phase === "battle" && this.battleState === "active" && this.reinforcements < MAX_REINFORCEMENTS;
+  }
+
+  /** Requisitioned 2nd Platoon team enters from the allied edge, level with the squad. */
+  spawnReinforcements(kind: Reinforcement) {
+    if (!this.canReinforce()) return;
+    this.reinforcements++;
+    const mine = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc);
+    const cy = mine.length ? mine.reduce((t, u) => t + u.y, 0) / mine.length : MAP_H / 2;
+    const types: UnitTypeId[] = kind === "rifle" ? ["rifleman", "rifleman", "rifleman"] : ["mg", "at"];
+    types.forEach((t, i) => this.addNpc(t, 40 + i * 18, cy + (i - (types.length - 1) / 2) * 34, this.nextId + i, Math.random()));
+    this.pushLog(
+      kind === "rifle" ? "Radio: rifle squad from 2nd Platoon moving up." : "Radio: MG & bazooka team from 2nd Platoon moving up.",
+      "wave"
+    );
+    this.dirty = true;
+  }
+
+  private addNpc(type: UnitTypeId, px: number, py: number, i: number, r: number) {
+    {
       const spec = UNIT_TYPES[type];
-      const [cx, cy] = nearestOpen(this.blocked, Math.floor((90 + rng() * 80) / CELL), Math.floor((120 + rng() * (MAP_H - 240)) / CELL));
+      const [cx, cy] = nearestOpen(this.blocked, Math.floor(Math.max(12, Math.min(MAP_W - 12, px)) / CELL), Math.floor(Math.max(12, Math.min(MAP_H - 12, py)) / CELL));
+      const SURN = ["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs", "Delgado", "Novak", "Pruitt", "Lindqvist", "O'Hara", "Tasker", "Wexler"];
       this.units.push({
         id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
-        name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs"][i % 5]}`,
+        name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${SURN[i % SURN.length]}`,
         rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
         hp: spec.hp, maxHp: spec.hp, speed: spec.speed * 0.9, range: spec.range, vision: spec.vision,
         dmg: spec.dmg, fireInterval: spec.fireInterval * 1.1, spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
-        isStatic: false, orders: [], attackId: null, targetId: null, cooldown: rng(), suppression: 0, pinned: false,
+        isStatic: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
-        chase: [], repathT: rng(), npc: true, cover: null, coverT: 0,
+        chase: [], repathT: r, npc: true, cover: null, coverT: 0,
       });
     }
   }
@@ -605,6 +654,61 @@ export class GameEngine {
       if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
     }
     this.pushLog("Get down! Squad moving to cover.", "info");
+  }
+
+  /** Pick a squad formation; the selected men re-form on their current objective. */
+  setFormation(f: Formation) {
+    this.formation = f;
+    const squad = this.units.filter((u) => u.side === "allies" && u.alive && this.selected.includes(u.id));
+    if (this.phase === "battle" && squad.length > 1) {
+      const ends = squad.map((u) => (u.orders.length ? u.orders[u.orders.length - 1] : { x: u.x, y: u.y }));
+      const tx = ends.reduce((t, p) => t + p.x, 0) / ends.length;
+      const ty = ends.reduce((t, p) => t + p.y, 0) / ends.length;
+      const foe = this.nearestAlly(squad[0]);
+      const dir = foe ? Math.atan2(foe.y - ty, foe.x - tx) : 0;
+      this.moveSquad(squad, tx, ty, false, dir);
+      this.pushLog(`Squad — form ${f.toUpperCase()}.`, "info");
+    }
+    this.dirty = true;
+  }
+
+  /** Touch: next drag draws a selection box instead of scrolling the map. */
+  setTouchBox(on: boolean) {
+    this.touchBox = on;
+    this.dirty = true;
+  }
+
+  // Slot offsets for the formation: forward = toward `dir`, slot 0 leads.
+  private formationSlot(i: number, n: number, dir: number): { x: number; y: number } {
+    let back = 0;
+    let side = 0;
+    const f = this.formation;
+    if (f === "line") side = (i - (n - 1) / 2) * 34;
+    else if (f === "column") back = i * 30;
+    else if (f === "spread") {
+      side = (i - (n - 1) / 2) * 62;
+      back = (i % 2) * 36;
+    } else {
+      const k = Math.ceil(i / 2);
+      back = k * 28;
+      side = (i % 2 ? -1 : 1) * k * 30;
+    }
+    const fx = Math.cos(dir);
+    const fy = Math.sin(dir);
+    return { x: -fx * back - fy * side, y: -fy * back + fx * side };
+  }
+
+  private moveSquad(squad: Unit[], x: number, y: number, queue: boolean, dir: number) {
+    squad.forEach((u, i) => {
+      const off = this.formationSlot(i, squad.length, dir);
+      const ox = Math.max(12, Math.min(MAP_W - 12, x + off.x));
+      const oy = Math.max(12, Math.min(MAP_H - 12, y + off.y));
+      u.attackId = null;
+      const from = queue && u.orders.length ? u.orders[u.orders.length - 1] : { x: u.x, y: u.y };
+      const path = findPath(this.blocked, from.x, from.y, ox, oy);
+      if (queue) u.orders.push(...path);
+      else u.orders = path;
+    });
   }
 
   /** On-screen D-pad: hold to scroll (-1..1 per axis). */
@@ -699,6 +803,11 @@ export class GameEngine {
       this.takeCover();
       return;
     }
+    if (k === "f") {
+      const order: Formation[] = ["wedge", "line", "column", "spread"];
+      this.setFormation(order[(order.indexOf(this.formation) + 1) % order.length]);
+      return;
+    }
     if (k === "q") {
       const lead = this.units.find((u) => this.selected.includes(u.id) && u.alive);
       if (lead) this.startAim(lead.id);
@@ -721,7 +830,12 @@ export class GameEngine {
     const p = this.toMap(e.clientX, e.clientY);
     this.mouse = { x: p.x, y: p.y, inside: true };
     if (e.pointerType === "touch" && this.aimUnitId === null) {
-      this.touchPan = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y, moved: false };
+      if (this.touchBox) {
+        this.dragging = true;
+        this.marquee = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+        return;
+      }
+      this.touchPan = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y, moved: false, t0: performance.now() };
       return;
     }
     if (e.button === 2) {
@@ -743,6 +857,15 @@ export class GameEngine {
     if (this.touchPan) {
       const dx = e.clientX - this.touchPan.x;
       const dy = e.clientY - this.touchPan.y;
+      if (!this.touchPan.moved && Math.hypot(dx, dy) > 10 && performance.now() - this.touchPan.t0 > 350) {
+        // Press-and-hold, then drag: selection box.
+        const s = this.toMap(this.touchPan.x, this.touchPan.y);
+        const p = this.toMap(e.clientX, e.clientY);
+        this.touchPan = null;
+        this.dragging = true;
+        this.marquee = { x0: s.x, y0: s.y, x1: p.x, y1: p.y };
+        return;
+      }
       if (Math.hypot(dx, dy) > 10) this.touchPan.moved = true;
       if (this.touchPan.moved) {
         this.cam.x = this.touchPan.cx - dx / this.view.s;
@@ -810,6 +933,7 @@ export class GameEngine {
     }
     this.marquee = null;
     this.dragging = false;
+    this.touchBox = false;
     this.dirty = true;
   };
 
@@ -838,23 +962,9 @@ export class GameEngine {
       }
       this.pushLog(`Fire concentration on ${ENEMY_TYPES[target.enemyType!].label}.`, "info");
     } else {
-      const OFFS = [
-        [0, 0],
-        [-30, -20],
-        [-30, 20],
-        [-60, 0],
-        [0, -42],
-      ];
-      squad.forEach((u, i) => {
-        const off = OFFS[i % OFFS.length];
-        const ox = Math.max(12, Math.min(MAP_W - 12, x + off[0]));
-        const oy = Math.max(12, Math.min(MAP_H - 12, y + off[1]));
-        u.attackId = null;
-        const from = queue && u.orders.length ? u.orders[u.orders.length - 1] : { x: u.x, y: u.y };
-        const path = findPath(this.blocked, from.x, from.y, ox, oy);
-        if (queue) u.orders.push(...path);
-        else u.orders = path;
-      });
+      const cx = squad.reduce((t, u) => t + u.x, 0) / squad.length;
+      const cy = squad.reduce((t, u) => t + u.y, 0) / squad.length;
+      this.moveSquad(squad, x, y, queue, Math.atan2(y - cy, x - cx));
     }
     this.dirty = true;
   }
@@ -1551,6 +1661,7 @@ export class GameEngine {
       });
     }
     this.particles.push({ x, y, vx: 0, vy: 0, life: 0.35, max: 0.35, size: aoe, kind: "ring" });
+    this.blastCover(x, y, aoe, dmg);
     if (this.tctx) {
       this.tctx.fillStyle = "rgba(14,13,10,0.5)";
       this.tctx.beginPath();
@@ -1558,6 +1669,54 @@ export class GameEngine {
       this.tctx.fill();
     }
     if (!prefersReducedMotion) this.shake = Math.min(10, this.shake + 6);
+  }
+
+  // Sandbags and crates soak blast damage, get less protective, then come apart.
+  private blastCover(x: number, y: number, aoe: number, dmg: number) {
+    let regrid = false;
+    let destroyed = 0;
+    for (let i = this.covers.length - 1; i >= 0; i--) {
+      const c = this.covers[i];
+      if (c.hp === undefined || c.maxHp === undefined) continue;
+      const d = dist(x, y, c.x, c.y);
+      if (d > aoe + c.r) continue;
+      c.hp -= dmg * (1 - Math.min(1, d / (aoe + c.r)) * 0.7);
+      const t = this.tctx;
+      if (c.hp <= 0) {
+        this.covers.splice(i, 1);
+        destroyed++;
+        for (const u of this.units) if (u.cover === c) u.cover = null;
+        if (c.blocker) {
+          const bi = this.blockers.indexOf(c.blocker);
+          if (bi >= 0) this.blockers.splice(bi, 1);
+          regrid = true;
+        }
+        if (t) paintDebris(t, c);
+        for (let k = 0; k < 6; k++) {
+          const a = Math.random() * Math.PI * 2;
+          this.particles.push({ x: c.x, y: c.y, vx: Math.cos(a) * 90, vy: Math.sin(a) * 90, life: 0.5, max: 0.5, size: 2.5, kind: "dust" });
+        }
+      } else {
+        c.q = (c.q0 ?? c.q) * (0.35 + 0.65 * (c.hp / c.maxHp));
+        if (t) paintWear(t, c);
+      }
+    }
+    if (regrid) this.blocked = buildBlockedGrid(this.blockers);
+    if (destroyed && this.elapsed - this.coverLogT > 4) {
+      this.coverLogT = this.elapsed;
+      this.pushLog("Blast tore through the cover — sandbags and crates gone.", "info");
+    }
+  }
+
+  /** Dev/test probe: destructible cover still standing. */
+  debugCover() {
+    const d = this.covers.filter((c) => c.hp !== undefined);
+    return { count: d.length, hp: Math.round(d.reduce((t, c) => t + (c.hp ?? 0), 0)), sample: d[0] ? { x: d[0].x, y: d[0].y } : null };
+  }
+
+  /** Dev/test probe: detonate a blast at a map point (no unit damage source). */
+  debugBlast(x: number, y: number) {
+    this.explode(x, y, 70, 90, "axis", "mortar", null);
   }
 
   // ---------------- fx helpers ----------------
@@ -1728,6 +1887,9 @@ export class GameEngine {
       waves: this.waves.length,
       aimUnitId: this.aimUnitId,
       log: this.log.slice(-7),
+      formation: this.formation,
+      touchBox: this.touchBox,
+      reinforcementsLeft: MAX_REINFORCEMENTS - this.reinforcements,
     });
   }
 
@@ -2061,6 +2223,38 @@ export class GameEngine {
 type Ctx = CanvasRenderingContext2D;
 let COVERS: Cover[] = []; // filled by buildTerrain's helpers
 
+// Scorch + torn burlap on a damaged piece of cover (painted into the terrain layer).
+function paintWear(ctx: Ctx, c: Cover) {
+  ctx.fillStyle = "rgba(20,16,10,0.35)";
+  ctx.beginPath();
+  ctx.arc(c.x + (Math.random() - 0.5) * c.r, c.y + (Math.random() - 0.5) * c.r, c.r * 0.55, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+// What's left once it's blown apart: spilled sand or splintered planks, no protection.
+function paintDebris(ctx: Ctx, c: Cover) {
+  ctx.fillStyle = "rgba(14,12,9,0.55)";
+  ctx.beginPath();
+  ctx.ellipse(c.x, c.y, c.r + 6, c.r + 3, Math.random() * Math.PI, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = c.kind === "sandbag" ? "#7A6C4A" : "#5A4428";
+  for (let i = 0; i < 6; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.random() * (c.r + 6);
+    if (c.kind === "sandbag") {
+      ctx.beginPath();
+      ctx.arc(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r, 1.5 + Math.random() * 2, 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      ctx.save();
+      ctx.translate(c.x + Math.cos(a) * r, c.y + Math.sin(a) * r);
+      ctx.rotate(Math.random() * Math.PI);
+      ctx.fillRect(-4, -1, 8, 2);
+      ctx.restore();
+    }
+  }
+}
+
 function drawSandbags(ctx: Ctx, x: number, y: number, ang: number, n = 5) {
   // Low cover: doesn't block movement, stops most rounds from the front.
   for (let i = 0; i < n; i++) {
@@ -2074,7 +2268,7 @@ function drawSandbags(ctx: Ctx, x: number, y: number, ang: number, n = 5) {
     ctx.ellipse(bx, by, 7, 5, ang, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    COVERS.push({ x: bx, y: by, r: 6, q: 0.65 });
+    COVERS.push({ x: bx, y: by, r: 6, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110 });
   }
 }
 
@@ -2120,8 +2314,9 @@ function drawCrates(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
     ctx.moveTo(x + dx - 7, y + dy - 7);
     ctx.lineTo(x + dx + 7, y + dy + 7);
     ctx.stroke();
-    blockers.push({ x: x + dx, y: y + dy, r: 8 });
-    COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55 });
+    const b = { x: x + dx, y: y + dy, r: 8 };
+    blockers.push(b);
+    COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55, q0: 0.55, kind: "crate", hp: 70, maxHp: 70, blocker: b });
   }
 }
 

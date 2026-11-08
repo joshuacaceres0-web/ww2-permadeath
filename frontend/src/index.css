@@ -7,6 +7,8 @@
 @import "@fontsource/ibm-plex-mono/700.css";
 
 @custom-variant dark (&:is(.dark *));
+/* Phone held sideways: the battle uses a compact side-by-side layout. */
+@custom-variant short (@media (orientation: landscape) and (max-height: 520px));
 
 @theme inline {
     --font-heading: 'Space Grotesk Variable', sans-serif;
@@ -194,6 +196,16 @@
 }
 .animate-amber-pulse {
   animation: amber-pulse 1.6s ease-in-out infinite;
+}
+
+/* Rotate-your-phone prompt: a quarter turn, hold, back. */
+@keyframes rotate-hint {
+  0%, 20% { transform: rotate(0deg); }
+  50%, 80% { transform: rotate(90deg); }
+  100% { transform: rotate(0deg); }
+}
+.animate-spin-slow {
+  animation: rotate-hint 2.4s ease-in-out infinite;
 }
 
 /* Micro-interactions: targeted transitions, never transition: all */
