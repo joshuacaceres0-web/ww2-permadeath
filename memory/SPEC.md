@@ -20,6 +20,28 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
 - **Memorial (`/memorial`)**: every fallen soldier, forever (name, rank, kills,
   ops survived, cause of death, mission). Survives campaign resets.
 
+## Progression (added in v2)
+- **Soldier ranks**: one promotion per VICTORY survived while deployed — Pvt. → Pfc. → Cpl. →
+  Sgt. → S/Sgt. → T/Sgt. → 1st Sgt. (level = min(missions, 6), server-derived `level`/`rank`).
+  Each level: spread ×(1−0.07·L) (aim), fire interval ×(1−0.04·L), and target-acquisition
+  reaction delay (0.7−0.08·L)s (min 0.12s). See `levelBonus` in `src/game/data.ts`.
+- **Frozen reserve**: `status: reserve` men are excluded from battle; battle/complete ignores any
+  survivor whose status isn't `active`, so reserves gain no XP/kills/promotions until redeployed.
+- **Commander (the player)**: name editable (PUT /api/state/commander). Level = 1 + career_wins//2
+  (max 7: 2nd Lt. → 1st Lt. → Capt. → Major → Lt. Col. → Col. → Brig. Gen.). `career_wins`
+  survives campaign reset. Unlocks: max squad 4+level (cap 8), hire discount 5%/level above 1
+  (cap 30%, server returns `hire_costs`), combat bonus 4%/level above 1 (aim + reaction for all).
+- **Identity**: 1940s US first names, melting-pot surnames, hometown, nickname, division (1st ID,
+  29th ID, 2nd Rangers, 4th ID, 101st, 82nd, 9th ID, 28th ID) and a backstory composed from
+  details in real first-hand accounts (fiction, disclosed on the memorial page). `portrait_seed`
+  drives a procedural 16×16 pixel portrait (`src/components/Portrait.tsx`, no AI).
+- **Memorial stories**: on death the server writes `story` = backstory + how/where he fell + epitaph.
+- **Graveyard** (inside /memorial): each memorial row has `grave_x/grave_y` (0..1 or null = in the
+  tray). Player lays stones from the tray, places tributes (poppies, roses, lilies, wreath, candle,
+  flag — `graveyard_decor` collection, max 300), drags to rearrange, CLEAR tool removes a tribute
+  or lifts a stone back to the tray. Endpoints: PUT /api/memorial/{id}/grave, GET/POST
+  /api/graveyard/decor, PUT/DELETE /api/graveyard/decor/{id}.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD
@@ -53,6 +75,8 @@ panzerfaust (rocket), flak (static autocannon). Threat tiers LOW→CRITICAL.
 - GET `/memorial` → [MemorialOut]
 
 ## Seed facts (idempotent, runs at boot via server lifespan + `python seed.py`)
+- NOTE: the live DB holds the user's real campaign (lost battles, 9 fallen). Never wipe it; test
+  battle logic against a throwaway DB (`DB_NAME=app_selftest`) instead.
 - Founding squad (7): active — Cpl Frank Hayes (RIF), Pvt Walter Kowalski (RIF),
   Pvt James Baker (RIF), Pvt Chester Pruitt (MED), Cpl Raymond Boyd (MG);
   reserve — Cpl Earl Whitaker (SNIPER), Pvt Norman Doyle (RIF).

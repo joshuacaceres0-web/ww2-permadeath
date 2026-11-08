@@ -1,21 +1,14 @@
-"""Squad management: roster reads, hiring (requisition), active/reserve assignment."""
+"""Squad management: roster reads, hiring (requisition), deployment vs. frozen reserve."""
 
 from typing import List
 
 from fastapi import APIRouter, HTTPException
-from models.models import HireIn, SoldierOut, StatusIn, UnitType
+from models.models import HireIn, SoldierOut, StatusIn
 from lib.db import db
 from lib.gen import make_soldier
-from lib.missions import UNIT_COSTS
-from lib.state import get_state
+from lib.state import commander_info, get_state, soldier_out
 
 router = APIRouter()
-
-MAX_ACTIVE = 5
-
-
-def soldier_out(doc: dict) -> SoldierOut:
-    return SoldierOut(**doc)
 
 
 @router.get("/squad", response_model=List[SoldierOut])
@@ -28,18 +21,17 @@ async def get_squad():
 @router.post("/squad/hire", response_model=SoldierOut)
 async def hire_soldier(input: HireIn):
     state = await get_state()
+    info = commander_info(state)
     roster = await db.soldiers.count_documents({})
-    cost = 0 if roster == 0 else UNIT_COSTS[input.type]  # emergency conscription when the line is empty
+    cost = 0 if roster == 0 else info["hire_costs"][input.type]  # emergency conscription when the line is empty
     if state["requisition"] < cost:
         raise HTTPException(status_code=402, detail="Insufficient requisition points")
 
     active = await db.soldiers.count_documents({"status": "active"})
-    doc = make_soldier(input.type, "active" if active < MAX_ACTIVE else "reserve")
+    doc = make_soldier(input.type, "active" if active < info["max_squad"] else "reserve")
     await db.soldiers.insert_one(doc)
     if cost:
-        await db.game_state.update_one(
-            {"id": state["id"]}, {"$inc": {"requisition": -cost}}
-        )
+        await db.game_state.update_one({"id": state["id"]}, {"$inc": {"requisition": -cost}})
     return soldier_out(doc)
 
 
@@ -48,12 +40,13 @@ async def set_soldier_status(soldier_id: str, input: StatusIn):
     doc = await db.soldiers.find_one({"id": soldier_id})
     if not doc:
         raise HTTPException(status_code=404, detail="Soldier not found")
-    if input.status == "active":
+    if input.status == "active" and doc["status"] != "active":
+        max_squad = commander_info(await get_state())["max_squad"]
         active = await db.soldiers.count_documents({"status": "active"})
-        if doc["status"] != "active" and active >= MAX_ACTIVE:
+        if active >= max_squad:
             raise HTTPException(
                 status_code=409,
-                detail=f"Deployment squad is full ({MAX_ACTIVE} men max) — bench someone first",
+                detail=f"Deployment squad is full ({max_squad} men max at your rank) — send someone to reserve first",
             )
     await db.soldiers.update_one({"id": soldier_id}, {"$set": {"status": input.status}})
     doc["status"] = input.status

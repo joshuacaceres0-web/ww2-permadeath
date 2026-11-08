@@ -4,6 +4,7 @@
 export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at";
 export type EnemyTypeId = "volks" | "grenadier" | "mg42" | "officer" | "panzerfaust" | "flak";
 export type SoldierStatus = "active" | "reserve";
+export type DecorKind = "poppies" | "roses" | "lilies" | "wreath" | "candle" | "flag";
 
 export interface MissionEnemy {
   type: EnemyTypeId;
@@ -32,8 +33,13 @@ export interface Soldier {
   xp: number;
   kills: number;
   missions: number;
+  level: number;
+  rank: string;
   quirk: string;
   hometown: string;
+  unit: string;
+  backstory: string;
+  portrait_seed: number;
   hired_at: string;
 }
 
@@ -43,6 +49,15 @@ export interface GameState {
   battles_won: number;
   battles_lost: number;
   campaign_complete: boolean;
+  commander_name: string;
+  commander_level: number;
+  commander_rank: string;
+  commander_max_level: number;
+  wins_to_next_level: number;
+  max_squad: number;
+  hire_discount: number;
+  combat_bonus: number;
+  hire_costs: Record<UnitTypeId, number>;
 }
 
 export interface MemorialEntry {
@@ -55,6 +70,19 @@ export interface MemorialEntry {
   cause: string;
   mission_code: string;
   died_at: string;
+  unit: string;
+  hometown: string;
+  story: string;
+  portrait_seed: number;
+  grave_x: number | null;
+  grave_y: number | null;
+}
+
+export interface Decor {
+  id: string;
+  kind: DecorKind;
+  x: number;
+  y: number;
 }
 
 export interface BattleResult {
@@ -62,4 +90,7 @@ export interface BattleResult {
   mission_index: number;
   campaign_complete: boolean;
   memorial_names: string[];
+  promotions: string[];
+  commander_promoted: boolean;
+  commander_rank: string;
 }

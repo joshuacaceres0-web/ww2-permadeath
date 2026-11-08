@@ -62,6 +62,16 @@ export default function Layout() {
 
           <div className="ml-auto flex items-center gap-3">
             <div
+              data-testid="commander-chip"
+              className="hidden border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono sm:block"
+              title="Your rank as commander"
+            >
+              <span className="block text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">Commander</span>
+              <span className="block max-w-40 truncate text-sm font-semibold text-[#F0F5EB]">
+                {state ? `${state.commander_rank} ${state.commander_name}` : "—"}
+              </span>
+            </div>
+            <div
               data-testid="requisition-chip"
               className="border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono"
               title="Requisition points"

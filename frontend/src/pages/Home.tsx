@@ -8,7 +8,9 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiGet, apiPost } from "@/lib/api";
 import type { GameState, MemorialEntry, Mission, Soldier } from "@/lib/types";
-import { ENEMY_TYPES, UNIT_TYPES, rankFor } from "@/game/data";
+import { ENEMY_TYPES, UNIT_TYPES } from "@/game/data";
+import Portrait from "@/components/Portrait";
+import CommanderCard from "@/components/CommanderCard";
 
 const THREAT_TEXT: Record<string, string> = {
   LOW: "text-[#8D9A83] border-[#3A4433]",
@@ -223,10 +225,15 @@ export default function Home() {
 
       {/* Right rail */}
       <aside className="space-y-4">
+        <CommanderCard state={state} />
+
         <Card className="border-[#2E3628] bg-[#1A1D17]">
           <CardHeader>
             <CardTitle className="font-heading text-lg tracking-wider text-[#F0F5EB]">
               SQUAD READINESS
+              <span className="ml-2 font-mono text-xs text-[#8D9A83]">
+                {activeSquad.length}/{state?.max_squad ?? 5}
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
@@ -234,21 +241,24 @@ export default function Home() {
               <div
                 key={s.id}
                 data-testid={`warroom-soldier-${s.id}`}
-                className="border border-[#2E3628] bg-[#22271E] px-3 py-2"
+                className="flex items-center gap-3 border border-[#2E3628] bg-[#22271E] px-2.5 py-2"
               >
-                <div className="flex items-baseline justify-between">
-                  <span className="font-mono text-[13px] font-semibold text-[#EDEDE2]">
-                    {rankFor(s.xp)} {s.name}
-                  </span>
-                  <span className="font-mono text-[10px] tracking-[0.15em] text-[#E5A93C]">
-                    {UNIT_TYPES[s.type].label.toUpperCase()}
-                  </span>
-                </div>
-                <div className="mt-0.5 flex items-center justify-between font-mono text-[10px] text-[#8D9A83]">
-                  <span>"{s.quirk}" · {s.hometown}</span>
-                  <span>
-                    {s.kills} kills · {s.missions} ops
-                  </span>
+                <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={36} />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate font-mono text-[13px] font-semibold text-[#EDEDE2]">
+                      {s.rank} {s.name}
+                    </span>
+                    <span className="shrink-0 font-mono text-[10px] tracking-[0.15em] text-[#E5A93C]">
+                      {UNIT_TYPES[s.type].label.toUpperCase()}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] text-[#8D9A83]">
+                    <span className="truncate">"{s.quirk}" · {s.hometown}</span>
+                    <span className="shrink-0">
+                      {s.kills} kills · {s.missions} ops
+                    </span>
+                  </div>
                 </div>
               </div>
             ))}

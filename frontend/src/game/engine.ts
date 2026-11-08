@@ -1,7 +1,7 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
 // fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
 
-import { CAUSES, ENEMY_TYPES, UNIT_TYPES } from "./data";
+import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 
 export const MAP_W = 1600;
@@ -23,6 +23,9 @@ interface Unit {
   enemyType: EnemyTypeId | null;
   soldierId: string | null;
   name: string;
+  rank: string;
+  level: number;
+  reaction: number;
   x: number;
   y: number;
   facing: number;
@@ -104,6 +107,8 @@ export interface HudUnit {
   id: number;
   soldierId: string | null;
   name: string;
+  rank: string;
+  level: number;
   type: UnitTypeId;
   hp: number;
   maxHp: number;
@@ -183,6 +188,14 @@ function dist(ax: number, ay: number, bx: number, by: number): number {
 const prefersReducedMotion =
   typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+export interface SquadInput {
+  id: string;
+  name: string;
+  type: UnitTypeId;
+  rank: string;
+  level: number;
+}
+
 export class GameEngine {
   private canvas: HTMLCanvasElement;
   private ctx: CanvasRenderingContext2D;
@@ -236,7 +249,7 @@ export class GameEngine {
 
   // ---------------- lifecycle ----------------
 
-  setup(mission: Mission, squad: Array<{ id: string; name: string; type: UnitTypeId }>) {
+  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0) {
     this.mission = mission;
     this.units = [];
     this.bullets = [];
@@ -275,7 +288,7 @@ export class GameEngine {
     this.visible = new Uint8Array(COLS * ROWS);
     this.explored = new Uint8Array(COLS * ROWS);
 
-    this.spawnAllies(squad, rng);
+    this.spawnAllies(squad, rng, commanderBonus);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -632,11 +645,13 @@ export class GameEngine {
 
   // ---------------- spawning ----------------
 
-  private spawnAllies(squad: Array<{ id: string; name: string; type: UnitTypeId }>, rng: () => number) {
+  private spawnAllies(squad: SquadInput[], rng: () => number, commanderBonus: number) {
     const n = squad.length;
+    const gap = n > 6 ? 60 : 72;
     squad.forEach((s, i) => {
       const spec = UNIT_TYPES[s.type];
-      const y = MAP_H / 2 + (i - (n - 1) / 2) * 72 + (rng() * 20 - 10);
+      const bonus = levelBonus(s.level, commanderBonus);
+      const y = MAP_H / 2 + (i - (n - 1) / 2) * gap + (rng() * 20 - 10);
       this.units.push({
         id: this.nextId++,
         side: "allies",
@@ -644,6 +659,9 @@ export class GameEngine {
         enemyType: null,
         soldierId: s.id,
         name: s.name,
+        rank: s.rank,
+        level: s.level,
+        reaction: bonus.reaction,
         x: 80 + rng() * 60,
         y,
         facing: 0,
@@ -653,8 +671,8 @@ export class GameEngine {
         range: spec.range,
         vision: spec.vision,
         dmg: spec.dmg,
-        fireInterval: spec.fireInterval,
-        spread: spec.spread,
+        fireInterval: spec.fireInterval * bonus.fireMult,
+        spread: spec.spread * bonus.spreadMult,
         bulletSpeed: spec.bulletSpeed,
         isStatic: false,
         orders: [],
@@ -697,6 +715,9 @@ export class GameEngine {
           enemyType: spec.type,
           soldierId: null,
           name: def.label,
+          rank: "",
+          level: 0,
+          reaction: 0.6,
           x,
           y,
           facing: Math.PI,
@@ -787,6 +808,8 @@ export class GameEngine {
       if (!target || !target.alive) {
         target = this.autoTarget(u);
         u.targetId = target ? target.id : null;
+        // Response time: a fresh target costs a beat to acquire — veterans react faster.
+        if (target) u.cooldown = Math.max(u.cooldown, u.reaction);
       }
       const attackOrder = this.unitById(u.attackId);
       if (attackOrder && !attackOrder.alive) {
@@ -1274,6 +1297,8 @@ export class GameEngine {
         id: u.id,
         soldierId: u.soldierId,
         name: u.name,
+        rank: u.rank,
+        level: u.level,
         type: u.type,
         hp: Math.ceil(u.hp),
         maxHp: u.maxHp,

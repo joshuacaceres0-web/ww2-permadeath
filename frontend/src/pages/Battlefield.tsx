@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { Pause, Play, Flag, Skull } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
 import SquadDock from "@/components/game/SquadDock";
 import CombatLog from "@/components/game/CombatLog";
+import Portrait from "@/components/Portrait";
 import { apiGet, apiPost } from "@/lib/api";
-import type { GameState, Mission, Soldier } from "@/lib/types";
+import type { BattleResult, GameState, Mission, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReport, type HudSnapshot } from "@/game/engine";
-import { UNIT_TYPES, rankFor } from "@/game/data";
+import { UNIT_TYPES } from "@/game/data";
 
 const mmss = (t: number) =>
   `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
@@ -40,19 +42,23 @@ export default function Battlefield() {
 
   const fileReport = useMutation({
     mutationFn: (r: BattleReport) =>
-      apiPost("/battle/complete", {
+      apiPost<BattleResult>("/battle/complete", {
         mission_id: r.missionId,
         victory: r.victory,
         duration_sec: r.durationSec,
         fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills })),
         survivors: r.survivors.map((s) => ({ soldier_id: s.soldierId, kills: s.kills })),
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["state"] });
       qc.invalidateQueries({ queryKey: ["squad"] });
       qc.invalidateQueries({ queryKey: ["memorial"] });
+      for (const p of res.promotions) toast.success(`Field promotion — ${p}`);
+      if (res.commander_promoted) toast.success(`You have been promoted to ${res.commander_rank}. New privileges unlocked.`);
+      if (res.memorial_names.length) toast(`${res.memorial_names.length} name(s) added to the Memorial Wall.`);
       navigate("/");
     },
+    onError: () => toast.error("The report didn't reach division — try again"),
   });
 
   if (state?.campaign_complete) {
@@ -164,6 +170,7 @@ export default function Battlefield() {
           key={mission.id}
           mission={mission}
           squad={activeSquad}
+          commanderBonus={state?.combat_bonus ?? 0}
           onHud={onHud}
           engineRef={engineRef}
         />
@@ -198,12 +205,15 @@ export default function Battlefield() {
                   <div
                     key={s.id}
                     data-testid={`briefing-soldier-${i}`}
-                    className="flex items-center justify-between border border-[#2E3628] bg-[#22271E] px-2.5 py-1.5 font-mono text-[11px]"
+                    className="flex items-center justify-between gap-2 border border-[#2E3628] bg-[#22271E] px-2 py-1.5 font-mono text-[11px]"
                   >
-                    <span className="text-[#EDEDE2]">
-                      {i + 1} · {rankFor(s.xp)} {s.name}
+                    <span className="flex min-w-0 items-center gap-2 text-[#EDEDE2]">
+                      <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={24} />
+                      <span className="truncate">
+                        {i + 1} · {s.rank} {s.name}
+                      </span>
                     </span>
-                    <span className="text-[#E5A93C]">{UNIT_TYPES[s.type].label}</span>
+                    <span className="shrink-0 text-[#E5A93C]">{UNIT_TYPES[s.type].label}</span>
                   </div>
                 ))}
               </div>

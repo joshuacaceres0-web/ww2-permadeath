@@ -172,20 +172,14 @@ export const CAUSES: Record<string, string> = {
   rocket: "Rocket blast",
 };
 
-// Rank ladder — mirrors backend/lib/gen.py RANKS.
-const RANKS: Array<[number, string]> = [
-  [0, "Pvt."],
-  [100, "Cpl."],
-  [250, "Sgt."],
-  [450, "2nd Lt."],
-  [700, "1st Lt."],
-  [1000, "Capt."],
-];
+// Rank ladder — mirrors backend/lib/gen.py RANKS (one promotion per mission survived).
+export const RANKS = ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."];
 
-export function rankFor(xp: number): string {
-  let rank = RANKS[0][1];
-  for (const [threshold, name] of RANKS) {
-    if (xp >= threshold) rank = name;
-  }
-  return rank;
+// Per-level combat modifiers — every promotion tightens aim and quickens reactions.
+export function levelBonus(level: number, commanderBonus: number) {
+  return {
+    spreadMult: (1 - 0.07 * level) * (1 - commanderBonus),
+    fireMult: 1 - 0.04 * level,
+    reaction: Math.max(0.12, (0.7 - 0.08 * level) * (1 - commanderBonus)),
+  };
 }

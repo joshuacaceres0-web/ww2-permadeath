@@ -169,6 +169,20 @@
   letter-spacing: 0.2em;
 }
 
+/* Pixel graveyard ground: stone wall band on top, mottled winter grass below */
+.graveyard-field {
+  background-color: #2C3A22;
+  background-image:
+    linear-gradient(to bottom, #4A4A40 0, #4A4A40 9%, #34342C 9%, #34342C 11%, transparent 11%),
+    repeating-linear-gradient(90deg, transparent 0 22px, rgba(20, 20, 16, 0.55) 22px 24px),
+    radial-gradient(circle at 20% 30%, rgba(70, 90, 52, 0.55) 0 2px, transparent 3px),
+    radial-gradient(circle at 70% 60%, rgba(22, 32, 18, 0.6) 0 2px, transparent 3px),
+    radial-gradient(circle at 45% 80%, rgba(84, 100, 60, 0.45) 0 1px, transparent 2px);
+  background-size: 100% 100%, 100% 11%, 18px 18px, 26px 26px, 12px 12px;
+  background-repeat: no-repeat, no-repeat, repeat, repeat, repeat;
+  image-rendering: pixelated;
+}
+
 @keyframes amber-pulse {
   0%,
   100% {

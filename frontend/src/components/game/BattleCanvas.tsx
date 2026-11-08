@@ -5,12 +5,13 @@ import type { Mission, Soldier } from "@/lib/types";
 interface Props {
   mission: Mission;
   squad: Soldier[];
+  commanderBonus: number;
   onHud: (h: HudSnapshot) => void;
   engineRef: { current: GameEngine | null };
 }
 
 // Mounts the canvas and owns the GameEngine lifecycle for exactly one battle.
-export default function BattleCanvas({ mission, squad, onHud, engineRef }: Props) {
+export default function BattleCanvas({ mission, squad, commanderBonus, onHud, engineRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hudRef = useRef(onHud);
   hudRef.current = onHud;
@@ -22,7 +23,8 @@ export default function BattleCanvas({ mission, squad, onHud, engineRef }: Props
     engineRef.current = engine;
     engine.setup(
       mission,
-      squad.map((s) => ({ id: s.id, name: s.name, type: s.type }))
+      squad.map((s) => ({ id: s.id, name: s.name, type: s.type, rank: s.rank, level: s.level })),
+      commanderBonus
     );
     engine.attach();
 

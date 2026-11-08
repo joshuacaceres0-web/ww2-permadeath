@@ -37,8 +37,8 @@ function UnitCard({
         <span className="truncate font-mono text-[13px] font-semibold text-[#EDEDE2]">
           {index + 1} · {unit.name.split(" ").slice(-1)[0].toUpperCase()}
         </span>
-        <span className="font-mono text-[10px] tracking-[0.15em] text-[#E5A93C]">
-          {unit.alive ? spec.label.slice(0, 3).toUpperCase() : "KIA"}
+        <span className="shrink-0 whitespace-nowrap font-mono text-[10px] tracking-[0.1em] text-[#E5A93C]">
+          {unit.alive ? `${unit.rank.toUpperCase()} ${spec.label.slice(0, 3).toUpperCase()}` : "KIA"}
         </span>
       </div>
       <div className="mt-1 h-1.5 w-full bg-[#121411]">
