@@ -46,6 +46,7 @@ class SoldierOut(BaseModel):
     unit: str = ""
     backstory: str = ""
     portrait_seed: int = 0
+    medals: List[str] = []
     hired_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
@@ -84,11 +85,23 @@ class FallenIn(BaseModel):
     soldier_id: str
     cause: str
     kills: int = 0
+    damage_taken: float = 0
+    healed: float = 0
+    heavy_kills: int = 0  # MG42 nests / Flak guns destroyed
+    officer_kills: int = 0
 
 
 class SurvivorIn(BaseModel):
     soldier_id: str
     kills: int
+    damage_taken: float = 0
+    healed: float = 0
+    heavy_kills: int = 0
+    officer_kills: int = 0
+
+
+class WipeIn(BaseModel):
+    confirm: str  # must be exactly "RESET"
 
 
 class BattleCompleteIn(BaseModel):
@@ -113,6 +126,7 @@ class MemorialOut(BaseModel):
     hometown: str = ""
     story: str = ""
     portrait_seed: int = 0
+    medals: List[str] = []
     grave_x: Optional[float] = None  # 0..1 position in the graveyard, None = not yet laid
     grave_y: Optional[float] = None
 
@@ -146,5 +160,6 @@ class BattleResultOut(BaseModel):
     campaign_complete: bool
     memorial_names: List[str] = []
     promotions: List[str] = []
+    medals_awarded: List[str] = []  # "Name — Silver Star"
     commander_promoted: bool = False
     commander_rank: str = ""

@@ -16,24 +16,25 @@ UNIT_COSTS = {
 MISSIONS: List[dict] = [
     {
         "id": "op_01",
-        "code": "OPERATION HEDGE-CLEAR",
-        "location": "Bocage Outskirts, Normandy",
-        "objective": "Break the scout line, silence the MG nest, secure the crossroads",
+        "code": "OPERATION OVERLORD",
+        "location": "Normandy, France — 6 June 1944",
+        "objective": "D-Day. Get ashore or get down from the sky, break the coastal defense, silence the MG42",
         "difficulty": "MODERATE",
         "reward": 250,
-        "terrain": "bocage",
+        "terrain": "dday",
         "brief": (
-            "Sunrise in the bocage. Kraut scouts hold the hedgerows ahead with a "
-            "sandbagged MG42 covering the crossroads. Push east through the fields, "
-            "hug the hedgerows, and put fire on that gun before it finds your range. "
-            "Watch your people — every man you lose is gone for good."
+            "D-Day. Choose how your squad goes in: across Omaha Beach in a Higgins boat, "
+            "under the bluffs and the steel hedgehogs, or by C-47 in the dark with the "
+            "airborne — scattered across the hedgerows behind the Atlantic Wall. Either way an "
+            "MG42 is waiting. Use the gaps, keep moving, and remember: every man you lose is "
+            "gone for good."
         ),
         "enemies": [
             {"type": "volks", "wave": 1, "count": 3},
             {"type": "grenadier", "wave": 1, "count": 1},
+            {"type": "mg42", "wave": 1, "count": 1},
             {"type": "volks", "wave": 2, "count": 2},
-            {"type": "grenadier", "wave": 2, "count": 1},
-            {"type": "mg42", "wave": 2, "count": 1},
+            {"type": "grenadier", "wave": 2, "count": 2},
         ],
     },
     {

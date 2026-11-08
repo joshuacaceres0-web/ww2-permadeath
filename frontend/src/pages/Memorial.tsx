@@ -8,6 +8,7 @@ import type { Decor, MemorialEntry } from "@/lib/types";
 import { UNIT_TYPES } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import Graveyard from "@/components/memorial/Graveyard";
+import { MedalList } from "@/components/Medals";
 
 function Story({ text }: { text: string }) {
   return (
@@ -109,6 +110,9 @@ export default function Memorial() {
                     <Cross size={13} className="text-[#75826F]" /> {e.missions_survived} ops survived
                   </span>
                   {e.hometown && <span className="text-[#75826F]">{e.hometown}</span>}
+                </div>
+                <div className="mt-3">
+                  <MedalList medals={e.medals ?? []} testid={`memorial-medals-${e.id}`} />
                 </div>
                 <div className="mt-3 border-t border-[#2E3628] pt-3" data-testid={`memorial-story-${e.id}`}>
                   <Story text={e.story || `Fell to ${e.cause}.`} />

@@ -11,6 +11,7 @@ import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
 import { RANKS, UNIT_TYPES, levelBonus } from "@/game/data";
 import Portrait from "@/components/Portrait";
+import { MedalList, RibbonRack } from "@/components/Medals";
 
 const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at"];
 
@@ -259,6 +260,10 @@ function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) 
             </p>
           </div>
         </div>
+        <div className="border border-[#2E3628] p-2">
+          <p className="mb-1.5 text-[9px] font-mono uppercase tracking-[0.2em] text-[#8D9A83]">Decorations</p>
+          <MedalList medals={s.medals ?? []} testid="dossier-medals" />
+        </div>
         <p className="font-mono text-[12px] leading-relaxed text-[#B9C2B3]" data-testid="dossier-backstory">
           {s.backstory}
         </p>
@@ -305,6 +310,7 @@ function SoldierRow({
             {UNIT_TYPES[s.type].label} · "{s.quirk}" · {s.kills} kills · {s.missions} ops
             {frozen && <span className="text-[#4ECDC4]"> · FROZEN</span>}
           </span>
+          <RibbonRack medals={s.medals ?? []} testid={`soldier-ribbons-${s.id}`} />
         </span>
       </button>
       {onBench && (

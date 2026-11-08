@@ -11,6 +11,8 @@ import type { GameState, MemorialEntry, Mission, Soldier } from "@/lib/types";
 import { ENEMY_TYPES, UNIT_TYPES } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import CommanderCard from "@/components/CommanderCard";
+import ResetEverything from "@/components/ResetEverything";
+import { RibbonRack } from "@/components/Medals";
 
 const THREAT_TEXT: Record<string, string> = {
   LOW: "text-[#8D9A83] border-[#3A4433]",
@@ -254,7 +256,9 @@ export default function Home() {
                     </span>
                   </div>
                   <div className="mt-0.5 flex items-center justify-between gap-2 font-mono text-[10px] text-[#8D9A83]">
-                    <span className="truncate">"{s.quirk}" · {s.hometown}</span>
+                    <span className="flex min-w-0 items-center gap-1.5 truncate">
+                      <RibbonRack medals={s.medals ?? []} />"{s.quirk}" · {s.hometown}
+                    </span>
                     <span className="shrink-0">
                       {s.kills} kills · {s.missions} ops
                     </span>
@@ -308,6 +312,9 @@ export default function Home() {
             <p className="col-span-2 flex items-center gap-2 text-[10px] leading-relaxed text-[#5A664F]">
               <Radio size={12} /> Fallen soldiers never return. Spend the RP they earned.
             </p>
+            <div className="col-span-2">
+              <ResetEverything />
+            </div>
           </CardContent>
         </Card>
       </aside>

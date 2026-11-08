@@ -40,6 +40,7 @@ export interface Soldier {
   unit: string;
   backstory: string;
   portrait_seed: number;
+  medals: string[];
   hired_at: string;
 }
 
@@ -74,6 +75,7 @@ export interface MemorialEntry {
   hometown: string;
   story: string;
   portrait_seed: number;
+  medals: string[];
   grave_x: number | null;
   grave_y: number | null;
 }
@@ -91,6 +93,7 @@ export interface BattleResult {
   campaign_complete: boolean;
   memorial_names: string[];
   promotions: string[];
+  medals_awarded: string[];
   commander_promoted: boolean;
   commander_rank: string;
 }

@@ -10,7 +10,7 @@ import CombatLog from "@/components/game/CombatLog";
 import Portrait from "@/components/Portrait";
 import { apiGet, apiPost } from "@/lib/api";
 import type { BattleResult, GameState, Mission, Soldier } from "@/lib/types";
-import { GameEngine, type BattleReport, type HudSnapshot } from "@/game/engine";
+import { GameEngine, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
 import { UNIT_TYPES } from "@/game/data";
 
 const mmss = (t: number) =>
@@ -23,6 +23,7 @@ export default function Battlefield() {
   const endedRef = useRef(false);
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [report, setReport] = useState<BattleReport | null>(null);
+  const [variant, setVariant] = useState<Variant>("");
 
   const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
   const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
@@ -46,14 +47,30 @@ export default function Battlefield() {
         mission_id: r.missionId,
         victory: r.victory,
         duration_sec: r.durationSec,
-        fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills })),
-        survivors: r.survivors.map((s) => ({ soldier_id: s.soldierId, kills: s.kills })),
+        fallen: r.fallen.map((f) => ({
+          soldier_id: f.soldierId,
+          cause: f.cause,
+          kills: f.kills,
+          damage_taken: f.damageTaken,
+          healed: f.healed,
+          heavy_kills: f.heavyKills,
+          officer_kills: f.officerKills,
+        })),
+        survivors: r.survivors.map((s) => ({
+          soldier_id: s.soldierId,
+          kills: s.kills,
+          damage_taken: s.damageTaken,
+          healed: s.healed,
+          heavy_kills: s.heavyKills,
+          officer_kills: s.officerKills,
+        })),
       }),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["state"] });
       qc.invalidateQueries({ queryKey: ["squad"] });
       qc.invalidateQueries({ queryKey: ["memorial"] });
       for (const p of res.promotions) toast.success(`Field promotion — ${p}`);
+      for (const m of res.medals_awarded) toast(`🎖 Decorated: ${m}`);
       if (res.commander_promoted) toast.success(`You have been promoted to ${res.commander_rank}. New privileges unlocked.`);
       if (res.memorial_names.length) toast(`${res.memorial_names.length} name(s) added to the Memorial Wall.`);
       navigate("/");
@@ -117,6 +134,39 @@ export default function Battlefield() {
     );
   }
 
+  if (mission.terrain === "dday" && !variant) {
+    return (
+      <Shell>
+        <div className="w-full max-w-3xl space-y-4 p-4" data-testid="dday-choice">
+          <div className="text-center">
+            <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#8D9A83]">6 June 1944 · Normandy</p>
+            <h1 className="font-heading text-3xl font-bold tracking-tight text-[#F0F5EB]">HOW DOES YOUR SQUAD GO IN?</h1>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            {([
+              ["beach", "BEACH LANDING", "Omaha · Dog Green sector", "Wade in from the Higgins boat under fire. Steel hedgehogs for cover on the sand, then climb the bluffs through one of three draws. The squad starts together."],
+              ["airborne", "AIRBORNE DROP", "Behind the Atlantic Wall · night", "Jump from a C-47 in the dark. Your men land scattered across the hedgerow fields — closer to the objective, but alone until you regroup them."],
+            ] as const).map(([v, title, sub, body]) => (
+              <button
+                key={v}
+                data-testid={`dday-choice-${v}`}
+                onClick={() => setVariant(v)}
+                className="group border border-[#2E3628] bg-[#1A1D17] p-5 text-left hover:border-[#E5A93C]"
+              >
+                <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#E5A93C]">{sub}</p>
+                <h2 className="mt-1 font-heading text-2xl font-bold tracking-tight text-[#F0F5EB]">{title}</h2>
+                <p className="mt-2 font-mono text-[12px] leading-relaxed text-[#A2B29A]">{body}</p>
+                <span className="mt-4 inline-block border border-[#E5A93C] px-3 py-1 font-mono text-xs text-[#E5A93C] group-hover:bg-[#E5A93C] group-hover:text-[#141108]">
+                  CHOOSE ▸
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </Shell>
+    );
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       {/* CRT status bar */}
@@ -167,8 +217,9 @@ export default function Battlefield() {
       {/* Battlefield */}
       <div className="scanlines relative min-h-0 flex-1 overflow-hidden bg-[#080A08]">
         <BattleCanvas
-          key={mission.id}
+          key={mission.id + variant}
           mission={mission}
+          variant={variant}
           squad={activeSquad}
           commanderBonus={state?.combat_bonus ?? 0}
           onHud={onHud}
@@ -181,7 +232,16 @@ export default function Battlefield() {
 
         {/* Order hints */}
         <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
-          LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · 1-5: SOLDIER · Q: ABILITY · SPACE: PAUSE
+          LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD/ARROWS: SCROLL MAP · 1-8: SOLDIER · Q: ABILITY · SPACE: PAUSE
+        </div>
+        <div
+          data-testid="terrain-legend"
+          className="pointer-events-none absolute bottom-7 left-3 z-10 flex gap-3 border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-1.5 font-mono text-[10px] text-[#A2B29A]"
+        >
+          <span><span className="mr-1 inline-block h-2.5 w-2.5 rounded-full border border-[#0C1607] bg-[#3F6A28] align-middle" />HEDGEROW — blocks men &amp; bullets</span>
+          <span><span className="mr-1 inline-block h-2.5 w-3 rounded-full bg-[#5C4A30] align-middle" />GAP — walk through</span>
+          <span><span className="mr-1 inline-block h-2.5 w-2.5 bg-[#5A3A2A] align-middle" />BUILDING</span>
+          <span>✕ HEDGEHOG</span>
         </div>
 
         {/* Briefing overlay */}

@@ -9,6 +9,7 @@ import { apiDelete, apiPost, apiPut } from "@/lib/api";
 import type { Decor, DecorKind, MemorialEntry } from "@/lib/types";
 import Sprite from "@/components/memorial/Sprite";
 import Portrait from "@/components/Portrait";
+import { RibbonRack } from "@/components/Medals";
 
 type Tool =
   | { mode: "move" }
@@ -264,6 +265,11 @@ export default function Graveyard({ entries, decor, selectedId, onSelect }: Prop
                     scale={4}
                     className={selected ? "drop-shadow-[0_0_6px_rgba(229,169,60,0.9)]" : ""}
                   />
+                  {(it.entry.medals ?? []).length > 0 && (
+                    <span className="-mt-9 mb-5 rounded-sm bg-[#0E100D]/60 p-0.5">
+                      <RibbonRack medals={it.entry.medals} scale={0.7} testid={`grave-ribbons-${it.id}`} />
+                    </span>
+                  )}
                   <span
                     className={`mt-0.5 whitespace-nowrap px-1 font-mono text-[9px] tracking-wider ${
                       selected ? "bg-[#3A2B0E] text-[#FFD97D]" : "bg-[#0E100D]/70 text-[#D5DCD0] opacity-0 group-hover:opacity-100"

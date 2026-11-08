@@ -153,11 +153,13 @@ async def seed_squad() -> None:
 
 
 async def seed_all() -> None:
-    """Idempotent: fills only what is missing. Safe to run on every boot/seed call."""
+    """Idempotent: fills only what is missing. Founding memorial only on a brand-new save,
+    so a full wipe stays wiped across restarts."""
+    brand_new = await db.game_state.find_one({"id": STATE_ID}) is None
     await get_state()
     if await db.soldiers.count_documents({}) == 0:
         await seed_squad()
-    if await db.memorial.count_documents({}) == 0:
+    if brand_new and await db.memorial.count_documents({}) == 0:
         docs = []
         for i, (name, utype, kills, ops, cause, code, location, died, hometown) in enumerate(INITIAL_MEMORIAL):
             rng = random.Random(name)

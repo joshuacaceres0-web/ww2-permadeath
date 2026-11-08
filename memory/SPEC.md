@@ -42,6 +42,26 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
   or lifts a stone back to the tray. Endpoints: PUT /api/memorial/{id}/grave, GET/POST
   /api/graveyard/decor, PUT/DELETE /api/graveyard/decor/{id}.
 
+## v3 additions
+- **Full reset** (War Room → START ALL OVER → type RESET): POST /api/campaign/wipe {confirm:"RESET"}
+  (400 otherwise) deletes soldiers, memorial, graveyard_decor, game_state; re-creates default state
+  + founding squad, memorial stays EMPTY (founding memorial only seeds on a brand-new save).
+- **Map**: 2400×1350 world, camera shows 1600×900; WASD/arrows scroll; 1-8 select + center.
+  A* pathfinding (CELL 24, LOS-smoothed) for move orders, attack-move and Axis chase; fire needs LOS.
+  Obstacles drawn as readable bush clumps / trees / buildings / steel hedgehogs, legend on HUD;
+  every hedgerow has dirt-marked gaps. Dev probe: `window.__vanguard.debugAllies()`, `.centerOn(x,y)`.
+- **D-Day**: op_01 = OPERATION OVERLORD (terrain "dday"). Before the briefing the player picks
+  BEACH LANDING (sea/sand/hedgehogs, bluffs with 3 draws, squad together) or AIRBORNE DROP (night
+  bocage, men scattered across the western fields).
+- **Medals** (backend/lib/medals.py ↔ frontend MEDALS in game/data.ts): CIB (survived op), Combat
+  Medical Badge (medic healed ≥100), Purple Heart (≥40 dmg taken, or posthumous; repeatable),
+  Bronze Star (≥4 kills or medic ≥180 healed; repeatable), Silver Star (killed MG42/Flak/officer;
+  repeatable), DSC (≥8 kills), Medal of Honor (≥12 kills or sole survivor of a victory). Bonuses
+  applied at spawn (HP/dmg/aim/fire rate/vision/heal/reaction). Battle report carries per-man
+  damage_taken/healed/heavy_kills/officer_kills; result returns medals_awarded. Soldier + memorial
+  rows have `medals: string[]`; ribbons shown in dossier, barracks rows, war room, wall cards and
+  on tombstones in the graveyard.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD

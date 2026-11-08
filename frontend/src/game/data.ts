@@ -172,6 +172,48 @@ export const CAUSES: Record<string, string> = {
   rocket: "Rocket blast",
 };
 
+// Real WWII US Army decorations — mirrors backend/lib/medals.py (codes, criteria).
+export interface MedalSpec {
+  code: string;
+  name: string;
+  short: string;
+  ribbon: string[]; // stripe colors, left→right
+  criteria: string;
+  bonus: string;
+}
+
+export const MEDALS: Record<string, MedalSpec> = {
+  cib: { code: "cib", name: "Combat Infantryman Badge", short: "CIB", ribbon: ["#2F5FA8", "#C9CCD1", "#2F5FA8"], criteria: "Survived a combat operation", bonus: "+20 vision" },
+  cmb: { code: "cmb", name: "Combat Medical Badge", short: "CMB", ribbon: ["#7E1F2B", "#E9E6DA", "#7E1F2B"], criteria: "Medic healed 100+ HP under fire", bonus: "+50% healing" },
+  purple_heart: { code: "purple_heart", name: "Purple Heart", short: "PH", ribbon: ["#E9E6DA", "#5B2A86", "#5B2A86", "#E9E6DA"], criteria: "Wounded in action (40+ damage) — posthumous for the fallen", bonus: "+10 max HP each" },
+  bronze_star: { code: "bronze_star", name: "Bronze Star", short: "BSM", ribbon: ["#B22234", "#E9E6DA", "#2F5FA8", "#E9E6DA", "#B22234"], criteria: "4+ kills in one operation (medic: 180+ HP healed)", bonus: "+8% damage each" },
+  silver_star: { code: "silver_star", name: "Silver Star", short: "SS", ribbon: ["#2F5FA8", "#E9E6DA", "#B22234", "#E9E6DA", "#2F5FA8"], criteria: "Destroyed an MG42 nest / Flak gun, or killed an SS officer", bonus: "−8% spread (aim) each" },
+  dsc: { code: "dsc", name: "Distinguished Service Cross", short: "DSC", ribbon: ["#B22234", "#2F5FA8", "#2F5FA8", "#B22234"], criteria: "8+ kills in one operation", bonus: "−10% fire interval" },
+  moh: { code: "moh", name: "Medal of Honor", short: "MoH", ribbon: ["#7FB2E5", "#E9E6DA", "#7FB2E5"], criteria: "12+ kills in one operation, or sole survivor of a victory", bonus: "+20 HP, +10% dmg, −10% spread, −0.1s reaction" },
+};
+
+export const MEDAL_ORDER = ["moh", "dsc", "silver_star", "bronze_star", "purple_heart", "cmb", "cib"];
+
+export function medalCounts(medals: string[]): Array<[string, number]> {
+  const c = new Map<string, number>();
+  for (const m of medals) c.set(m, (c.get(m) ?? 0) + 1);
+  return MEDAL_ORDER.filter((m) => c.has(m)).map((m) => [m, c.get(m)!]);
+}
+
+export function medalBonus(medals: string[]) {
+  const n = (code: string) => medals.filter((m) => m === code).length;
+  const moh = n("moh") > 0;
+  return {
+    hp: 10 * n("purple_heart") + (moh ? 20 : 0),
+    dmgMult: (1 + 0.08 * n("bronze_star")) * (moh ? 1.1 : 1),
+    spreadMult: Math.pow(0.92, n("silver_star")) * (moh ? 0.9 : 1),
+    fireMult: n("dsc") > 0 ? 0.9 : 1,
+    vision: n("cib") > 0 ? 20 : 0,
+    healMult: n("cmb") > 0 ? 1.5 : 1,
+    reaction: moh ? -0.1 : 0,
+  };
+}
+
 // Rank ladder — mirrors backend/lib/gen.py RANKS (one promotion per mission survived).
 export const RANKS = ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."];
 

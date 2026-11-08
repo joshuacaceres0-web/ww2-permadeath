@@ -1,15 +1,20 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
 // fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
 
-import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus } from "./data";
+import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 
-export const MAP_W = 1600;
-export const MAP_H = 900;
+export const MAP_W = 2400;
+export const MAP_H = 1350;
+const VIEW_W = 1600; // world units visible at once — the camera scrolls over the rest
+const VIEW_H = 900;
 const CELL = 24;
 const COLS = Math.ceil(MAP_W / CELL);
 const ROWS = Math.ceil(MAP_H / CELL);
 const UNIT_R = 9;
+const PAN_SPEED = 900;
+
+export type Variant = "beach" | "airborne" | "";
 
 interface Order {
   x: number;
@@ -52,6 +57,16 @@ interface Unit {
   kills: number;
   alive: boolean;
   walk: number;
+  // medal tracking
+  damageTaken: number;
+  healed: number;
+  heavyKills: number;
+  officerKills: number;
+  dmgMult: number;
+  healMult: number;
+  // pathing toward a moving focus
+  chase: Order[];
+  repathT: number;
 }
 
 interface Bullet {
@@ -145,11 +160,19 @@ export interface FallenReport {
   soldierId: string;
   cause: string;
   kills: number;
+  damageTaken: number;
+  healed: number;
+  heavyKills: number;
+  officerKills: number;
 }
 
 export interface SurvivorReport {
   soldierId: string;
   kills: number;
+  damageTaken: number;
+  healed: number;
+  heavyKills: number;
+  officerKills: number;
 }
 
 export interface BattleReport {
@@ -194,6 +217,116 @@ export interface SquadInput {
   type: UnitTypeId;
   rank: string;
   level: number;
+  medals: string[];
+}
+
+// ---------------- pathfinding (A* on the CELL grid, 8-way, LOS-smoothed) ----------------
+
+function buildBlockedGrid(blockers: Blocker[]): Uint8Array {
+  const g = new Uint8Array(COLS * ROWS);
+  for (const b of blockers) {
+    const r = b.r + UNIT_R * 0.7;
+    const c0 = Math.max(0, Math.floor((b.x - r) / CELL));
+    const c1 = Math.min(COLS - 1, Math.floor((b.x + r) / CELL));
+    const r0 = Math.max(0, Math.floor((b.y - r) / CELL));
+    const r1 = Math.min(ROWS - 1, Math.floor((b.y + r) / CELL));
+    for (let gy = r0; gy <= r1; gy++)
+      for (let gx = c0; gx <= c1; gx++) {
+        const dx = (gx + 0.5) * CELL - b.x;
+        const dy = (gy + 0.5) * CELL - b.y;
+        if (dx * dx + dy * dy <= r * r) g[gy * COLS + gx] = 1;
+      }
+  }
+  return g;
+}
+
+function nearestOpen(g: Uint8Array, cx: number, cy: number): [number, number] {
+  if (!g[cy * COLS + cx]) return [cx, cy];
+  for (let rad = 1; rad < 12; rad++)
+    for (let dy = -rad; dy <= rad; dy++)
+      for (let dx = -rad; dx <= rad; dx++) {
+        const x = cx + dx;
+        const y = cy + dy;
+        if (x >= 0 && y >= 0 && x < COLS && y < ROWS && !g[y * COLS + x]) return [x, y];
+      }
+  return [cx, cy];
+}
+
+function lineClear(g: Uint8Array, x0: number, y0: number, x1: number, y1: number): boolean {
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  const steps = Math.ceil(d / (CELL / 3));
+  for (let i = 1; i < steps; i++) {
+    const x = x0 + ((x1 - x0) * i) / steps;
+    const y = y0 + ((y1 - y0) * i) / steps;
+    if (g[Math.floor(y / CELL) * COLS + Math.floor(x / CELL)]) return false;
+  }
+  return true;
+}
+
+function findPath(g: Uint8Array, sx: number, sy: number, tx: number, ty: number): Order[] {
+  if (lineClear(g, sx, sy, tx, ty)) return [{ x: tx, y: ty }];
+  const clampC = (v: number, m: number) => Math.max(0, Math.min(m - 1, v));
+  const [scx, scy] = nearestOpen(g, clampC(Math.floor(sx / CELL), COLS), clampC(Math.floor(sy / CELL), ROWS));
+  const [tcx, tcy] = nearestOpen(g, clampC(Math.floor(tx / CELL), COLS), clampC(Math.floor(ty / CELL), ROWS));
+  const start = scy * COLS + scx;
+  const goal = tcy * COLS + tcx;
+  const gScore = new Float32Array(COLS * ROWS).fill(Infinity);
+  const came = new Int32Array(COLS * ROWS).fill(-1);
+  const closed = new Uint8Array(COLS * ROWS);
+  const open: number[] = [start];
+  const f = new Float32Array(COLS * ROWS).fill(Infinity);
+  gScore[start] = 0;
+  const h = (i: number) => Math.hypot((i % COLS) - tcx, Math.floor(i / COLS) - tcy);
+  f[start] = h(start);
+  let iter = 0;
+  while (open.length && iter++ < 6000) {
+    let bi = 0;
+    for (let i = 1; i < open.length; i++) if (f[open[i]] < f[open[bi]]) bi = i;
+    const cur = open[bi];
+    open[bi] = open[open.length - 1];
+    open.pop();
+    if (cur === goal) break;
+    if (closed[cur]) continue;
+    closed[cur] = 1;
+    const cx = cur % COLS;
+    const cy = Math.floor(cur / COLS);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        const ni = ny * COLS + nx;
+        if (g[ni] || closed[ni]) continue;
+        if (dx && dy && (g[cy * COLS + nx] || g[ny * COLS + cx])) continue; // no corner cutting
+        const tentative = gScore[cur] + (dx && dy ? 1.414 : 1);
+        if (tentative < gScore[ni]) {
+          gScore[ni] = tentative;
+          came[ni] = cur;
+          f[ni] = tentative + h(ni);
+          open.push(ni);
+        }
+      }
+  }
+  if (came[goal] === -1 && goal !== start) return [{ x: tx, y: ty }];
+  const cells: Order[] = [];
+  for (let i = goal; i !== -1 && i !== start; i = came[i]) {
+    cells.push({ x: (i % COLS) * CELL + CELL / 2, y: Math.floor(i / COLS) * CELL + CELL / 2 });
+  }
+  cells.reverse();
+  if (!g[Math.floor(ty / CELL) * COLS + Math.floor(tx / CELL)]) cells[cells.length - 1] = { x: tx, y: ty };
+  // String-pull: drop waypoints we can see past.
+  const out: Order[] = [];
+  let ax = sx;
+  let ay = sy;
+  for (let i = 0; i < cells.length; i++) {
+    const next = cells[i + 1];
+    if (next && lineClear(g, ax, ay, next.x, next.y)) continue;
+    out.push(cells[i]);
+    ax = cells[i].x;
+    ay = cells[i].y;
+  }
+  return out.length ? out : [{ x: tx, y: ty }];
 }
 
 export class GameEngine {
@@ -212,6 +345,12 @@ export class GameEngine {
   private projectiles: Projectile[] = [];
   private particles: Particle[] = [];
   private blockers: Blocker[] = [];
+  private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
+  private cam = { x: 0, y: 0 };
+  private viewW = VIEW_W;
+  private viewH = VIEW_H;
+  private keys = new Set<string>();
+  private variant: Variant = "";
   private terrain: HTMLCanvasElement | null = null;
   private tctx: CanvasRenderingContext2D | null = null;
   private fog: HTMLCanvasElement | null = null;
@@ -249,7 +388,8 @@ export class GameEngine {
 
   // ---------------- lifecycle ----------------
 
-  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0) {
+  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0, variant: Variant = "") {
+    this.variant = variant;
     this.mission = mission;
     this.units = [];
     this.bullets = [];
@@ -276,9 +416,11 @@ export class GameEngine {
     this.waves = [...byWave.keys()].sort((a, b) => a - b).map((k) => byWave.get(k)!);
 
     const rng = mulberry32(hashStr(mission.id));
-    const built = buildTerrain(mission.terrain, rng);
+    const kind = mission.terrain === "dday" ? (variant === "airborne" ? "airborne" : "beach") : mission.terrain;
+    const built = buildTerrain(kind, rng);
     this.terrain = built.canvas;
     this.blockers = built.blockers;
+    this.blocked = buildBlockedGrid(built.blockers);
     this.tctx = built.canvas.getContext("2d");
 
     this.fog = document.createElement("canvas");
@@ -293,6 +435,8 @@ export class GameEngine {
     this.recomputeFog();
     this.resize();
     this.dirty = true;
+    const allies = this.units.filter((u) => u.side === "allies");
+    if (allies.length) this.centerOn(allies.reduce((t, u) => t + u.x, 0) / allies.length, allies.reduce((t, u) => t + u.y, 0) / allies.length);
     this.pushLog(`${mission.code} — assets in position. Awaiting your order.`, "info");
   }
 
@@ -334,12 +478,26 @@ export class GameEngine {
     if (rect.width === 0 || rect.height === 0) return;
     this.canvas.width = Math.round(rect.width * dpr);
     this.canvas.height = Math.round(rect.height * dpr);
-    const s = Math.min(rect.width / MAP_W, rect.height / MAP_H);
+    const s = Math.min(rect.width / VIEW_W, rect.height / VIEW_H);
+    this.viewW = Math.min(MAP_W, rect.width / s);
+    this.viewH = Math.min(MAP_H, rect.height / s);
     this.view = {
       s,
-      ox: (rect.width - MAP_W * s) / 2,
-      oy: (rect.height - MAP_H * s) / 2,
+      ox: (rect.width - this.viewW * s) / 2,
+      oy: (rect.height - this.viewH * s) / 2,
     };
+    this.clampCam();
+  }
+
+  private clampCam() {
+    this.cam.x = Math.max(0, Math.min(MAP_W - this.viewW, this.cam.x));
+    this.cam.y = Math.max(0, Math.min(MAP_H - this.viewH, this.cam.y));
+  }
+
+  centerOn(x: number, y: number) {
+    this.cam.x = x - this.viewW / 2;
+    this.cam.y = y - this.viewH / 2;
+    this.clampCam();
   }
 
   getReport(): BattleReport | null {
@@ -351,7 +509,14 @@ export class GameEngine {
       fallen: this.fallen,
       survivors: this.units
         .filter((u) => u.side === "allies" && u.alive && u.soldierId)
-        .map((u) => ({ soldierId: u.soldierId!, kills: u.kills })),
+        .map((u) => ({
+          soldierId: u.soldierId!,
+          kills: u.kills,
+          damageTaken: Math.round(u.damageTaken),
+          healed: Math.round(u.healed),
+          heavyKills: u.heavyKills,
+          officerKills: u.officerKills,
+        })),
     };
   }
 
@@ -394,6 +559,13 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  /** Dev/test probe: living allied positions + open-cell check. */
+  debugAllies() {
+    return this.units
+      .filter((u) => u.side === "allies" && u.alive)
+      .map((u) => ({ name: u.name, x: Math.round(u.x), y: Math.round(u.y), orders: u.orders.length }));
+  }
+
   selectUnit(id: number) {
     const u = this.unitById(id);
     if (!u?.alive) return;
@@ -407,8 +579,8 @@ export class GameEngine {
   private toMap(clientX: number, clientY: number): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
-      x: (clientX - rect.left - this.view.ox) / this.view.s,
-      y: (clientY - rect.top - this.view.oy) / this.view.s,
+      x: (clientX - rect.left - this.view.ox) / this.view.s + this.cam.x,
+      y: (clientY - rect.top - this.view.oy) / this.view.s + this.cam.y,
     };
   }
 
@@ -417,6 +589,11 @@ export class GameEngine {
   private onKey = (e: KeyboardEvent) => {
     if (this.phase === "over") return;
     const k = e.key.toLowerCase();
+    if (["w", "a", "s", "d", "arrowup", "arrowdown", "arrowleft", "arrowright"].includes(k)) {
+      e.preventDefault();
+      this.keys.add(k);
+      return;
+    }
     if (k === " ") {
       e.preventDefault();
       if (this.phase === "briefing") return;
@@ -424,11 +601,12 @@ export class GameEngine {
       return;
     }
     if (this.phase === "briefing") return;
-    if (k >= "1" && k <= "5") {
+    if (k >= "1" && k <= "8") {
       const idx = parseInt(k, 10) - 1;
       const allies = this.units.filter((u) => u.side === "allies");
       if (allies[idx]) {
         this.selected = allies[idx].alive ? [allies[idx].id] : [];
+        if (allies[idx].alive) this.centerOn(allies[idx].x, allies[idx].y);
         this.aimUnitId = null;
         this.dirty = true;
       }
@@ -447,6 +625,7 @@ export class GameEngine {
   };
 
   private onKeyUp = (e: KeyboardEvent) => {
+    this.keys.delete(e.key.toLowerCase());
     if (e.key === " ") e.preventDefault();
   };
 
@@ -554,11 +733,13 @@ export class GameEngine {
       ];
       squad.forEach((u, i) => {
         const off = OFFS[i % OFFS.length];
-        const ox = x + off[0];
-        const oy = y + off[1];
+        const ox = Math.max(12, Math.min(MAP_W - 12, x + off[0]));
+        const oy = Math.max(12, Math.min(MAP_H - 12, y + off[1]));
         u.attackId = null;
-        if (queue) u.orders.push({ x: ox, y: oy });
-        else u.orders = [{ x: ox, y: oy }];
+        const from = queue && u.orders.length ? u.orders[u.orders.length - 1] : { x: u.x, y: u.y };
+        const path = findPath(this.blocked, from.x, from.y, ox, oy);
+        if (queue) u.orders.push(...path);
+        else u.orders = path;
       });
     }
     this.dirty = true;
@@ -603,7 +784,9 @@ export class GameEngine {
         this.pushLog(`${u.name}: nobody needs the morphine yet.`, "info");
         return;
       }
-      best.hp = Math.min(best.maxHp, best.hp + 50);
+      const before = best.hp;
+      best.hp = Math.min(best.maxHp, best.hp + 50 * u.healMult);
+      u.healed += best.hp - before;
       this.healFx(best.x, best.y);
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} patches up ${best.name}.`, "info");
@@ -651,7 +834,19 @@ export class GameEngine {
     squad.forEach((s, i) => {
       const spec = UNIT_TYPES[s.type];
       const bonus = levelBonus(s.level, commanderBonus);
-      const y = MAP_H / 2 + (i - (n - 1) / 2) * gap + (rng() * 20 - 10);
+      const mb = medalBonus(s.medals);
+      let sx = 80 + rng() * 60;
+      let y = MAP_H / 2 + (i - (n - 1) / 2) * gap + (rng() * 20 - 10);
+      if (this.variant === "airborne") {
+        // Scattered drop: men land all over the western fields, far from each other.
+        sx = 120 + rng() * MAP_W * 0.35;
+        y = 80 + rng() * (MAP_H - 160);
+      } else if (this.variant === "beach") {
+        sx = 150 + rng() * 40;
+      }
+      const [ocx, ocy] = nearestOpen(this.blocked, Math.floor(sx / CELL), Math.floor(y / CELL));
+      sx = ocx * CELL + CELL / 2;
+      y = ocy * CELL + CELL / 2;
       this.units.push({
         id: this.nextId++,
         side: "allies",
@@ -661,18 +856,20 @@ export class GameEngine {
         name: s.name,
         rank: s.rank,
         level: s.level,
-        reaction: bonus.reaction,
-        x: 80 + rng() * 60,
+        reaction: Math.max(0.1, bonus.reaction + mb.reaction),
+        x: sx,
         y,
         facing: 0,
-        hp: spec.hp,
-        maxHp: spec.hp,
+        hp: spec.hp + mb.hp,
+        maxHp: spec.hp + mb.hp,
         speed: spec.speed,
         range: spec.range,
-        vision: spec.vision,
+        vision: spec.vision + mb.vision,
         dmg: spec.dmg,
-        fireInterval: spec.fireInterval * bonus.fireMult,
-        spread: spec.spread * bonus.spreadMult,
+        fireInterval: spec.fireInterval * bonus.fireMult * mb.fireMult,
+        spread: spec.spread * bonus.spreadMult * mb.spreadMult,
+        dmgMult: mb.dmgMult,
+        healMult: mb.healMult,
         bulletSpeed: spec.bulletSpeed,
         isStatic: false,
         orders: [],
@@ -688,6 +885,12 @@ export class GameEngine {
         kills: 0,
         alive: true,
         walk: 0,
+        damageTaken: 0,
+        healed: 0,
+        heavyKills: 0,
+        officerKills: 0,
+        chase: [],
+        repathT: 0,
       });
     });
   }
@@ -708,6 +911,7 @@ export class GameEngine {
           ? MAP_H * (0.2 + rng() * 0.6)
           : 90 + rng() * (MAP_H - 180) + mobileCount * 8;
         mobileCount++;
+        const [ecx, ecy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
         this.units.push({
           id: this.nextId++,
           side: "axis",
@@ -718,8 +922,8 @@ export class GameEngine {
           rank: "",
           level: 0,
           reaction: 0.6,
-          x,
-          y,
+          x: ecx * CELL + CELL / 2,
+          y: ecy * CELL + CELL / 2,
           facing: Math.PI,
           hp: def.hp,
           maxHp: def.hp,
@@ -744,6 +948,14 @@ export class GameEngine {
           kills: 0,
           alive: true,
           walk: 0,
+          damageTaken: 0,
+          healed: 0,
+          heavyKills: 0,
+          officerKills: 0,
+          dmgMult: 1,
+          healMult: 1,
+          chase: [],
+          repathT: Math.random(),
         });
       }
     }
@@ -805,6 +1017,7 @@ export class GameEngine {
       u.abilityCd = Math.max(0, u.abilityCd - dt);
 
       let target = this.unitById(u.targetId);
+      if (target && !this.los(u, target)) target = null;
       if (!target || !target.alive) {
         target = this.autoTarget(u);
         u.targetId = target ? target.id : null;
@@ -834,13 +1047,13 @@ export class GameEngine {
         const prey = this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
-          if (pd > u.range * 0.9) {
-            this.moveToward(u, prey.x, prey.y, dt);
+          if (pd > u.range * 0.9 || !this.los(u, prey)) {
+            this.chaseTo(u, prey.x, prey.y, dt);
             moving = true;
           }
         }
-      } else if (u.side === "allies" && attackOrder && d > u.range * 0.92) {
-        this.moveToward(u, attackOrder.x, attackOrder.y, dt);
+      } else if (u.side === "allies" && attackOrder && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
+        this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
         moving = true;
       }
 
@@ -873,7 +1086,7 @@ export class GameEngine {
           u.burst--;
           u.burstTimer += 0.06;
         }
-      } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned) {
+      } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && this.los(u, focus)) {
         const interval = u.fireInterval * aura;
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
@@ -884,7 +1097,9 @@ export class GameEngine {
         for (const a of this.units) {
           if (a.side !== "allies" || !a.alive || a.id === u.id) continue;
           if (dist(u.x, u.y, a.x, a.y) <= 90) {
-            a.hp = Math.min(a.maxHp, a.hp + 3 * dt);
+            const before = a.hp;
+            a.hp = Math.min(a.maxHp, a.hp + 3 * u.healMult * dt);
+            u.healed += a.hp - before;
             a.suppression = Math.max(0, a.suppression - 5 * dt);
           }
         }
@@ -977,12 +1192,28 @@ export class GameEngine {
     for (const e of this.units) {
       if (e.side === u.side || !e.alive) continue;
       const d = dist(u.x, u.y, e.x, e.y);
-      if (d < bestD) {
+      if (d < bestD && this.los(u, e)) {
         best = e;
         bestD = d;
       }
     }
     return best;
+  }
+
+  private los(a: Unit, b: Unit): boolean {
+    return lineClear(this.blocked, a.x, a.y, b.x, b.y);
+  }
+
+  // Follow an A* path toward a moving point, re-planning every ~1s.
+  private chaseTo(u: Unit, x: number, y: number, dt: number) {
+    u.repathT -= dt;
+    if (u.repathT <= 0 || u.chase.length === 0) {
+      u.chase = findPath(this.blocked, u.x, u.y, x, y);
+      u.repathT = 1 + Math.random() * 0.4;
+    }
+    const wp = u.chase[0];
+    if (dist(u.x, u.y, wp.x, wp.y) < 10) u.chase.shift();
+    this.moveToward(u, wp.x, wp.y, dt);
   }
 
   private nearestAlly(u: Unit): Unit | null {
@@ -1052,7 +1283,7 @@ export class GameEngine {
 
   private fireAt(u: Unit, target: Unit, moving: boolean) {
     const lead = moving ? 1.6 : u.pinned ? 1.5 : 1;
-    this.spawnBullet(u, target.x, target.y, u.spread * lead, u.dmg, u.type === "mg" ? 20 : 14);
+    this.spawnBullet(u, target.x, target.y, u.spread * lead, u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
   }
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
@@ -1090,6 +1321,7 @@ export class GameEngine {
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
     u.hp -= dmg;
+    if (u.side === "allies") u.damageTaken += Math.min(dmg, u.hp + dmg);
     if (u.hp <= 0) this.kill(u, sourceType, killerId);
   }
 
@@ -1102,12 +1334,20 @@ export class GameEngine {
         soldierId: u.soldierId!,
         cause: CAUSES[sourceType] ?? "Killed in action",
         kills: u.kills,
+        damageTaken: Math.round(u.damageTaken),
+        healed: Math.round(u.healed),
+        heavyKills: u.heavyKills,
+        officerKills: u.officerKills,
       });
       this.selected = this.selected.filter((id) => id !== u.id);
       this.pushLog(`${u.name} is down. He isn't getting up.`, "death");
     } else {
       const killer = this.unitById(killerId);
-      if (killer && killer.side === "allies") killer.kills++;
+      if (killer && killer.side === "allies") {
+        killer.kills++;
+        if (u.enemyType === "mg42" || u.enemyType === "flak") killer.heavyKills++;
+        if (u.enemyType === "officer") killer.officerKills++;
+      }
       this.pushLog(`${ENEMY_TYPES[u.enemyType!].label} neutralized.`, "kill");
     }
     this.dirty = true;
@@ -1331,6 +1571,14 @@ export class GameEngine {
     if (!this.running) return;
     const dt = Math.min(0.05, (ts - this.last) / 1000);
     this.last = ts;
+    if (this.keys.size) {
+      const k = this.keys;
+      const vx = (k.has("d") || k.has("arrowright") ? 1 : 0) - (k.has("a") || k.has("arrowleft") ? 1 : 0);
+      const vy = (k.has("s") || k.has("arrowdown") ? 1 : 0) - (k.has("w") || k.has("arrowup") ? 1 : 0);
+      this.cam.x += vx * PAN_SPEED * dt;
+      this.cam.y += vy * PAN_SPEED * dt;
+      this.clampCam();
+    }
     this.update(dt);
     this.hudT += dt;
     if (this.hudT >= 0.15 || this.dirty) {
@@ -1352,7 +1600,11 @@ export class GameEngine {
 
     const shakeX = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
     const shakeY = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
-    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * (ox + shakeX), dpr * (oy + shakeY));
+    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * (ox + shakeX - this.cam.x * s), dpr * (oy + shakeY - this.cam.y * s));
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(this.cam.x, this.cam.y, this.viewW, this.viewH);
+    ctx.clip();
 
     if (this.terrain) ctx.drawImage(this.terrain, 0, 0);
 
@@ -1360,13 +1612,13 @@ export class GameEngine {
     for (const u of this.units) {
       if (u.side !== "allies" || !u.alive || !this.selected.includes(u.id)) continue;
       if (u.orders.length > 0) {
-        const o = u.orders[0];
+        const o = u.orders[u.orders.length - 1];
         ctx.strokeStyle = "rgba(78,205,196,0.85)";
         ctx.setLineDash([6, 5]);
         ctx.lineWidth = 1.2;
         ctx.beginPath();
         ctx.moveTo(u.x, u.y);
-        ctx.lineTo(o.x, o.y);
+        for (const wp of u.orders) ctx.lineTo(wp.x, wp.y);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.strokeStyle = "rgba(78,205,196,0.9)";
@@ -1492,11 +1744,13 @@ export class GameEngine {
     }
 
     // Vignette.
-    const grad = ctx.createRadialGradient(MAP_W / 2, MAP_H / 2, MAP_H / 2.6, MAP_W / 2, MAP_H / 2, MAP_H / 0.9);
+    const vcx = this.cam.x + this.viewW / 2;
+    const vcy = this.cam.y + this.viewH / 2;
+    const grad = ctx.createRadialGradient(vcx, vcy, this.viewH / 2.6, vcx, vcy, this.viewH / 0.9);
     grad.addColorStop(0, "rgba(0,0,0,0)");
     grad.addColorStop(1, "rgba(0,0,0,0.45)");
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, MAP_W, MAP_H);
+    ctx.fillRect(this.cam.x, this.cam.y, this.viewW, this.viewH);
 
     // Marquee selection box.
     if (this.marquee) {
@@ -1509,6 +1763,7 @@ export class GameEngine {
       ctx.fillStyle = "rgba(78,205,196,0.08)";
       ctx.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
     }
+    ctx.restore();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
   }
@@ -1610,6 +1865,105 @@ export class GameEngine {
 }
 
 // ---------------- terrain generation ----------------
+// Every obstacle is drawn to read at a glance: hedgerow bushes, trees, buildings, steel
+// hedgehogs. Hedgerows always leave walkable gaps (worn dirt), and A* routes through them.
+
+type Ctx = CanvasRenderingContext2D;
+
+function drawBush(ctx: Ctx, x: number, y: number, r: number, rng: () => number) {
+  ctx.fillStyle = "rgba(8,12,6,0.55)";
+  ctx.beginPath();
+  ctx.ellipse(x + 4, y + 5, r, r * 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = "#2C4A1C";
+  ctx.strokeStyle = "#0C1607";
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  for (let k = 0; k < 4; k++) {
+    ctx.fillStyle = k % 2 ? "#3F6A28" : "#4F7D32";
+    ctx.beginPath();
+    ctx.arc(x + (rng() - 0.5) * r, y + (rng() - 0.5) * r, r * (0.25 + rng() * 0.2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: number, y1: number, gaps: number[], rng: () => number) {
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  const GAP = 120;
+  for (let t = 0; t <= len; t += 30) {
+    const f = t / len;
+    if (gaps.some((g) => Math.abs(f * len - g * len) < GAP / 2)) continue;
+    const x = x0 + (x1 - x0) * f + (rng() - 0.5) * 6;
+    const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
+    drawBush(ctx, x, y, 17, rng);
+    blockers.push({ x, y, r: 16 });
+  }
+  // Worn dirt marks the gaps so the player sees where to go.
+  for (const g of gaps) {
+    ctx.fillStyle = "rgba(92,74,48,0.6)";
+    ctx.beginPath();
+    ctx.ellipse(x0 + (x1 - x0) * g, y0 + (y1 - y0) * g, 34, 26, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
+
+function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number, snow: boolean) {
+  ctx.fillStyle = "rgba(6,10,6,0.55)";
+  ctx.beginPath();
+  ctx.ellipse(x + 6, y + 7, r, r * 0.8, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = snow ? "#3B4A3A" : "#1F3A18";
+  ctx.strokeStyle = "#0A1408";
+  ctx.lineWidth = 2;
+  for (const k of [1, 0.7, 0.4]) {
+    ctx.beginPath();
+    ctx.arc(x, y, r * k, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = snow ? "#C9D2CC" : "#2D5222";
+  }
+  blockers.push({ x, y, r: r * 0.75 });
+}
+
+function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: number, h: number) {
+  ctx.fillStyle = "rgba(0,0,0,0.45)";
+  ctx.fillRect(x + 8, y + 8, w, h);
+  ctx.fillStyle = "#5A3A2A";
+  ctx.strokeStyle = "#1A0F08";
+  ctx.lineWidth = 3;
+  ctx.fillRect(x, y, w, h);
+  ctx.strokeRect(x, y, w, h);
+  ctx.fillStyle = "#6E4834";
+  ctx.fillRect(x + 4, y + 4, w - 8, h / 2 - 4);
+  ctx.strokeStyle = "#2A1A10";
+  ctx.beginPath();
+  ctx.moveTo(x, y + h / 2);
+  ctx.lineTo(x + w, y + h / 2);
+  ctx.stroke();
+  // Cover the footprint with blocker circles.
+  const r = Math.min(w, h) / 2;
+  for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) blockers.push({ x: bx, y: by, r: r * 1.05 });
+}
+
+function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
+  ctx.strokeStyle = "#2A2A26";
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(x - 10, y - 10);
+  ctx.lineTo(x + 10, y + 10);
+  ctx.moveTo(x + 10, y - 10);
+  ctx.lineTo(x - 10, y + 10);
+  ctx.moveTo(x, y - 12);
+  ctx.lineTo(x, y + 12);
+  ctx.stroke();
+  ctx.strokeStyle = "#6A6A60";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+  blockers.push({ x, y, r: 11 });
+}
 
 function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElement; blockers: Blocker[] } {
   const canvas = document.createElement("canvas");
@@ -1617,114 +1971,113 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
   canvas.height = MAP_H;
   const ctx = canvas.getContext("2d")!;
   const blockers: Blocker[] = [];
+  const snow = kind === "forest";
 
-  // Base field.
-  ctx.fillStyle = "#242C1D";
+  ctx.fillStyle = snow ? "#3A4238" : "#2A3520";
   ctx.fillRect(0, 0, MAP_W, MAP_H);
-  for (let i = 0; i < 260; i++) {
-    const x = rng() * MAP_W;
-    const y = rng() * MAP_H;
-    const r = 20 + rng() * 70;
-    ctx.fillStyle = rng() < 0.5 ? "rgba(28,36,22,0.35)" : "rgba(60,66,42,0.22)";
+  for (let i = 0; i < 500; i++) {
+    const r = 20 + rng() * 80;
+    ctx.fillStyle = rng() < 0.5 ? "rgba(24,32,18,0.3)" : snow ? "rgba(200,210,205,0.12)" : "rgba(70,80,46,0.22)";
     ctx.beginPath();
-    ctx.ellipse(x, y, r, r * (0.5 + rng() * 0.5), rng() * Math.PI, 0, Math.PI * 2);
+    ctx.ellipse(rng() * MAP_W, rng() * MAP_H, r, r * (0.5 + rng() * 0.5), rng() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
   }
+  const road = (y: number) => {
+    ctx.strokeStyle = "#4A3E2C";
+    ctx.lineWidth = 46;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.bezierCurveTo(MAP_W * 0.3, y - 90, MAP_W * 0.7, y + 90, MAP_W, y);
+    ctx.stroke();
+  };
+  const gapPick = (n: number) => Array.from({ length: n }, (_, i) => (i + 0.3 + rng() * 0.4) / n);
 
-  const addBlocker = (x: number, y: number, r: number) => blockers.push({ x, y, r });
-
-  // Dirt road west→east for every map (the axis of advance).
-  ctx.strokeStyle = "#3B3428";
-  ctx.lineWidth = 44;
-  ctx.beginPath();
-  ctx.moveTo(0, MAP_H / 2);
-  ctx.bezierCurveTo(MAP_W * 0.3, MAP_H * 0.42, MAP_W * 0.7, MAP_H * 0.58, MAP_W, MAP_H / 2);
-  ctx.stroke();
-
-  if (kind === "bocage") {
-    for (let i = 0; i < 6; i++) {
-      const y = (MAP_H * (i + 0.6)) / 6 + (rng() * 60 - 30);
-      ctx.strokeStyle = "#1E2A12";
-      ctx.lineWidth = 22;
+  if (kind === "beach") {
+    // Sea, surf, sand, shingle, bluffs with draws, then the fields.
+    ctx.fillStyle = "#1B3A46";
+    ctx.fillRect(0, 0, 260, MAP_H);
+    ctx.strokeStyle = "rgba(200,220,220,0.35)";
+    ctx.lineWidth = 2;
+    for (let y = 0; y < MAP_H; y += 26) {
       ctx.beginPath();
-      ctx.moveTo(MAP_W * 0.18, y);
-      ctx.bezierCurveTo(MAP_W * 0.4, y + 40, MAP_W * 0.62, y - 40, MAP_W * 0.94, y + 10);
+      ctx.moveTo(240 + rng() * 30, y);
+      ctx.lineTo(260 + rng() * 20, y + 18);
       ctx.stroke();
-      for (let x = MAP_W * 0.18; x < MAP_W * 0.95; x += 34) {
-        addBlocker(x + (rng() * 20 - 10), y + (rng() * 24 - 12), 15);
-      }
+    }
+    ctx.fillStyle = "#8C7A55";
+    ctx.fillRect(260, 0, 560, MAP_H);
+    ctx.fillStyle = "#6E6450";
+    ctx.fillRect(800, 0, 40, MAP_H); // shingle
+    for (let i = 0; i < 34; i++) drawHedgehog(ctx, blockers, 380 + rng() * 380, 40 + rng() * (MAP_H - 80));
+    // Bluffs: dune-grass ridge with three draws (the real Omaha exits).
+    hedgerow(ctx, blockers, 1000, 0, 1000, MAP_H, [0.2, 0.5, 0.82], rng);
+    hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
+    road(MAP_H / 2);
+    // Concrete pillbox ruins on the bluff.
+    for (const py of [MAP_H * 0.32, MAP_H * 0.68]) {
+      ctx.fillStyle = "#6A6A62";
+      ctx.strokeStyle = "#2A2A26";
+      ctx.lineWidth = 3;
+      ctx.fillRect(1080, py - 22, 50, 44);
+      ctx.strokeRect(1080, py - 22, 50, 44);
+      ctx.fillStyle = "#1A1A18";
+      ctx.fillRect(1080, py - 4, 8, 8);
+      blockers.push({ x: 1105, y: py, r: 26 });
+    }
+  } else if (kind === "airborne" || kind === "bocage") {
+    road(MAP_H / 2);
+    for (const x of [620, 1120, 1620, 2050]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
+    for (const y of [430, 920]) {
+      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
+    }
+    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 700 + rng() * 1600, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
+    drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
+    if (kind === "airborne") {
+      ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
+      ctx.fillRect(0, 0, MAP_W, MAP_H);
     }
   } else if (kind === "town") {
-    for (let i = 0; i < 7; i++) {
-      const bx = MAP_W * (0.3 + rng() * 0.6);
-      const by = MAP_H * (0.12 + rng() * 0.72);
-      const w = 90 + rng() * 80;
-      const h = 70 + rng() * 60;
-      ctx.fillStyle = "#33261E";
-      ctx.strokeStyle = "#171008";
-      ctx.lineWidth = 3;
-      ctx.fillRect(bx, by, w, h);
-      ctx.strokeRect(bx, by, w, h);
-      ctx.strokeStyle = "#4A382A";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(bx, by + h / 2);
-      ctx.lineTo(bx + w, by + h / 2);
-      ctx.stroke();
-      addBlocker(bx + w / 2, by + h / 2, Math.max(w, h) / 2);
+    road(MAP_H / 2);
+    for (let i = 0; i < 12; i++) {
+      const w = 110 + rng() * 90;
+      const h = 90 + rng() * 60;
+      const bx = 520 + (i % 4) * 460 + rng() * 80;
+      const by = 80 + Math.floor(i / 4) * 430 + rng() * 60;
+      if (Math.abs(by + h / 2 - MAP_H / 2) < 110) continue; // keep the main street open
+      drawBuilding(ctx, blockers, bx, by, w, h);
     }
+    hedgerow(ctx, blockers, 400, 40, 400, MAP_H - 40, gapPick(3), rng);
   } else if (kind === "causeway") {
-    // Flooded flats above and below the road.
-    ctx.fillStyle = "#16211F";
+    ctx.fillStyle = "#16252A";
     ctx.fillRect(0, 0, MAP_W, MAP_H * 0.3);
-    ctx.fillRect(0, MAP_H * 0.72, MAP_W, MAP_H * 0.28);
-    ctx.strokeStyle = "#22332F";
-    ctx.lineWidth = 2;
-    for (let i = 0; i < 26; i++) {
-      const wy = rng() < 0.5 ? rng() * MAP_H * 0.28 : MAP_H * 0.74 + rng() * MAP_H * 0.24;
-      const wx = rng() * MAP_W;
-      ctx.beginPath();
-      ctx.moveTo(wx, wy);
-      ctx.lineTo(wx + 24 + rng() * 30, wy);
-      ctx.stroke();
+    ctx.fillRect(0, MAP_H * 0.7, MAP_W, MAP_H * 0.3);
+    road(MAP_H / 2);
+    for (let x = 300; x < MAP_W; x += 44) {
+      drawBush(ctx, x, MAP_H * 0.3, 15, rng); // reed banks along the flood
+      blockers.push({ x, y: MAP_H * 0.3, r: 15 });
+      drawBush(ctx, x + 22, MAP_H * 0.7, 15, rng);
+      blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15 });
     }
-    for (let x = 0; x < MAP_W; x += 40) {
-      addBlocker(x, MAP_H * 0.14, 26);
-      addBlocker(x + 20, MAP_H * 0.86, 26);
-    }
+    for (let i = 0; i < 8; i++) drawTree(ctx, blockers, 600 + rng() * 1700, MAP_H * (0.38 + rng() * 0.24), 16, false);
   } else if (kind === "forest") {
-    for (let i = 0; i < 60; i++) {
-      const tx = MAP_W * (0.22 + rng() * 0.75);
+    road(MAP_H / 2);
+    for (let i = 0; i < 110; i++) {
+      const tx = 320 + rng() * (MAP_W - 360);
       const ty = rng() * MAP_H;
-      const r = 12 + rng() * 12;
-      ctx.fillStyle = "rgba(10,14,8,0.5)";
-      ctx.beginPath();
-      ctx.ellipse(tx + 4, ty + 5, r, r * 0.8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = "#1C2B15";
-      ctx.strokeStyle = "#0F180C";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(tx, ty, r, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      addBlocker(tx, ty, r * 0.8);
+      if (Math.abs(ty - MAP_H / 2) < 60) continue;
+      drawTree(ctx, blockers, tx, ty, 16 + rng() * 12, snow);
     }
   }
 
-  // Craters and debris.
-  for (let i = 0; i < 12; i++) {
-    const cx = MAP_W * (0.25 + rng() * 0.7);
+  // Craters (cosmetic, walkable).
+  for (let i = 0; i < 16; i++) {
+    const cx = 900 + rng() * (MAP_W - 950);
     const cy = rng() * MAP_H;
-    const r = 12 + rng() * 20;
-    ctx.fillStyle = "rgba(12,12,10,0.8)";
+    const r = 12 + rng() * 18;
+    ctx.fillStyle = "rgba(14,12,10,0.75)";
     ctx.beginPath();
     ctx.ellipse(cx, cy, r, r * 0.7, rng() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = "rgba(70,62,44,0.6)";
-    ctx.lineWidth = 3;
-    ctx.stroke();
   }
-
   return { canvas, blockers };
 }

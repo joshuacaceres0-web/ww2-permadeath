@@ -1,0 +1,66 @@
+{
+  "iteration": 1,
+  "mode": "generate",
+  "summary": "5 browser checks + 2 backend test files covering all 6 acceptance criteria for VANGUARD '44 v3 (campaign wipe, D-Day beach/airborne choice, hedgerow pathing, WWII medals, memorial grave ribbons). All checks passed after fixing test-script targeting issues (not app bugs).",
+  "passed": 7,
+  "failed": 0,
+  "flaky": 0,
+  "blocked": 0,
+  "test_error": 0,
+  "bugs": [],
+  "action_items": [
+    "Running the two backend test files together under pytest-xdist can race on the shared singleton game_state/squad collections (both files call POST /campaign/wipe + /battle/complete). Each file passes reliably when run on its own; this is a test-isolation note for a single-player app with global state, not a product bug. No action needed unless a dedicated per-test DB is desired for the backend test suite."
+  ],
+  "retest_needed": false,
+  "checks": [
+    {
+      "criterion": "Full reset button with confirmation clears everything incl. memorial wall",
+      "name": "war-room-reset-everything",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Dialog opens on reset-everything-btn; reset-confirm-btn stays disabled for wrong text ('nope'); reset-cancel-btn keeps data; typing 'RESET' enables confirm; after confirming, War Room shows OPERATION OVERLORD + 300 RP and /memorial shows '0 FALLEN RECORDED'. Screenshots captured at each step."
+    },
+    {
+      "criterion": "Full reset button with confirmation clears everything incl. memorial wall",
+      "name": "test_tscheck_campaign_wipe.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "POST /api/campaign/wipe {confirm:'nope'} -> 400 {'detail':'Type RESET to confirm'}. POST /api/campaign/wipe {confirm:'RESET'} -> 200, requisition=300, mission_index=0, commander_rank='2nd Lt.'; GET /api/squad returns exactly the 7 founding names; GET /api/memorial == []; current mission code == 'OPERATION OVERLORD'. 2 passed in 0.75s (standalone run)."
+    },
+    {
+      "criterion": "D-Day first mission with choice of beach landing or airborne drop",
+      "name": "dday-choice-beach-vs-airborne",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Deploying op_01 shows dday-choice-beach and dday-choice-airborne. Beach -> engage-btn -> debugAllies() max(x) = 259 (<260, allies start together far west). Airborne -> engage-btn -> debugAllies() spread (max-min x) > 200 (scattered). Both battlefields render with terrain-legend and canvas."
+    },
+    {
+      "criterion": "Units no longer get stuck on green walls; obstacles are readable; paths exist",
+      "name": "units-path-past-hedgerow",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "terrain-legend visible (HEDGEROW/GAP/BUILDING/HEDGEHOG). Beach variant: drag-selected all 5 allies while paused, centerOn(1300,675), right-clicked canvas center (world ~1300,675, past the bluff hedgerow/gap), resumed with Space. After resumed play (with brief combat along the way handled by extra wait loops) every living ally's debugAllies().x > 1000 -- squad walked cleanly through the hedgerow gap to the ordered point, no wall-stuck behavior observed."
+    },
+    {
+      "criterion": "Real WWII medals awarded for feats with bonuses",
+      "name": "test_tscheck_medals_awarded.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "POST /api/battle/complete (mission_id=op_01, victory, survivor kills=9/damage=55/heavy_kills=1, fallen kills=5/damage=120) -> 200; medals_awarded contains 'Frank Hayes — Combat Infantryman Badge/Purple Heart/Bronze Star/Silver Star/Distinguished Service Cross' and 'Walter Kowalski — Purple Heart (posthumous)/Bronze Star (posthumous)'. Follow-up GET /api/squad shows survivor medals=['cib','purple_heart','bronze_star','silver_star','dsc']. 1 passed in 0.73s (standalone run)."
+    },
+    {
+      "criterion": "Real WWII medals awarded for feats with bonuses",
+      "name": "medals-shown-in-dossier",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "/barracks open-dossier-<survivorId> opens soldier-dossier; dossier-medals list visible showing Medal of Honor, Distinguished Service Cross, Silver Star, Bronze Star, Purple Heart, Combat Infantryman Badge each with their stat-bonus text (e.g. 'Silver Star -8% spread (aim) each')."
+    },
+    {
+      "criterion": "Fallen soldiers' medals shown on their tombstone",
+      "name": "memorial-medals-and-grave-ribbons",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "/memorial card shows memorial-medals-<id> for the fallen (Walter Kowalski) with Purple Heart (posthumous) + Bronze Star (posthumous). Selecting graveyard-tray-<id>, clicking graveyard-field places grave-<id> (tombstone sprite + 'KOWALSKI' label) and renders grave-ribbons-<id>."
+    }
+  ]
+}
