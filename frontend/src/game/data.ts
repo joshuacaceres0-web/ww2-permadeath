@@ -158,6 +158,18 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     type: "flak", label: "Flak 38 20mm Emplacement", weapon: "Rapid Autocannon", hp: 320, speed: 0, range: 340,
     vision: 320, dmg: 8, fireInterval: 0.15, spread: 0.12, bulletSpeed: 800, static: true, threat: "CRITICAL",
   },
+  scharfschutze: {
+    type: "scharfschutze", label: "Scharfschütze Sniper", weapon: "Kar98k ZF39 scope", hp: 70, speed: 45, range: 420,
+    vision: 440, dmg: 40, fireInterval: 2.4, spread: 0.02, bulletSpeed: 900, threat: "HIGH",
+  },
+  mortar: {
+    type: "mortar", label: "Granatwerfer 34 Mortar Team", weapon: "8cm mortar (indirect fire)", hp: 120, speed: 0, range: 620,
+    vision: 300, dmg: 45, fireInterval: 6, spread: 0.1, bulletSpeed: 300, static: true, threat: "EXTREME",
+  },
+  fallschirmjager: {
+    type: "fallschirmjager", label: "Fallschirmjäger Paratrooper", weapon: "FG42 automatic rifle", hp: 120, speed: 66, range: 220,
+    vision: 260, dmg: 11, fireInterval: 0.3, spread: 0.07, bulletSpeed: 620, threat: "HIGH",
+  },
 };
 
 // Death causes by killer type — mirrors the debrief filing.
@@ -170,6 +182,9 @@ export const CAUSES: Record<string, string> = {
   flak: "Flak 38 autocannon",
   grenade: "Fragmentation",
   rocket: "Rocket blast",
+  scharfschutze: "Sniper fire",
+  mortar: "Mortar bombardment",
+  fallschirmjager: "FG42 fire",
 };
 
 // Real WWII US Army decorations — mirrors backend/lib/medals.py (codes, criteria).

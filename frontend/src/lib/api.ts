@@ -22,7 +22,7 @@ async function request<T>(method: string, path: string, body?: JsonBody): Promis
   // Auth rides the httpOnly session cookie automatically — never add auth headers here.
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    headers: body === undefined ? { "X-Save-Id": saveId() } : { "Content-Type": "application/json", "X-Save-Id": saveId() },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
 
@@ -44,3 +44,13 @@ export const apiPut = <T>(path: string, body?: JsonBody) => request<T>("PUT", pa
 export const apiPatch = <T>(path: string, body?: JsonBody) =>
   request<T>("PATCH", path, body ?? null);
 export const apiDelete = <T>(path: string) => request<T>("DELETE", path);
+
+// Save slot for this browser. Default "main" is the original save; set localStorage
+// "vanguard-save-id" to anything else (e.g. in tests) to play an isolated save.
+export function saveId(): string {
+  try {
+    return localStorage.getItem("vanguard-save-id") || "main";
+  } catch {
+    return "main";
+  }
+}

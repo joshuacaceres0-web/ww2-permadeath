@@ -2,7 +2,16 @@
 // Nothing infers across the HTTP boundary — keep these in sync in the same edit.
 
 export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at";
-export type EnemyTypeId = "volks" | "grenadier" | "mg42" | "officer" | "panzerfaust" | "flak";
+export type EnemyTypeId =
+  | "volks"
+  | "grenadier"
+  | "mg42"
+  | "officer"
+  | "panzerfaust"
+  | "flak"
+  | "scharfschutze"
+  | "mortar"
+  | "fallschirmjager";
 export type SoldierStatus = "active" | "reserve";
 export type DecorKind = "poppies" | "roses" | "lilies" | "wreath" | "candle" | "flag";
 

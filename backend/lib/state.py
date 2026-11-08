@@ -3,6 +3,8 @@
 import random
 
 from lib.db import db
+from lib.save import S, migrate_legacy, save_lock, sid
+from pymongo.errors import DuplicateKeyError
 from lib.gen import (
     COMMANDER_RANKS,
     HOMETOWNS,
@@ -95,24 +97,35 @@ def memorial_out(doc: dict) -> MemorialOut:
 
 
 async def get_state() -> dict:
-    state = await db.game_state.find_one({"id": STATE_ID})
-    if not state:
-        await db.game_state.insert_one(dict(DEFAULT_STATE))
-        state = dict(DEFAULT_STATE)
-    return state
+    state = await S.game_state.find_one({"id": STATE_ID})
+    if state:
+        return state
+    # A brand-new save slot. Parallel first requests race here, so creation is one atomic
+    # upsert (unique index on save_id); only the request that actually inserted seeds the squad.
+    async with save_lock():
+        try:
+            res = await db.game_state.update_one(
+                {"save_id": sid()}, {"$setOnInsert": {**DEFAULT_STATE, "save_id": sid()}}, upsert=True
+            )
+            created = res.upserted_id is not None
+        except DuplicateKeyError:
+            created = False
+        if created:
+            await seed_squad()
+    return await S.game_state.find_one({"id": STATE_ID})
 
 
 # ---------------- seed + backfill ----------------
 
 async def backfill() -> None:
     """Give pre-update soldiers/memorial rows a portrait, unit and story."""
-    async for doc in db.soldiers.find({"backstory": {"$exists": False}}):
+    async for doc in S.soldiers.find({"backstory": {"$exists": False}}):
         rng = random.Random(doc["id"])
-        await db.soldiers.update_one(
+        await S.soldiers.update_one(
             {"id": doc["id"]},
             {"$set": {"portrait_seed": rng.getrandbits(31), **make_backstory(doc["name"], doc.get("hometown", "Erie, PA"), doc.get("quirk", "Kid"), rng)}},
         )
-    async for doc in db.memorial.find({"story": {"$exists": False}}):
+    async for doc in S.memorial.find({"story": {"$exists": False}}):
         rng = random.Random(doc["id"])
         hometown = doc.get("hometown") or rng.choice(HOMETOWNS)
         info = make_backstory(doc["name"], hometown, rng.choice(QUIRKS), rng)
@@ -121,11 +134,11 @@ async def backfill() -> None:
             f"{cause_phrase(doc['cause'])} during {doc['mission_code']}. "
             f"{doc['name'].split(' ')[0]} never made it home."
         )
-        await db.memorial.update_one(
+        await S.memorial.update_one(
             {"id": doc["id"]},
             {"$set": {"story": story, "unit": info["unit"], "hometown": hometown, "portrait_seed": rng.getrandbits(31)}},
         )
-    await db.game_state.update_one(
+    await S.game_state.update_one(
         {"id": STATE_ID, "commander_name": {"$exists": False}},
         {"$set": {"commander_name": "Commander"}},
     )
@@ -149,17 +162,18 @@ async def seed_squad() -> None:
             }
         )
         docs.append(doc)
-    await db.soldiers.insert_many(docs)
+    await S.soldiers.insert_many(docs)
 
 
 async def seed_all() -> None:
     """Idempotent: fills only what is missing. Founding memorial only on a brand-new save,
     so a full wipe stays wiped across restarts."""
-    brand_new = await db.game_state.find_one({"id": STATE_ID}) is None
+    await migrate_legacy()
+    brand_new = await S.game_state.find_one({"id": STATE_ID}) is None
     await get_state()
-    if await db.soldiers.count_documents({}) == 0:
+    if await S.soldiers.count_documents({}) == 0:
         await seed_squad()
-    if brand_new and await db.memorial.count_documents({}) == 0:
+    if brand_new and await S.memorial.count_documents({}) == 0:
         docs = []
         for i, (name, utype, kills, ops, cause, code, location, died, hometown) in enumerate(INITIAL_MEMORIAL):
             rng = random.Random(name)
@@ -187,5 +201,5 @@ async def seed_all() -> None:
                     "grave_y": 0.35,
                 }
             )
-        await db.memorial.insert_many(docs)
+        await S.memorial.insert_many(docs)
     await backfill()

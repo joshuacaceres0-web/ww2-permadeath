@@ -35,6 +35,7 @@ MISSIONS: List[dict] = [
             {"type": "mg42", "wave": 1, "count": 1},
             {"type": "volks", "wave": 2, "count": 2},
             {"type": "grenadier", "wave": 2, "count": 2},
+            {"type": "scharfschutze", "wave": 2, "count": 1},
         ],
     },
     {
@@ -57,6 +58,8 @@ MISSIONS: List[dict] = [
             {"type": "officer", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 2},
             {"type": "mg42", "wave": 2, "count": 1},
+            {"type": "fallschirmjager", "wave": 2, "count": 2},
+            {"type": "mortar", "wave": 2, "count": 1},
         ],
     },
     {
@@ -80,6 +83,9 @@ MISSIONS: List[dict] = [
             {"type": "volks", "wave": 2, "count": 3},
             {"type": "grenadier", "wave": 2, "count": 2},
             {"type": "officer", "wave": 2, "count": 1},
+            {"type": "mortar", "wave": 1, "count": 1},
+            {"type": "scharfschutze", "wave": 1, "count": 1},
+            {"type": "fallschirmjager", "wave": 2, "count": 2},
         ],
     },
     {
@@ -104,6 +110,9 @@ MISSIONS: List[dict] = [
             {"type": "volks", "wave": 2, "count": 2},
             {"type": "grenadier", "wave": 2, "count": 2},
             {"type": "panzerfaust", "wave": 2, "count": 2},
+            {"type": "mortar", "wave": 1, "count": 1},
+            {"type": "scharfschutze", "wave": 2, "count": 2},
+            {"type": "fallschirmjager", "wave": 2, "count": 2},
         ],
     },
 ]

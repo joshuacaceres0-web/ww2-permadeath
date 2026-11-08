@@ -13,6 +13,7 @@ from models.models import (
     WipeIn,
 )
 from lib.db import db
+from lib.save import S, save_lock, sid
 from lib.gen import XP_PER_KILL, XP_PER_MISSION, commander_level, COMMANDER_RANKS, make_epitaph, rank_for
 from lib.medals import NAMES, award
 from lib.missions import mission_by_index, mission_list
@@ -29,7 +30,7 @@ async def read_state():
 @router.put("/state/commander", response_model=GameStateOut)
 async def rename_commander(input: CommanderIn):
     await get_state()
-    await db.game_state.update_one({"id": STATE_ID}, {"$set": {"commander_name": input.name.strip()}})
+    await S.game_state.update_one({"id": STATE_ID}, {"$set": {"commander_name": input.name.strip()}})
     return state_out(await get_state())
 
 
@@ -55,7 +56,7 @@ async def battle_complete(input: BattleCompleteIn):
 
     # Permadeath: every fallen soldier is deleted from the roster and etched onto the wall.
     for fallen in input.fallen:
-        doc = await db.soldiers.find_one({"id": fallen.soldier_id})
+        doc = await S.soldiers.find_one({"id": fallen.soldier_id})
         if not doc:
             continue
         kills = doc.get("kills", 0) + fallen.kills
@@ -63,7 +64,7 @@ async def battle_complete(input: BattleCompleteIn):
         new_medals = award(fallen, doc["type"], False, input.victory, False, doc.get("medals", []))
         for m in new_medals:
             medals_awarded.append(f"{doc['name']} — {NAMES[m]} (posthumous)")
-        await db.memorial.insert_one(
+        await S.memorial.insert_one(
             {
                 "id": doc["id"],
                 "name": doc["name"],
@@ -83,13 +84,13 @@ async def battle_complete(input: BattleCompleteIn):
                 "grave_y": None,
             }
         )
-        await db.soldiers.delete_one({"id": fallen.soldier_id})
+        await S.soldiers.delete_one({"id": fallen.soldier_id})
         memorial_names.append(doc["name"])
 
     # Survivors bank kills and XP; a victory survived is a promotion. Only men who were
     # deployed are in this list — reserves stay frozen.
     for survivor in input.survivors:
-        doc = await db.soldiers.find_one({"id": survivor.soldier_id})
+        doc = await S.soldiers.find_one({"id": survivor.soldier_id})
         if not doc or doc.get("status") != "active":
             continue
         before = rank_for(doc.get("missions", 0))
@@ -100,7 +101,7 @@ async def battle_complete(input: BattleCompleteIn):
         update: dict = {"$inc": {"kills": survivor.kills, "xp": xp, "missions": add_mission}}
         if new_medals:
             update["$push"] = {"medals": {"$each": new_medals}}
-        await db.soldiers.update_one({"id": survivor.soldier_id}, update)
+        await S.soldiers.update_one({"id": survivor.soldier_id}, update)
         for m in new_medals:
             medals_awarded.append(f"{doc['name']} — {NAMES[m]}")
         if after != before:
@@ -114,7 +115,7 @@ async def battle_complete(input: BattleCompleteIn):
     if input.victory:
         mission_index = min(mission_index + 1, len(mission_list()))
         campaign_complete = mission_index >= len(mission_list())
-    await db.game_state.update_one(
+    await S.game_state.update_one(
         {"id": STATE_ID},
         {
             "$set": {
@@ -146,12 +147,13 @@ async def wipe_everything(input: WipeIn):
     """Start all over: roster, campaign, commander career, memorial wall and graveyard — all gone."""
     if input.confirm != "RESET":
         raise HTTPException(status_code=400, detail='Type RESET to confirm')
-    await db.soldiers.delete_many({})
-    await db.memorial.delete_many({})
-    await db.graveyard_decor.delete_many({})
-    await db.game_state.delete_many({})
-    await db.game_state.insert_one(dict(DEFAULT_STATE))
-    await seed_squad()
+    # Rewrite the save in place (never delete it) so a concurrent read can't re-seed mid-wipe.
+    async with save_lock():
+        await db.game_state.replace_one({"save_id": sid()}, {**DEFAULT_STATE, "save_id": sid()}, upsert=True)
+        await S.soldiers.delete_many({})
+        await S.memorial.delete_many({})
+        await S.graveyard_decor.delete_many({})
+        await seed_squad()
     return state_out(await get_state())
 
 
@@ -160,8 +162,8 @@ async def reset_campaign():
     """Fresh campaign: state + roster reset. The memorial, graveyard and the commander's
     career (rank, name) stand forever."""
     state = await get_state()
-    await db.soldiers.delete_many({})
-    await db.game_state.update_one(
+    await S.soldiers.delete_many({})
+    await S.game_state.update_one(
         {"id": STATE_ID},
         {
             "$set": {

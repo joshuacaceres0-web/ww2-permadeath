@@ -67,9 +67,21 @@ interface Unit {
   // pathing toward a moving focus
   chase: Order[];
   repathT: number;
+  npc: boolean; // AI-controlled friendly (not the player's squad, no permadeath)
+  cover: Cover | null;
+  coverT: number;
+}
+
+interface Cover {
+  x: number;
+  y: number;
+  r: number;
+  q: number; // chance a bullet from the far side is stopped
 }
 
 interface Bullet {
+  ox: number;
+  oy: number;
   x: number;
   y: number;
   vx: number;
@@ -346,6 +358,9 @@ export class GameEngine {
   private particles: Particle[] = [];
   private blockers: Blocker[] = [];
   private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
+  private covers: Cover[] = [];
+  private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean } | null = null;
+  private holdPan = { x: 0, y: 0 };
   private cam = { x: 0, y: 0 };
   private viewW = VIEW_W;
   private viewH = VIEW_H;
@@ -421,6 +436,7 @@ export class GameEngine {
     this.terrain = built.canvas;
     this.blockers = built.blockers;
     this.blocked = buildBlockedGrid(built.blockers);
+    this.covers = built.covers;
     this.tctx = built.canvas.getContext("2d");
 
     this.fog = document.createElement("canvas");
@@ -431,6 +447,7 @@ export class GameEngine {
     this.explored = new Uint8Array(COLS * ROWS);
 
     this.spawnAllies(squad, rng, commanderBonus);
+    this.spawnNpcAllies(2 + Math.min(3, mission.index), rng);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -529,7 +546,7 @@ export class GameEngine {
   }
 
   selectAll() {
-    this.selected = this.units.filter((u) => u.side === "allies" && u.alive).map((u) => u.id);
+    this.selected = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc).map((u) => u.id);
     this.dirty = true;
   }
 
@@ -559,11 +576,77 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  private spawnNpcAllies(n: number, rng: () => number) {
+    const types: UnitTypeId[] = ["rifleman", "rifleman", "mg", "rifleman", "at"];
+    for (let i = 0; i < n; i++) {
+      const type = types[i % types.length];
+      const spec = UNIT_TYPES[type];
+      const [cx, cy] = nearestOpen(this.blocked, Math.floor((90 + rng() * 80) / CELL), Math.floor((120 + rng() * (MAP_H - 240)) / CELL));
+      this.units.push({
+        id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
+        name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs"][i % 5]}`,
+        rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
+        hp: spec.hp, maxHp: spec.hp, speed: spec.speed * 0.9, range: spec.range, vision: spec.vision,
+        dmg: spec.dmg, fireInterval: spec.fireInterval * 1.1, spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
+        isStatic: false, orders: [], attackId: null, targetId: null, cooldown: rng(), suppression: 0, pinned: false,
+        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
+        damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
+        chase: [], repathT: rng(), npc: true, cover: null, coverT: 0,
+      });
+    }
+  }
+
+  /** Selected men run to the nearest cover facing the enemy. */
+  takeCover() {
+    if (this.phase !== "battle") return;
+    for (const u of this.units) {
+      if (!u.alive || !this.selected.includes(u.id)) continue;
+      const c = this.bestCover(u, 340);
+      if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
+    }
+    this.pushLog("Get down! Squad moving to cover.", "info");
+  }
+
+  /** On-screen D-pad: hold to scroll (-1..1 per axis). */
+  setHoldPan(x: number, y: number) {
+    this.holdPan = { x, y };
+  }
+
+  abilitySelected() {
+    const lead = this.units.find((u) => this.selected.includes(u.id) && u.alive);
+    if (lead) this.startAim(lead.id);
+  }
+
+  // Nearest cover spot (on the side facing the closest threat) within `radius`.
+  private bestCover(u: Unit, radius: number): { x: number; y: number } | null {
+    const threat = this.nearestAlly(u);
+    let best: { x: number; y: number } | null = null;
+    let bestD = radius;
+    for (const c of this.covers) {
+      const d0 = dist(u.x, u.y, c.x, c.y);
+      if (d0 > radius + c.r) continue;
+      let sx = c.x;
+      let sy = c.y;
+      if (threat) {
+        const a = Math.atan2(threat.y - c.y, threat.x - c.x);
+        sx = c.x - Math.cos(a) * (c.r + UNIT_R + 3);
+        sy = c.y - Math.sin(a) * (c.r + UNIT_R + 3);
+      }
+      if (this.blocked[Math.floor(sy / CELL) * COLS + Math.floor(sx / CELL)]) continue;
+      const d = dist(u.x, u.y, sx, sy);
+      if (d < bestD) {
+        bestD = d;
+        best = { x: sx, y: sy };
+      }
+    }
+    return best;
+  }
+
   /** Dev/test probe: living allied positions + open-cell check. */
   debugAllies() {
     return this.units
       .filter((u) => u.side === "allies" && u.alive)
-      .map((u) => ({ name: u.name, x: Math.round(u.x), y: Math.round(u.y), orders: u.orders.length }));
+      .map((u) => ({ name: u.name, x: Math.round(u.x), y: Math.round(u.y), orders: u.orders.length, npc: u.npc, inCover: !!u.cover }));
   }
 
   selectUnit(id: number) {
@@ -603,13 +686,17 @@ export class GameEngine {
     if (this.phase === "briefing") return;
     if (k >= "1" && k <= "8") {
       const idx = parseInt(k, 10) - 1;
-      const allies = this.units.filter((u) => u.side === "allies");
+      const allies = this.units.filter((u) => u.side === "allies" && !u.npc);
       if (allies[idx]) {
         this.selected = allies[idx].alive ? [allies[idx].id] : [];
         if (allies[idx].alive) this.centerOn(allies[idx].x, allies[idx].y);
         this.aimUnitId = null;
         this.dirty = true;
       }
+      return;
+    }
+    if (k === "c") {
+      this.takeCover();
       return;
     }
     if (k === "q") {
@@ -633,6 +720,10 @@ export class GameEngine {
     if (this.phase !== "battle") return;
     const p = this.toMap(e.clientX, e.clientY);
     this.mouse = { x: p.x, y: p.y, inside: true };
+    if (e.pointerType === "touch" && this.aimUnitId === null) {
+      this.touchPan = { x: e.clientX, y: e.clientY, cx: this.cam.x, cy: this.cam.y, moved: false };
+      return;
+    }
     if (e.button === 2) {
       this.issueOrder(p.x, p.y, e.shiftKey);
       return;
@@ -649,6 +740,17 @@ export class GameEngine {
   };
 
   private onPointerMove = (e: PointerEvent) => {
+    if (this.touchPan) {
+      const dx = e.clientX - this.touchPan.x;
+      const dy = e.clientY - this.touchPan.y;
+      if (Math.hypot(dx, dy) > 10) this.touchPan.moved = true;
+      if (this.touchPan.moved) {
+        this.cam.x = this.touchPan.cx - dx / this.view.s;
+        this.cam.y = this.touchPan.cy - dy / this.view.s;
+        this.clampCam();
+      }
+      return;
+    }
     const p = this.toMap(e.clientX, e.clientY);
     this.mouse = { x: p.x, y: p.y, inside: true };
     if (this.marquee) {
@@ -662,6 +764,18 @@ export class GameEngine {
   };
 
   private onPointerUp = (e: PointerEvent) => {
+    if (this.touchPan) {
+      const tp = this.touchPan;
+      this.touchPan = null;
+      if (tp.moved) return;
+      // Tap: on one of my men -> select him; anywhere else with men selected -> order.
+      const p = this.toMap(e.clientX, e.clientY);
+      const mine = this.units.find((u) => u.side === "allies" && u.alive && !u.npc && dist(p.x, p.y, u.x, u.y) < 26);
+      if (mine) this.selected = this.selected.includes(mine.id) && this.selected.length === 1 ? [] : [mine.id];
+      else if (this.selected.length) this.issueOrder(p.x, p.y, false);
+      this.dirty = true;
+      return;
+    }
     if (e.button === 2 || !this.marquee) {
       this.marquee = null;
       this.dragging = false;
@@ -675,7 +789,7 @@ export class GameEngine {
       let best: Unit | null = null;
       let bestD = 24;
       for (const u of this.units) {
-        if (u.side !== "allies" || !u.alive) continue;
+        if (u.side !== "allies" || !u.alive || u.npc) continue;
         const d = dist(p.x, p.y, u.x, u.y);
         if (d < bestD) {
           best = u;
@@ -690,7 +804,7 @@ export class GameEngine {
       const y0 = Math.min(this.marquee.y0, p.y);
       const y1 = Math.max(this.marquee.y0, p.y);
       this.selected = this.units
-        .filter((u) => u.side === "allies" && u.alive && u.x >= x0 && u.x <= x1 && u.y >= y0 && u.y <= y1)
+        .filter((u) => u.side === "allies" && u.alive && !u.npc && u.x >= x0 && u.x <= x1 && u.y >= y0 && u.y <= y1)
         .map((u) => u.id);
       this.aimUnitId = null;
     }
@@ -891,6 +1005,9 @@ export class GameEngine {
         officerKills: 0,
         chase: [],
         repathT: 0,
+        npc: false,
+        cover: null,
+        coverT: 0,
       });
     });
   }
@@ -956,6 +1073,9 @@ export class GameEngine {
           healMult: 1,
           chase: [],
           repathT: Math.random(),
+          npc: false,
+          cover: null,
+          coverT: 0,
         });
       }
     }
@@ -971,7 +1091,7 @@ export class GameEngine {
   }
 
   private alliesAlive(): number {
-    return this.units.filter((u) => u.side === "allies" && u.alive).length;
+    return this.units.filter((u) => u.side === "allies" && u.alive && !u.npc).length;
   }
 
   private enemiesAlive(): number {
@@ -1043,14 +1163,25 @@ export class GameEngine {
           this.moveToward(u, o.x, o.y, dt);
           moving = true;
         }
-      } else if (u.side === "axis" && !u.isStatic) {
+      } else if ((u.side === "axis" || u.npc) && !u.isStatic && u.enemyType !== "mortar") {
         const prey = this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           if (pd > u.range * 0.9 || !this.los(u, prey)) {
             this.chaseTo(u, prey.x, prey.y, dt);
             moving = true;
+          } else if (!u.cover) {
+            // In range: both sides look for nearby cover before trading fire.
+            u.coverT -= dt;
+            if (u.coverT <= 0) {
+              u.coverT = 3;
+              const c = this.bestCover(u, 130);
+              if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
+            }
           }
+        } else if (u.npc) {
+          this.chaseTo(u, MAP_W - 200, MAP_H / 2, dt); // push east until contact
+          moving = true;
         }
       } else if (u.side === "allies" && attackOrder && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
         this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
@@ -1085,6 +1216,19 @@ export class GameEngine {
           );
           u.burst--;
           u.burstTimer += 0.06;
+        }
+      } else if (u.enemyType === "mortar") {
+        // Indirect fire: needs no line of sight, lobs a shell near the closest ally in range.
+        const prey = this.nearestAlly(u);
+        if (u.cooldown <= 0 && prey && dist(u.x, u.y, prey.x, prey.y) <= u.range) {
+          u.cooldown = u.fireInterval;
+          const tx = prey.x + (Math.random() - 0.5) * 110;
+          const ty = prey.y + (Math.random() - 0.5) * 110;
+          this.projectiles.push({
+            x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0, dur: 1.6, side: "axis", dmg: u.dmg, aoe: 62,
+            kind: "grenade", sourceType: "mortar", killerId: u.id, smokeT: 0,
+          });
+          if (Math.random() < 0.4) this.pushLog("Incoming mortar!", "wave");
         }
       } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && this.los(u, focus)) {
         const interval = u.fireInterval * aura;
@@ -1134,6 +1278,14 @@ export class GameEngine {
         for (const u of this.units) {
           if (!u.alive || u.side === b.side) continue;
           if (dist(b.x, b.y, u.x, u.y) < UNIT_R + 2) {
+            // Cover between shooter and target soaks the round.
+            const c = u.cover;
+            if (c && (c.x - u.x) * (b.ox - u.x) + (c.y - u.y) * (b.oy - u.y) > 0 && Math.random() < c.q) {
+              this.puff(b.x, b.y);
+              u.suppression = Math.min(100, u.suppression + b.suppress * 0.4);
+              dead = true;
+              break;
+            }
             this.damage(u, b.dmg, b.sourceType, b.killerId);
             this.bloodFx(b.x, b.y, b.vx, b.vy);
             this.suppressArea(b.x, b.y, b.side, b.suppress);
@@ -1180,6 +1332,15 @@ export class GameEngine {
     this.fogT += dt;
     if (this.fogT >= 0.12) {
       this.fogT = 0;
+      for (const u of this.units) {
+        if (!u.alive) continue;
+        u.cover = null;
+        for (const c of this.covers) {
+          if (dist(u.x, u.y, c.x, c.y) <= c.r + UNIT_R + 12) {
+            if (!u.cover || c.q > u.cover.q) u.cover = c;
+          }
+        }
+      }
       this.recomputeFog();
     }
 
@@ -1291,6 +1452,8 @@ export class GameEngine {
     const mx = u.x + Math.cos(u.facing) * 14;
     const my = u.y + Math.sin(u.facing) * 14;
     this.bullets.push({
+      ox: u.x,
+      oy: u.y,
       x: mx,
       y: my,
       vx: Math.cos(ang) * u.bulletSpeed,
@@ -1329,7 +1492,9 @@ export class GameEngine {
     u.alive = false;
     u.hp = 0;
     this.corpseFx(u);
-    if (u.side === "allies") {
+    if (u.side === "allies" && u.npc) {
+      this.pushLog(`${u.name} of 2nd Platoon is hit.`, "death");
+    } else if (u.side === "allies") {
       this.fallen.push({
         soldierId: u.soldierId!,
         cause: CAUSES[sourceType] ?? "Killed in action",
@@ -1358,7 +1523,7 @@ export class GameEngine {
       if (!u.alive || u.side === side) continue;
       const d = dist(x, y, u.x, u.y);
       if (d < 38) {
-        u.suppression = Math.min(100, u.suppression + amount * (1 - d / 48));
+        u.suppression = Math.min(100, u.suppression + amount * (1 - d / 48) * (u.cover ? 0.6 : 1));
       }
     }
   }
@@ -1447,6 +1612,7 @@ export class GameEngine {
       life: 0.09, max: 0.09, size: 1, kind: "spark",
     });
     this.bullets.push({
+      ox: x0, oy: y0,
       x: x0, y: y0,
       vx: (x1 - x0) / 0.05,
       vy: (y1 - y0) / 0.05,
@@ -1532,7 +1698,7 @@ export class GameEngine {
   private emitHud() {
     if (!this.mission) return;
     const units: HudUnit[] = this.units
-      .filter((u) => u.side === "allies")
+      .filter((u) => u.side === "allies" && !u.npc)
       .map((u) => ({
         id: u.id,
         soldierId: u.soldierId,
@@ -1571,6 +1737,11 @@ export class GameEngine {
     if (!this.running) return;
     const dt = Math.min(0.05, (ts - this.last) / 1000);
     this.last = ts;
+    if (this.holdPan.x || this.holdPan.y) {
+      this.cam.x += this.holdPan.x * PAN_SPEED * dt;
+      this.cam.y += this.holdPan.y * PAN_SPEED * dt;
+      this.clampCam();
+    }
     if (this.keys.size) {
       const k = this.keys;
       const vx = (k.has("d") || k.has("arrowright") ? 1 : 0) - (k.has("a") || k.has("arrowleft") ? 1 : 0);
@@ -1854,6 +2025,25 @@ export class GameEngine {
       ctx.fillRect(u.x - w / 2, u.y + (u.isStatic ? 20 : 14), w * pct, 3.5);
     }
 
+    if (u.cover && (isAlly || this.visible[this.cellAt(u.x, u.y)])) {
+      ctx.fillStyle = u.cover.q >= 0.6 ? "#4ECDC4" : "rgba(78,205,196,0.6)";
+      ctx.beginPath();
+      ctx.moveTo(u.x - 12, u.y - 13);
+      ctx.lineTo(u.x - 6, u.y - 13);
+      ctx.lineTo(u.x - 6, u.y - 8);
+      ctx.lineTo(u.x - 9, u.y - 5);
+      ctx.lineTo(u.x - 12, u.y - 8);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (u.npc) {
+      ctx.strokeStyle = "rgba(160,180,210,0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(u.x, u.y, 12, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
     // Pinned marker.
     if (u.pinned) {
       ctx.fillStyle = "#E24A4A";
@@ -1869,6 +2059,121 @@ export class GameEngine {
 // hedgehogs. Hedgerows always leave walkable gaps (worn dirt), and A* routes through them.
 
 type Ctx = CanvasRenderingContext2D;
+let COVERS: Cover[] = []; // filled by buildTerrain's helpers
+
+function drawSandbags(ctx: Ctx, x: number, y: number, ang: number, n = 5) {
+  // Low cover: doesn't block movement, stops most rounds from the front.
+  for (let i = 0; i < n; i++) {
+    const off = (i - (n - 1) / 2) * 13;
+    const bx = x + Math.cos(ang + Math.PI / 2) * off;
+    const by = y + Math.sin(ang + Math.PI / 2) * off;
+    ctx.fillStyle = "#8A7A52";
+    ctx.strokeStyle = "#3A3222";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.ellipse(bx, by, 7, 5, ang, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    COVERS.push({ x: bx, y: by, r: 6, q: 0.65 });
+  }
+}
+
+function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () => number) {
+  // Broken stone walls (block) with rubble around (cover).
+  ctx.fillStyle = "rgba(0,0,0,0.35)";
+  ctx.fillRect(x - 46, y - 40, 104, 92);
+  ctx.fillStyle = "#4A4740";
+  ctx.fillRect(x - 50, y - 44, 100, 88);
+  const walls: Array<[number, number, number, number]> = [
+    [x - 50, y - 44, 100, 10],
+    [x - 50, y - 44, 10, 60],
+    [x + 40, y - 10, 10, 54],
+  ];
+  for (const [wx, wy, ww, wh] of walls) {
+    ctx.fillStyle = "#8C877A";
+    ctx.strokeStyle = "#2A2824";
+    ctx.lineWidth = 2;
+    ctx.fillRect(wx, wy, ww, wh);
+    ctx.strokeRect(wx, wy, ww, wh);
+    const len = Math.max(ww, wh);
+    for (let t = 6; t < len; t += 12) {
+      const bx = ww > wh ? wx + t : wx + ww / 2;
+      const by = ww > wh ? wy + wh / 2 : wy + t;
+      blockers.push({ x: bx, y: by, r: 7 });
+      COVERS.push({ x: bx, y: by, r: 7, q: 0.8 });
+    }
+  }
+  for (let i = 0; i < 9; i++) {
+    ctx.fillStyle = i % 2 ? "#6E6A60" : "#57534A";
+    ctx.fillRect(x - 40 + rng() * 80, y - 30 + rng() * 70, 5 + rng() * 6, 4 + rng() * 5);
+  }
+}
+
+function drawCrates(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
+  for (const [dx, dy] of [[0, 0], [16, 4], [6, 16]]) {
+    ctx.fillStyle = "#6B5232";
+    ctx.strokeStyle = "#2A1E10";
+    ctx.lineWidth = 2;
+    ctx.fillRect(x + dx - 7, y + dy - 7, 14, 14);
+    ctx.strokeRect(x + dx - 7, y + dy - 7, 14, 14);
+    ctx.beginPath();
+    ctx.moveTo(x + dx - 7, y + dy - 7);
+    ctx.lineTo(x + dx + 7, y + dy + 7);
+    ctx.stroke();
+    blockers.push({ x: x + dx, y: y + dy, r: 8 });
+    COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55 });
+  }
+}
+
+function drawWreck(ctx: Ctx, blockers: Blocker[], x: number, y: number, ang: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(ang);
+  ctx.fillStyle = "rgba(0,0,0,0.4)";
+  ctx.fillRect(-34, -18, 76, 44);
+  ctx.fillStyle = "#3A3E30";
+  ctx.strokeStyle = "#141610";
+  ctx.lineWidth = 3;
+  ctx.fillRect(-38, -22, 76, 44);
+  ctx.strokeRect(-38, -22, 76, 44);
+  ctx.fillStyle = "#2A2C22";
+  ctx.fillRect(-38, -26, 76, 6);
+  ctx.fillRect(-38, 20, 76, 6);
+  ctx.fillStyle = "#4A4E3C";
+  ctx.beginPath();
+  ctx.arc(-4, 0, 13, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.stroke();
+  ctx.lineWidth = 4;
+  ctx.beginPath();
+  ctx.moveTo(6, 0);
+  ctx.lineTo(44, -6);
+  ctx.stroke();
+  ctx.fillStyle = "rgba(20,20,18,0.7)";
+  ctx.beginPath();
+  ctx.arc(10, 8, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+  for (const t of [-24, 0, 24]) {
+    const bx = x + Math.cos(ang) * t;
+    const by = y + Math.sin(ang) * t;
+    blockers.push({ x: bx, y: by, r: 22 });
+    COVERS.push({ x: bx, y: by, r: 22, q: 0.85 });
+  }
+}
+
+// Scatter a mixed cover field between x0..x1 — both sides use it.
+function coverField(ctx: Ctx, blockers: Blocker[], rng: () => number, x0: number, x1: number, n: number) {
+  for (let i = 0; i < n; i++) {
+    const x = x0 + rng() * (x1 - x0);
+    const y = 90 + rng() * (MAP_H - 180);
+    const r = rng();
+    if (r < 0.35) drawSandbags(ctx, x, y, rng() * Math.PI, 4 + Math.floor(rng() * 3));
+    else if (r < 0.6) drawRuin(ctx, blockers, x, y, rng);
+    else if (r < 0.82) drawCrates(ctx, blockers, x, y);
+    else drawWreck(ctx, blockers, x, y, rng() * Math.PI);
+  }
+}
 
 function drawBush(ctx: Ctx, x: number, y: number, r: number, rng: () => number) {
   ctx.fillStyle = "rgba(8,12,6,0.55)";
@@ -1900,6 +2205,7 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
     const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
     drawBush(ctx, x, y, 17, rng);
     blockers.push({ x, y, r: 16 });
+    COVERS.push({ x, y, r: 16, q: 0.45 });
   }
   // Worn dirt marks the gaps so the player sees where to go.
   for (const g of gaps) {
@@ -1926,6 +2232,7 @@ function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number
     ctx.fillStyle = snow ? "#C9D2CC" : "#2D5222";
   }
   blockers.push({ x, y, r: r * 0.75 });
+  COVERS.push({ x, y, r: r * 0.75, q: 0.6 });
 }
 
 function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: number, h: number) {
@@ -1965,7 +2272,8 @@ function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
   blockers.push({ x, y, r: 11 });
 }
 
-function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElement; blockers: Blocker[] } {
+function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElement; blockers: Blocker[]; covers: Cover[] } {
+  COVERS = [];
   const canvas = document.createElement("canvas");
   canvas.width = MAP_W;
   canvas.height = MAP_H;
@@ -2008,7 +2316,16 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.fillRect(260, 0, 560, MAP_H);
     ctx.fillStyle = "#6E6450";
     ctx.fillRect(800, 0, 40, MAP_H); // shingle
-    for (let i = 0; i < 34; i++) drawHedgehog(ctx, blockers, 380 + rng() * 380, 40 + rng() * (MAP_H - 80));
+    // The shingle bank: a long low wall of stones to hide behind.
+    for (let y = 30; y < MAP_H; y += 26) COVERS.push({ x: 820, y, r: 14, q: 0.6 });
+    for (let i = 0; i < 34; i++) {
+      const hx = 380 + rng() * 380;
+      const hy = 40 + rng() * (MAP_H - 80);
+      drawHedgehog(ctx, blockers, hx, hy);
+      COVERS.push({ x: hx, y: hy, r: 11, q: 0.35 });
+    }
+    coverField(ctx, blockers, rng, 1100, 2300, 12);
+    for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
     // Bluffs: dune-grass ridge with three draws (the real Omaha exits).
     hedgerow(ctx, blockers, 1000, 0, 1000, MAP_H, [0.2, 0.5, 0.82], rng);
     hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
@@ -2032,6 +2349,7 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     }
     for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 700 + rng() * 1600, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
     drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
+    coverField(ctx, blockers, rng, 300, 2300, 16);
     if (kind === "airborne") {
       ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
       ctx.fillRect(0, 0, MAP_W, MAP_H);
@@ -2047,6 +2365,8 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawBuilding(ctx, blockers, bx, by, w, h);
     }
     hedgerow(ctx, blockers, 400, 40, 400, MAP_H - 40, gapPick(3), rng);
+    for (let i = 0; i < 6; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
+    coverField(ctx, blockers, rng, 500, 2300, 8);
   } else if (kind === "causeway") {
     ctx.fillStyle = "#16252A";
     ctx.fillRect(0, 0, MAP_W, MAP_H * 0.3);
@@ -2059,6 +2379,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15 });
     }
     for (let i = 0; i < 8; i++) drawTree(ctx, blockers, 600 + rng() * 1700, MAP_H * (0.38 + rng() * 0.24), 16, false);
+    for (let i = 0; i < 7; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
+    drawWreck(ctx, blockers, 1250, MAP_H * 0.47, 0.2);
+    drawWreck(ctx, blockers, 1850, MAP_H * 0.55, -0.3);
   } else if (kind === "forest") {
     road(MAP_H / 2);
     for (let i = 0; i < 110; i++) {
@@ -2067,6 +2390,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       if (Math.abs(ty - MAP_H / 2) < 60) continue;
       drawTree(ctx, blockers, tx, ty, 16 + rng() * 12, snow);
     }
+    coverField(ctx, blockers, rng, 400, 2300, 10);
+    drawSandbags(ctx, 1900, MAP_H / 2 - 120, 0, 7); // bunker line
+    drawSandbags(ctx, 1900, MAP_H / 2 + 120, 0, 7);
   }
 
   // Craters (cosmetic, walkable).
@@ -2079,5 +2405,5 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.ellipse(cx, cy, r, r * 0.7, rng() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
   }
-  return { canvas, blockers };
+  return { canvas, blockers, covers: COVERS };
 }

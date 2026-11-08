@@ -25,22 +25,36 @@ def backend_url() -> str:
     return BACKEND_URL
 
 
+# CRITICAL_ISOLATION: the real player's save is save id "main". Every test client here
+# MUST send a non-"main" X-Save-Id header so we never read/mutate/wipe the live campaign.
+# The id is derived per-test-module (loadscope pins a module to one xdist worker) so two
+# files running concurrently under `-n 2 --dist loadscope` never race on the same save.
+
+
 @pytest.fixture
-def client():
+def client(request):
     """Sync httpx client rooted at /api — the default for endpoint tests.
+
+    Always carries a test X-Save-Id header (never "main"), unique per test module so
+    concurrent xdist workers don't collide. Tests needing a second save slot should build
+    their own httpx.Client with an explicit different X-Save-Id header.
 
     Example:
         def test_status(client):
             assert client.get("/status").status_code == 200
     """
-    with httpx.Client(base_url=API_URL, timeout=30.0) as c:
+    save_id = f"tscheck-{request.module.__name__}"
+    with httpx.Client(base_url=API_URL, timeout=30.0, headers={"X-Save-Id": save_id}) as c:
         yield c
 
 
 @pytest_asyncio.fixture
-async def aclient():
+async def aclient(request):
     """Async variant, for tests that also await motor/backend helpers directly."""
-    async with httpx.AsyncClient(base_url=API_URL, timeout=30.0) as c:
+    save_id = f"tscheck-{request.module.__name__}"
+    async with httpx.AsyncClient(
+        base_url=API_URL, timeout=30.0, headers={"X-Save-Id": save_id}
+    ) as c:
         yield c
 
 

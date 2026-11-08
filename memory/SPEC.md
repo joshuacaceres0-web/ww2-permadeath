@@ -62,6 +62,30 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
   rows have `medals: string[]`; ribbons shown in dossier, barracks rows, war room, wall cards and
   on tombstones in the graveyard.
 
+## v4 additions
+- **Save slots**: every request sends `X-Save-Id` (frontend `saveId()` in lib/api.ts reads
+  localStorage `vanguard-save-id`, default "main" = the user's original save). Backend middleware
+  sets a contextvar; `lib/save.py` `S.<collection>` scopes every query/insert by `save_id`.
+  New slot => fresh state + founding squad. TESTS MUST set localStorage `vanguard-save-id` (and the
+  header for curl) to a test id — never touch "main".
+- **Saving fixes**: battle reports auto-file the moment a battle ends; leaving the battle page or
+  closing the tab mid-battle files a retreat (keepalive fetch) so the dead stay dead; debrief shows
+  RETRY if filing fails. Deployed mission+squad are frozen for the battle's lifetime.
+- **Cover**: covers (sandbags 0.65, ruins 0.8, crates 0.55, wrecked tanks 0.85, trees 0.6, bushes 0.45,
+  hedgehogs 0.35, beach shingle 0.6). A unit within reach of cover gets ◆ marker; a bullet from the far
+  side is stopped with probability q; suppression taken ×0.6. TAKE COVER (C key / COVER button /
+  touch COVER) sends selected men to the nearest cover facing the enemy (≤340px). Axis + AI allies
+  seek cover when in range.
+- **Map props**: coverField() scatters sandbags/ruins/crates/wrecks on every map; town has ruin rows;
+  causeway sandbag lines + wrecks; forest bunker sandbags; beach German trench line.
+- **AI allies (2nd Platoon)**: 2 + min(3, mission index) NPC GIs (`npc:true`) advance east, fight,
+  take cover; not selectable, not in the dock, no permadeath/report; defeat = player squad wiped.
+- **New enemies**: scharfschutze (sniper), mortar (Granatwerfer 34, static, indirect fire every 6s
+  ≤620px, no LOS needed), fallschirmjager (FG42). Added to mission waves.
+- **Mobile**: coarse pointer or <1024px => TouchControls (D-pad hold-scroll, ALL, COVER, ABILITY,
+  PAUSE); tap own soldier = select, tap ground/enemy = order, drag = scroll map. Combat log/legend
+  hidden on small screens.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD

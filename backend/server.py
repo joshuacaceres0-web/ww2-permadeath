@@ -18,6 +18,7 @@ load_dotenv(ROOT_DIR / '.env')
 # MongoDB connection
 from lib.db import client, db, ensure_indexes
 from lib.state import seed_all
+from lib.save import clean_save_id, current_save
 
 
 # Startup runs before the yield, shutdown after it. Add your own setup/teardown here.
@@ -34,6 +35,15 @@ async def lifespan(app: FastAPI):
 
 # Create the main app without a prefix
 app = FastAPI(lifespan=lifespan)
+
+
+@app.middleware("http")
+async def save_slot(request, call_next):
+    token = current_save.set(clean_save_id(request.headers.get("x-save-id")))
+    try:
+        return await call_next(request)
+    finally:
+        current_save.reset(token)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")

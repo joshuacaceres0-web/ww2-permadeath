@@ -1,0 +1,94 @@
+{
+  "iteration": 2,
+  "mode": "retest",
+  "summary": "Retest of VANGUARD '44 v4 after race-bug fixes (atomic upsert + lock on new-save creation, /campaign/wipe in-place rewrite, GET /squad creates save first). Backend race regression tests + all previously-passing browser checks re-ran. One stale browser check (mobile-touch-tap-select-and-order) was fixed: its screen-position math assumed the canvas-center equals the centered ally's position, which breaks when centerOn clamps the camera near map edges; rewrote it to derive screen coords from window.__vanguard.view/cam per the briefing's exact recipe, and it now passes. Added one new browser check for the mobile-friendly-layout criterion which had no prior artifact. All 7 backend tests and all 9 browser checks pass.",
+  "passed": 16,
+  "failed": 0,
+  "flaky": 0,
+  "blocked": 0,
+  "test_error": 0,
+  "bugs": [],
+  "action_items": [
+    "mobile-touch-tap-select-and-order.mjs was previously using canvas-bounding-box-center as the tap target, which fails when centerOn() clamps the camera at a map edge (first mission mens' spawn point is near the west edge). Rewrote per the briefing's view/cam screen-coordinate formula; now deterministic and passing. No app bug -- test-script issue only, now fixed."
+  ],
+  "retest_needed": false,
+  "checks": [
+    {
+      "criterion": "Race bugs fixed (state 500 on GET /state during /campaign/wipe)",
+      "name": "test_tscheck_state_race_on_wipe.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "Concurrent GET /api/state + POST /api/campaign/wipe on brand-new save id: no 500s observed across the test's concurrency window; part of 7 passed in 2.24s full-suite run."
+    },
+    {
+      "criterion": "Race bugs fixed (double-seeded squad on parallel first-touch)",
+      "name": "test_tscheck_squad_seed_race.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "Parallel first-load requests on a brand-new save id produce exactly 7 founding men, no duplicate seeding; part of 7 passed in 2.24s full-suite run."
+    },
+    {
+      "criterion": "Race bugs fixed (regression coverage: save isolation, enemy types)",
+      "name": "test_tscheck_save_isolation.py + test_tscheck_enemy_types.py + test_tscheck_campaign_wipe.py + test_tscheck_medals_awarded.py",
+      "lane": "backend",
+      "status": "passed",
+      "evidence": "cd /app/backend && python -m pytest -q -p no:cacheprovider -> 7 passed in 2.24s (all 6 test files, includes the 2 race files above plus save isolation, enemy types, campaign wipe, medals awarded)."
+    },
+    {
+      "criterion": "Game saves correctly: battle retreat autosaves loss",
+      "name": "battle-retreat-autosaves-loss",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check: debrief-shown screenshot confirms retreat triggers autosave + debrief, matches prior pass."
+    },
+    {
+      "criterion": "Game saves correctly: leaving mid-battle via nav autosaves loss",
+      "name": "leave-battle-via-nav-autosaves-loss",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check: left-mid-battle screenshot confirms nav-away mid-battle autosaves the loss."
+    },
+    {
+      "criterion": "Cover system: sandbags put allies in cover",
+      "name": "cover-system-sandbags-in-cover",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check: allies-in-cover screenshot shows allies taking cover at sandbags as before."
+    },
+    {
+      "criterion": "AI NPC allies move and are unlisted in squad dock",
+      "name": "ai-npc-allies-move-and-unlisted",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check: npc-check screenshot confirms NPC allies move and are excluded from the squad-dock roster."
+    },
+    {
+      "criterion": "War Room enemy intel shows new enemy types (e.g. sniper)",
+      "name": "war-room-enemy-intel-shows-sniper",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check against the public preview ingress URL (https://ww2-permadeath--19wbuck3.preview.emergentagent.com): enemy-intel screenshot shows sniper entry in intel list."
+    },
+    {
+      "criterion": "Mobile on-screen controls: pause toggles banner, ALL+COVER puts ally in cover, D-pad present, no runtime error overlay",
+      "name": "mobile-touch-controls-in-battle",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "Re-ran persisted check: touch-controls-visible and after-touch-cover screenshots confirm pause banner toggle, ALL+COVER cover action, D-pad visible; no vite-error-overlay."
+    },
+    {
+      "criterion": "Mobile tap-to-select and tap-to-order via PointerEvent (touch) on battle-canvas",
+      "name": "mobile-touch-tap-select-and-order",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "FIXED script: computed screen pos via window.__vanguard.view{s,ox,oy} and .cam{x,y} after centerOn (left+view.ox+(x-cam.x)*view.s). Tap on ally -> window.__vanguard.selected.length === 1; tap 150 world px east -> debugAllies().find(name).orders > 0 (expect.poll resolved within 5s). No error overlay. Previous version (canvas-bbox-center assumption) failed with orders stuck at 0 because centerOn clamps camera near map edge; now deterministic."
+    },
+    {
+      "criterion": "Mobile-friendly layout: no horizontal scroll on War Room/Barracks/Memorial; /game shows battle-canvas + squad-dock",
+      "name": "mobile-friendly-layout-no-horizontal-scroll",
+      "lane": "browser",
+      "status": "passed",
+      "evidence": "At 390x844: document.scrollingElement.scrollWidth <= 400 on / (war room), /barracks, /memorial (all measured <=390). /game (after deploy+beach+engage) shows battle-canvas and squad-dock both visible. Screenshots captured for all 4 views."
+    }
+  ]
+}

@@ -7,8 +7,10 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
 import SquadDock from "@/components/game/SquadDock";
 import CombatLog from "@/components/game/CombatLog";
+import TouchControls from "@/components/game/TouchControls";
+import { Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, saveId } from "@/lib/api";
 import type { BattleResult, GameState, Mission, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
 import { UNIT_TYPES } from "@/game/data";
@@ -24,47 +26,32 @@ export default function Battlefield() {
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [report, setReport] = useState<BattleReport | null>(null);
   const [variant, setVariant] = useState<Variant>("");
+  const [touch] = useState(
+    () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
+  );
 
   const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
   const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
   const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
 
-  const mission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
+  const liveMission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
   const activeSquad = (squad ?? []).filter((s) => s.status === "active");
+  // Freeze what was deployed: after the report files, the campaign moves on underneath us.
+  const [deployed, setDeployed] = useState<{ mission: Mission; squad: Soldier[] } | null>(null);
+  useEffect(() => {
+    if (!deployed && liveMission && activeSquad.length && !state?.campaign_complete) {
+      setDeployed({ mission: liveMission, squad: activeSquad });
+    }
+  }, [deployed, liveMission, activeSquad, state?.campaign_complete]);
+  const mission = deployed?.mission ?? liveMission;
 
   const onHud = useCallback((h: HudSnapshot) => setHud(h), []);
 
-  useEffect(() => {
-    if (hud && hud.state !== "active" && !endedRef.current) {
-      endedRef.current = true;
-      setReport(engineRef.current?.getReport() ?? null);
-    }
-  }, [hud]);
+  const hudRef = useRef<HudSnapshot | null>(null);
+  hudRef.current = hud;
 
   const fileReport = useMutation({
-    mutationFn: (r: BattleReport) =>
-      apiPost<BattleResult>("/battle/complete", {
-        mission_id: r.missionId,
-        victory: r.victory,
-        duration_sec: r.durationSec,
-        fallen: r.fallen.map((f) => ({
-          soldier_id: f.soldierId,
-          cause: f.cause,
-          kills: f.kills,
-          damage_taken: f.damageTaken,
-          healed: f.healed,
-          heavy_kills: f.heavyKills,
-          officer_kills: f.officerKills,
-        })),
-        survivors: r.survivors.map((s) => ({
-          soldier_id: s.soldierId,
-          kills: s.kills,
-          damage_taken: s.damageTaken,
-          healed: s.healed,
-          heavy_kills: s.heavyKills,
-          officer_kills: s.officerKills,
-        })),
-      }),
+    mutationFn: (r: BattleReport) => apiPost<BattleResult>("/battle/complete", reportBody(r)),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["state"] });
       qc.invalidateQueries({ queryKey: ["squad"] });
@@ -73,12 +60,51 @@ export default function Battlefield() {
       for (const m of res.medals_awarded) toast(`🎖 Decorated: ${m}`);
       if (res.commander_promoted) toast.success(`You have been promoted to ${res.commander_rank}. New privileges unlocked.`);
       if (res.memorial_names.length) toast(`${res.memorial_names.length} name(s) added to the Memorial Wall.`);
-      navigate("/");
     },
-    onError: () => toast.error("The report didn't reach division — try again"),
+    onError: () => toast.error("The report didn't reach division — tap RETRY"),
   });
 
-  if (state?.campaign_complete) {
+  // Battle over -> file the report immediately (permadeath can't be dodged by closing the tab).
+  useEffect(() => {
+    if (hud && hud.state !== "active" && !endedRef.current) {
+      endedRef.current = true;
+      const r = engineRef.current?.getReport() ?? null;
+      setReport(r);
+      if (r) fileReport.mutate(r);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hud]);
+
+  // Leaving mid-battle (navigation or closing the tab) counts as a retreat — the dead stay dead.
+  useEffect(() => {
+    const retreatBeacon = () => {
+      const h = hudRef.current;
+      const eng = engineRef.current;
+      if (!eng || !h || h.briefing || endedRef.current) return;
+      endedRef.current = true;
+      eng.retreat();
+      const r = eng.getReport();
+      if (!r) return;
+      void fetch("/api/battle/complete", {
+        method: "POST",
+        keepalive: true,
+        headers: { "Content-Type": "application/json", "X-Save-Id": saveId() },
+        body: JSON.stringify(reportBody(r)),
+      }).then(() => {
+        qc.invalidateQueries({ queryKey: ["state"] });
+        qc.invalidateQueries({ queryKey: ["squad"] });
+        qc.invalidateQueries({ queryKey: ["memorial"] });
+      });
+    };
+    window.addEventListener("pagehide", retreatBeacon);
+    return () => {
+      window.removeEventListener("pagehide", retreatBeacon);
+      retreatBeacon();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (state?.campaign_complete && !deployed) {
     return (
       <Shell>
         <div className="mx-auto max-w-lg border border-[#2E3628] bg-[#1A1D17] p-8 text-center">
@@ -111,7 +137,7 @@ export default function Battlefield() {
     );
   }
 
-  if (activeSquad.length === 0) {
+  if (!deployed && activeSquad.length === 0) {
     return (
       <Shell>
         <div className="mx-auto max-w-lg border border-[#2E3628] bg-[#1A1D17] p-8 text-center">
@@ -203,6 +229,16 @@ export default function Battlefield() {
             {hud?.paused ? "RESUME" : "PAUSE (SPACE)"}
           </Button>
           <Button
+            data-testid="take-cover-btn"
+            variant="outline"
+            size="xs"
+            className="hidden sm:inline-flex"
+            onClick={() => engineRef.current?.takeCover()}
+            disabled={hud?.briefing || hud?.state !== "active"}
+          >
+            <Shield size={12} className="mr-1" /> COVER (C)
+          </Button>
+          <Button
             data-testid="retreat-btn"
             variant="destructive"
             size="xs"
@@ -220,28 +256,40 @@ export default function Battlefield() {
           key={mission.id + variant}
           mission={mission}
           variant={variant}
-          squad={activeSquad}
+          squad={deployed?.squad ?? activeSquad}
           commanderBonus={state?.combat_bonus ?? 0}
           onHud={onHud}
           engineRef={engineRef}
         />
 
-        <div className="absolute right-3 top-3 z-10">
+        <div className="absolute right-3 top-3 z-10 hidden md:block">
           <CombatLog log={hud?.log ?? []} />
         </div>
 
         {/* Order hints */}
-        <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
-          LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD/ARROWS: SCROLL MAP · 1-8: SOLDIER · Q: ABILITY · SPACE: PAUSE
-        </div>
+        {touch ? (
+          <div className="pointer-events-none absolute left-2 top-2 z-10 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px] text-[#A2B29A]">
+            TAP A SOLDIER TO SELECT · TAP GROUND/ENEMY TO ORDER · DRAG TO SCROLL
+          </div>
+        ) : (
+          <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
+            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-8: SOLDIER · Q: ABILITY · C: COVER · SPACE: PAUSE
+          </div>
+        )}
+        {touch && hud && !hud.briefing && hud.state === "active" && (
+          <TouchControls engineRef={engineRef} paused={hud.paused} disabled={false} />
+        )}
         <div
           data-testid="terrain-legend"
-          className="pointer-events-none absolute bottom-7 left-3 z-10 flex gap-3 border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-1.5 font-mono text-[10px] text-[#A2B29A]"
+          className="pointer-events-none absolute bottom-7 left-3 z-10 hidden gap-3 lg:flex border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-1.5 font-mono text-[10px] text-[#A2B29A]"
         >
           <span><span className="mr-1 inline-block h-2.5 w-2.5 rounded-full border border-[#0C1607] bg-[#3F6A28] align-middle" />HEDGEROW — blocks men &amp; bullets</span>
           <span><span className="mr-1 inline-block h-2.5 w-3 rounded-full bg-[#5C4A30] align-middle" />GAP — walk through</span>
           <span><span className="mr-1 inline-block h-2.5 w-2.5 bg-[#5A3A2A] align-middle" />BUILDING</span>
           <span>✕ HEDGEHOG</span>
+          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / RUINS / WRECKS — cover</span>
+          <span className="text-[#4ECDC4]">◆ IN COVER</span>
+          <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
         </div>
 
         {/* Briefing overlay */}
@@ -261,7 +309,7 @@ export default function Battlefield() {
                 {mission.brief}
               </p>
               <div className="mt-4 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {activeSquad.map((s, i) => (
+                {(deployed?.squad ?? activeSquad).map((s, i) => (
                   <div
                     key={s.id}
                     data-testid={`briefing-soldier-${i}`}
@@ -323,7 +371,7 @@ export default function Battlefield() {
                   </p>
                 ) : (
                   report.fallen.map((f, i) => {
-                    const dead = (squad ?? []).find((s) => s.id === f.soldierId);
+                    const dead = (deployed?.squad ?? []).find((s) => s.id === f.soldierId);
                     return (
                       <div
                         key={i}
@@ -349,7 +397,7 @@ export default function Battlefield() {
                 <p className="font-mono text-xs text-[#A2B29A]" data-testid="debrief-survivors">
                   {report.survivors
                     .map((s) => {
-                      const a = (squad ?? []).find((x) => x.id === s.soldierId);
+                      const a = (deployed?.squad ?? []).find((x) => x.id === s.soldierId);
                       return `${a?.name ?? "?"} (${s.kills} kills)`;
                     })
                     .join(" · ") || "—"}
@@ -360,10 +408,14 @@ export default function Battlefield() {
                 data-testid="debrief-return-btn"
                 size="lg"
                 className="mt-5 w-full"
-                onClick={() => fileReport.mutate(report)}
+                onClick={() => (fileReport.isError ? fileReport.mutate(report) : navigate("/"))}
                 disabled={fileReport.isPending}
               >
-                {fileReport.isPending ? "FILING THE REPORT…" : "FILE REPORT & RETURN TO HQ"}
+                {fileReport.isPending
+                  ? "FILING THE REPORT…"
+                  : fileReport.isError
+                    ? "RETRY FILING THE REPORT"
+                    : "REPORT FILED — RETURN TO HQ"}
               </Button>
             </div>
           </div>
@@ -402,4 +454,20 @@ function Shell({ children }: { children: React.ReactNode }) {
       {children}
     </div>
   );
+}
+
+function reportBody(r: BattleReport) {
+  const stats = (x: { damageTaken: number; healed: number; heavyKills: number; officerKills: number }) => ({
+    damage_taken: x.damageTaken,
+    healed: x.healed,
+    heavy_kills: x.heavyKills,
+    officer_kills: x.officerKills,
+  });
+  return {
+    mission_id: r.missionId,
+    victory: r.victory,
+    duration_sec: r.durationSec,
+    fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
+    survivors: r.survivors.map((v) => ({ soldier_id: v.soldierId, kills: v.kills, ...stats(v) })),
+  };
 }

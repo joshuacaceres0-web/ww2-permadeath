@@ -120,7 +120,11 @@ export default function Graveyard({ entries, decor, selectedId, onSelect }: Prop
       return;
     }
     if (tool.mode !== "move") return;
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    try {
+      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    } catch {
+      /* pointer already released */
+    }
     setDrag({ id, what, x, y, startX: e.clientX, startY: e.clientY, moved: false });
   };
 
