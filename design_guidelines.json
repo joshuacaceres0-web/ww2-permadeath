@@ -1,0 +1,320 @@
+{
+  "theme": "dark",
+  "project_name": "VANGUARD '44: PERMAFROST / THE SACRIFICE DIVISION",
+  "archetype": "THE PERFORMANCE PRO / MILITARY TACTICAL RETRO-BRUTALIST",
+  "concept_statement": "A hardcore top-down WWII tactical game mixing tactical-pause canvas warfare with persistent squad permadeath, requisition meta, and a sombre archival memorial wall. The aesthetic fuses weathered WWII field manuals, cathode-ray tactical displays, stamped stencil typography, dark olive drab metals, and visceral blood-crimson triage accents.",
+  "colors": {
+    "surfaces": [
+      {
+        "name": "page",
+        "kind": "solid",
+        "bg": "#121411",
+        "on_bg": "#E3E7DC",
+        "on_bg_muted": "#8D9A83",
+        "roles": {
+          "link": "#E5A93C",
+          "error": "#E24A4A",
+          "success": "#5EB872"
+        }
+      },
+      {
+        "name": "panel",
+        "kind": "solid",
+        "bg": "#1A1D17",
+        "on_bg": "#E3E7DC",
+        "on_bg_muted": "#96A48D",
+        "roles": {
+          "border": "#2E3628",
+          "accent_gold": "#E5A93C",
+          "danger_red": "#E24A4A",
+          "tactical_cyan": "#4ECDC4"
+        }
+      },
+      {
+        "name": "canvas_hud",
+        "kind": "solid",
+        "bg": "#0D0F0C",
+        "on_bg": "#EAF0E2",
+        "on_bg_muted": "#7A8A70",
+        "roles": {
+          "paused_banner": "#E5A93C",
+          "suppressed_indicator": "#E24A4A",
+          "fog_unexplored": "#080A08",
+          "fog_explored": "rgba(18, 20, 17, 0.65)",
+          "order_line": "#4ECDC4"
+        }
+      },
+      {
+        "name": "dossier_card",
+        "kind": "solid",
+        "bg": "#22271E",
+        "on_bg": "#EDEDE2",
+        "on_bg_muted": "#9EB094"
+      },
+      {
+        "name": "memorial_wall",
+        "kind": "solid",
+        "bg": "#0E100D",
+        "on_bg": "#D5DCD0",
+        "on_bg_muted": "#75826F",
+        "roles": {
+          "kia_stamp": "#C93B3B",
+          "medal_bronze": "#C68B45",
+          "honor_text": "#F3F7EE"
+        }
+      },
+      {
+        "name": "hero_briefing",
+        "kind": "image",
+        "contrast_against": "#121411",
+        "guarantee": "scrim: linear-gradient(to bottom, rgba(14, 16, 13, 0.92) 0%, rgba(18, 20, 17, 0.75) 50%, rgba(18, 20, 17, 0.98) 100%)",
+        "on_bg": "#F0F5EB",
+        "on_bg_muted": "#A2B29A",
+        "roles": {
+          "link": "#E5A93C",
+          "error": "#E24A4A",
+          "success": "#5EB872"
+        }
+      },
+      {
+        "name": "badge_allied",
+        "kind": "solid",
+        "bg": "#2C3B24",
+        "on_bg": "#C5E6B5",
+        "on_bg_muted": "#8AA87A"
+      },
+      {
+        "name": "badge_axis",
+        "kind": "solid",
+        "bg": "#3D1F1F",
+        "on_bg": "#F0B4B4",
+        "on_bg_muted": "#B88080"
+      },
+      {
+        "name": "tactical_pause_banner",
+        "kind": "solid",
+        "bg": "#3A2B0E",
+        "on_bg": "#FFD97D",
+        "on_bg_muted": "#D6AC4B"
+      }
+    ],
+    "accent": "#E5A93C",
+    "on_accent": "#141108"
+  },
+  "typography": {
+    "font_heading": "'Space Grotesk Variable', sans-serif",
+    "font_body": "'IBM Plex Mono', monospace",
+    "scale_px": {
+      "display": 52,
+      "h1": 40,
+      "h2": 28,
+      "h3": 20,
+      "body": 16,
+      "caption": 14
+    },
+    "font_rules": [
+      "Headings use Space Grotesk Variable with uppercase tracking-wider or tracking-tight for authoritative war-room briefing punch",
+      "Body, stats, coordinates, tactical orders, and soldier logs use IBM Plex Mono with leading-relaxed for authentic teletype/field-radio telegraphy",
+      "Overlines, rank labels, and status badges MUST be uppercase with tracking-[0.2em]"
+    ]
+  },
+  "entry_surfaces": {
+    "/": "split tactical war-room — left war theater & operation status, right real-time squad readiness, requisition bank & quick-deploy mission launcher",
+    "/game": "full-viewport immersive tactical canvas — top CRT status bar with pause alert, center canvas battlefield with fog-of-war, bottom squad command dock & order queue",
+    "/barracks": "military recruitment & armory — unit requisition grid (Rifleman, Medic, MG, Sniper, AT) with stat cards, combat trait tags, cost deduction & active squad loadout",
+    "/memorial": "solemn dark marble memorial wall — fallen heroes casualty roll, cause of death, missions survived, kills confirmed, honorable discharge badges"
+  },
+  "layouts_and_grids": {
+    "desktop": "12-column asymmetric tactical bento grid with 1px border lines (border-[#2E3628]), military corner crosshair accents, and dense data telemetry",
+    "mobile": "Single-column mobile-first tactical dock with sticky top status HUD, touch-friendly order wheel buttons (Hold Ground, Fire at Will, Fall Back, Ability), full-screen canvas with pinch/drag pan and double-tap tactical pause toggle",
+    "game_canvas": {
+      "aspect": "16:9 on desktop (e.g. 1024x576 or responsive 100%), full-width with responsive height on mobile (min 380px)",
+      "renderer": "HTML5 Canvas with 2D context or lightweight particle layer, handling 60 FPS unit vectors, tracers, muzzle flashes, fog-of-war radial alpha masks, explosion shockwaves, suppression pins, and tactical pause order queues",
+      "controls": "Left-click: select unit / marquee drag box; Right-click or single tap (when selected): move/attack command; Spacebar or HUD button: toggle Tactical Pause; Number keys 1-5: quick select squad soldier"
+    }
+  },
+  "game_mechanics_and_features": {
+    "units_allied": [
+      {
+        "type": "Rifleman",
+        "role": "Infantry Core",
+        "weapon": "M1 Garand (.30-06)",
+        "cost": 100,
+        "hp": 120,
+        "speed": 2.2,
+        "range": 220,
+        "dps": 22,
+        "ability": "Frag Grenade (Area Burst, 60 dmg)"
+      },
+      {
+        "type": "Medic",
+        "role": "Field Support",
+        "weapon": "M1 Carbine & Morphine Syrette",
+        "cost": 150,
+        "hp": 90,
+        "speed": 2.5,
+        "range": 160,
+        "dps": 12,
+        "ability": "Combat Triage (Revive downed / heal +50 HP aura)"
+      },
+      {
+        "type": "MG Gunner",
+        "role": "Fire Suppression",
+        "weapon": ".30 Cal Browning M1919",
+        "cost": 220,
+        "hp": 110,
+        "speed": 1.4,
+        "range": 280,
+        "dps": 38,
+        "ability": "Suppressive Barrage (Pins enemies, reduces their move by 60% & accuracy by 50%)"
+      },
+      {
+        "type": "Sniper",
+        "role": "Precision Recon",
+        "weapon": "Springfield M1903A4 Scoped",
+        "cost": 260,
+        "hp": 70,
+        "speed": 1.9,
+        "range": 400,
+        "dps": 65,
+        "ability": "Deadeye Shot (Instant high-threat officer/gunner pick, 120 dmg)"
+      },
+      {
+        "type": "AT Specialist",
+        "role": "Heavy Ordinance",
+        "weapon": "M1 Bazooka 60mm",
+        "cost": 300,
+        "hp": 100,
+        "speed": 1.6,
+        "range": 240,
+        "dps": 80,
+        "ability": "Bunker Buster Rocket (Devastates fortified nests & sandbag cover)"
+      }
+    ],
+    "enemies_axis": [
+      { "type": "Volkssturm Conscript", "weapon": "Kar98k", "hp": 60, "threat": "Low" },
+      { "type": "Wehrmacht Grenadier", "weapon": "MP40 SMG", "hp": 95, "threat": "Medium" },
+      { "type": "MG42 Bunker Nest", "weapon": "MG42 Hitlersäge", "hp": 280, "threat": "Extreme" },
+      { "type": "SS Hauptmann Officer", "weapon": "Luger P08 + Morale Aura", "hp": 140, "threat": "High" },
+      { "type": "Panzerfaust Shocktrooper", "weapon": "Anti-Infantry Rocket", "hp": 110, "threat": "High" },
+      { "type": "Flak 38 20mm Emplacement", "weapon": "Rapid Autocannon", "hp": 320, "threat": "Critical" }
+    ],
+    "missions_campaign": [
+      {
+        "id": "op_01",
+        "code": "OPERATION HEDGE-CLEAR",
+        "location": "Bocage Outskirts, Normandy",
+        "objective": "Neutralize 2 Wehrmacht scout outposts & secure crossroads",
+        "reward_req": 250,
+        "difficulty": "Moderate"
+      },
+      {
+        "id": "op_02",
+        "code": "OPERATION SILENT CHATEAU",
+        "location": "Valognes Estate",
+        "objective": "Eliminate the Axis Signals Officer & disable radar mast",
+        "reward_req": 400,
+        "difficulty": "Hard"
+      },
+      {
+        "id": "op_03",
+        "code": "OPERATION IRON CROSSROADS",
+        "location": "Carentan Causeway",
+        "objective": "Flank and destroy twin MG42 nests & survive counter-attack wave",
+        "reward_req": 650,
+        "difficulty": "Severe"
+      },
+      {
+        "id": "op_04",
+        "code": "OPERATION PERMAFROST FLAK",
+        "location": "Hürtgen Forest Bunker Complex",
+        "objective": "Demolish Flak 38 battery and extract with stolen cipher documents",
+        "reward_req": 1000,
+        "difficulty": "Nightmare"
+      }
+    ],
+    "permadeath_system": {
+      "rules": "Soldiers who hit 0 HP and are not stabilized by a Medic before battle end are permanently KIA. Their name, role, veteran level, missions survived, and final cause of death are etched onto the Memorial Wall forever. Requisition points earned from victory must be spent hiring fresh recruits with randomized names, hometowns, and unique quirks (e.g. 'Eagle Eye', 'Tough Bastard', 'Shellshocked', 'Adrenaline Junkie').",
+      "squad_management": "Active deployment squad up to 5 soldiers. Inactive reserves up to 8 soldiers. Persistent in MongoDB via FastAPI backend."
+    }
+  },
+  "visual_enhancers": {
+    "retro_military_crt_scanlines": "Subtle repeating CSS linear gradient overlay on tactical maps and canvas with 2% opacity",
+    "grid_and_coordinates": "Subtle LAT/LONG grid lines (e.g. 49°18'N 0°22'W) with tactical crosshairs on panel borders",
+    "stencil_military_stamps": "Embossed stamps for 'CLASSIFIED TOP SECRET', 'CASUALTY CONFIRMED / KIA', and 'VICTORY SECURED'",
+    "weathered_map_texture": "Subtle dark warm noise/vignette background representing war-room map tables",
+    "interactive_tactical_pause_effect": "When space is pressed: slight time-dilation chromatic pulse, amber 'TACTICAL PAUSE ENGAGED' banner, neon-cyan dashed waypoint lines drawn from units to queued destinations"
+  },
+  "motion": {
+    "tactical_pause_transition": "instant state freeze with a smooth 150ms amber glow ramp on queued waypoints",
+    "unit_selection": "snappy 100ms scale pulse (scale-105) on unit card with vibrant cyan highlight border",
+    "bullet_tracers": "high-speed canvas line render with fading alpha tail over 3 frames",
+    "blood_and_debris": "canvas particle bursts on hit with lingering dark stains on map terrain",
+    "card_hover": "transform: translateY(-2px), border-color shifts from #2E3628 to #E5A93C with 150ms ease"
+  },
+  "accessibility": {
+    "color_contrast": "All text tokens meet APCA / WCAG AA 4.5:1 minimum on all military panels",
+    "screen_reader_announcements": "Aria-live region for tactical battle updates ('Private Miller has been suppressed!', 'Enemy Officer neutralized!')",
+    "keyboard_controls": "Full keyboard navigation: Space (Tactical Pause), 1-5 (Select squad units), Q/W/E/R (Activate Abilities), Tab (Cycle targets), Escape (Clear orders/Menu)",
+    "prefers_reduced_motion": "Disables screen-shake and CRT scanlines while preserving tactical pause clarity"
+  },
+  "image_urls": {
+    "tactical_maps": [
+      {
+        "category": "war_room_background",
+        "url": "https://images.unsplash.com/photo-1543191878-f6a3e470454e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHwzfHx2aW50YWdlJTIwbWlsaXRhcnklMjBtYXAlMjB3dzJ8ZW58MHx8fHwxNzk0MTEyNTkwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Authentic aged vintage parchment topography map for War Room HQ briefing backdrop"
+      },
+      {
+        "category": "theater_map",
+        "url": "https://images.unsplash.com/photo-1532154078493-c1c3eef2023c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzMjV8MHwxfHNlYXJjaHw0fHx2aW50YWdlJTIwbWlsaXRhcnklMjBtYXAlMjB3dzJ8ZW58MHx8fHwxNzk0MTEyNTkwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Clean tactical blueprint grid map for mission deployment overlay"
+      }
+    ],
+    "combat_references": [
+      {
+        "category": "field_soldiers_action",
+        "url": "https://images.unsplash.com/photo-1785095953037-fd03707b4c0d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzF8MHwxfHNlYXJjaHwzfHxzb2xkaWVycyUyMGluJTIwY29tYmF0JTIwZmllbGR8ZW58MHx8fHwxNzk0MTEyNTkwfDA&ixlib=rb-4.1.0&q=85",
+        "description": "Historical battlefield smoke and advancing infantry line for victory and campaign dossier cards"
+      }
+    ]
+  },
+  "component_structure": {
+    "frontend_pages": [
+      "/app/frontend/src/pages/Home.tsx (War Room Briefing & Campaign Operations Command)",
+      "/app/frontend/src/pages/Battlefield.tsx (Tactical Canvas Game Engine with Real-Time Combat + Tactical Pause + Fog of War)",
+      "/app/frontend/src/pages/Barracks.tsx (Squad Roster, Requisition Point Store, Recruitment & Loadouts)",
+      "/app/frontend/src/pages/Memorial.tsx (Permadeath Hall of Honor, Fallen Soldiers Archive & KIA Records)"
+    ],
+    "tactical_game_engine_modules": [
+      "/app/frontend/src/components/game/CanvasEngine.tsx (Main 2D battle canvas loop, coordinate math, rendering layers)",
+      "/app/frontend/src/components/game/FogOfWar.tsx (Fog-of-war vision mask computation per allied unit radius)",
+      "/app/frontend/src/components/game/TacticalPauseOverlay.tsx (Waypoint queues, order vectors, time-dilation visualizers)",
+      "/app/frontend/src/components/game/SquadDock.tsx (Bottom command HUD with soldier portrait cards, HP, morale/suppression, ammo, ability buttons)",
+      "/app/frontend/src/components/game/CombatLog.tsx (Real-time radio chatter & battle telemetry box)"
+    ],
+    "backend_routers": [
+      "/app/backend/routers/squad.py (Roster management, unit recruitment, requisition points, soldier leveling & health)",
+      "/app/backend/routers/campaign.py (Sequential missions, victory rewards, enemy encounter setups)",
+      "/app/backend/routers/memorial.py (Persistent KIA memorial records, death stats, honors & citations)"
+    ]
+  },
+  "instructions_to_main_agent": [
+    "1. Ensure the top-down HTML5 canvas game engine is fully interactive, fluid at 60 FPS, with immediate tactile responsiveness. Handle Canvas resize cleanly for both desktop and mobile.",
+    "2. Implement true Tactical Pause (Space key or on-screen Pause button): freezing game physics while allowing unit selection, movement order queuing, target selection, and ability triggers with crisp cyan line vectors.",
+    "3. Fog of War MUST feature dynamic radial line-of-sight: dark unexplored zones, semi-transparent explored terrain, and bright real-time visible cones based on unit sight range (e.g. Sniper has 400px vision, MG has 260px).",
+    "4. Units must have distinct weapon firing sounds/visual tracers, muzzle flashes, blood splatters, and suppression mechanics (when heavily fired upon, morale drops and units crawl/have reduced firing rate).",
+    "5. Permadeath MUST be absolute: When a unit dies in mission and victory or defeat triggers, they are removed from the squad roster and permanently inscribed into the MongoDB Memorial collection with their battle history.",
+    "6. Requisition points are awarded for completed mission objectives, enabling hiring of new specialized troops (Rifleman, Medic, MG, Sniper, AT Specialist) from the Barracks.",
+    "7. Provide generous seed data for default squad, initial requisition budget (300 RP), campaign missions, and historical memorial records so the app is immediately alive and playable on first load.",
+    "8. Maintain strict military dark tactical styling: dark olive-drab background (#121411), high contrast amber gold CTAs (#E5A93C), steel panels (#1A1D17), and IBM Plex Mono typography with stencil heading vibes.",
+    "9. Add data-testid attributes to all interactive elements (e.g. data-testid='tactical-pause-btn', data-testid='recruit-unit-btn', data-testid='start-mission-btn', data-testid='squad-unit-card-0')."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Avoid generic AI slop: use authentic military telemetry, compass coordinates, rank insignia badges, and grit.",
+    "Never use pure black #000000 or generic SaaS blue; use the calibrated olive-drab and dark bronze war-room palette.",
+    "Never apply universal 'transition: all' which breaks canvas transforms and fluid physics.",
+    "Ensure all buttons have responsive hover/active micro-animations (e.g. scale-98 active, border-amber-500 glow).",
+    "Ensure mobile viewport is thoroughly supported with touch-friendly tactical controls and full-screen canvas responsiveness."
+  ]
+}
