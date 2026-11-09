@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -13,6 +13,9 @@ import Portrait from "@/components/Portrait";
 import CommanderCard from "@/components/CommanderCard";
 import ResetEverything from "@/components/ResetEverything";
 import { RibbonRack } from "@/components/Medals";
+import CampaignMap from "@/components/map/CampaignMap";
+
+const VIEW_KEY = "vanguard-warroom-view";
 
 const THREAT_TEXT: Record<string, string> = {
   LOW: "text-[#8D9A83] border-[#3A4433]",
@@ -30,6 +33,22 @@ export default function Home() {
   const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
   const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
   const { data: memorial } = useQuery({ queryKey: ["memorial"], queryFn: () => apiGet<MemorialEntry[]>("/memorial"), retry: false });
+
+  const [view, setView] = useState<"list" | "map">(() => {
+    try {
+      return localStorage.getItem(VIEW_KEY) === "map" ? "map" : "list";
+    } catch {
+      return "list";
+    }
+  });
+  const pickView = (v: "list" | "map") => {
+    setView(v);
+    try {
+      localStorage.setItem(VIEW_KEY, v);
+    } catch {
+      /* private mode: choice lasts for this visit */
+    }
+  };
 
   const mission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
   const activeSquad = (squad ?? []).filter((s) => s.status === "active");
@@ -65,6 +84,23 @@ export default function Home() {
   };
 
   return (
+    <div className="space-y-4">
+      <div className="flex items-center justify-end gap-2" data-testid="warroom-view-switch">
+        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">Campaign view</span>
+        {(["list", "map"] as const).map((v) => (
+          <button
+            key={v}
+            data-testid={`warroom-view-${v}`}
+            aria-pressed={view === v}
+            onClick={() => pickView(v)}
+            className={`border-2 px-3 py-1 font-[Silkscreen] text-[11px] shadow-[2px_2px_0_0_#050605] transition-colors duration-100 ${
+              view === v ? "border-[#E5A93C] bg-[#E5A93C] text-[#141108]" : "border-[#2E3628] bg-[#1A1D17] text-[#A2B29A] hover:text-[#E3E7DC]"
+            }`}
+          >
+            {v.toUpperCase()}
+          </button>
+        ))}
+      </div>
     <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
       {/* War theater */}
       <section className="space-y-4">
@@ -193,7 +229,15 @@ export default function Home() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {(missions ?? []).map((m) => {
+            {view === "map" && missions ? (
+              <CampaignMap
+                missions={missions}
+                state={state}
+                memorial={memorial ?? []}
+                canDeploy={activeSquad.length > 0 && !state?.campaign_complete}
+                onDeploy={deploy}
+              />
+            ) : (missions ?? []).map((m) => {
               const done = state ? m.index < state.mission_index : false;
               const current = state ? m.index === state.mission_index : false;
               return (
@@ -318,6 +362,7 @@ export default function Home() {
           </CardContent>
         </Card>
       </aside>
+    </div>
     </div>
   );
 }

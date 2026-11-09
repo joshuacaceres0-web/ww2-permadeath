@@ -339,3 +339,31 @@ input, textarea, select {
 .animate-pixel-blink {
   animation: pixel-blink 1s steps(1) infinite;
 }
+
+/* ---- Campaign map ---- */
+@keyframes map-route-draw {
+  from { stroke-dashoffset: 100; }
+  to { stroke-dashoffset: 0; }
+}
+.map-route-draw {
+  stroke-dasharray: 100;
+  animation: map-route-draw 1.2s steps(12) both;
+}
+@keyframes map-route-fade {
+  0%, 60% { opacity: 0; }
+  100% { opacity: 1; }
+}
+.map-route-fade {
+  animation: map-route-fade 1.4s steps(4) both;
+}
+@keyframes poppy-sway {
+  0%, 100% { transform: translate(-50%, -50%) rotate(-8deg); }
+  50% { transform: translate(-50%, -50%) rotate(8deg); }
+}
+.map-poppy {
+  animation: poppy-sway 2.4s steps(3) infinite;
+  transform-origin: 50% 100%;
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-route-draw, .map-route-fade, .map-poppy { animation: none; }
+}

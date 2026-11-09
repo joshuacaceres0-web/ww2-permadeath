@@ -100,6 +100,12 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
 - **Pixel UI everywhere**: fonts Pixelify Sans (headings), VT323 (body, self-hosted `/fonts/vt323.woff2` with size-adjust 138%), Silkscreen (canvas). Zero radius, 2px bevel buttons with press-in, stepped hard shadows on olive panels, dithered body backdrop, chunky scrollbars, crisp-edged icons.
 - No campaign map exists (by design).
 
+## v7 — Campaign map (War Room)
+- War Room has a LIST / MAP switch at the top (`warroom-view-list|map`, choice kept in localStorage `vanguard-warroom-view`). MAP replaces the campaign list in place.
+- `src/components/map/CampaignMap.tsx` + `mapArt.ts`: stylised pixel field map (painted then `pixelize()`d, 240x150 px) from Normandy to the Hürtgen (Cotentin, Channel, Seine/Meuse/Rhine, forests, German border, towns). Markers per op index at OP_POS (Omaha, Valognes, Carentan, Hürtgen); status SECURED / ACTIVE / LOCKED from `state.mission_index` + `campaign_complete` (same rule as list). Route: fought segments solid amber (stepped draw-in), road ahead dashed/dim.
+- Tap a marker → briefing (side panel on md+, bottom sheet on phones): code, location, threat, RP, objective, intel by wave, fallen count there. DEPLOY only on ACTIVE (same as War Room deploy → /game, D-Day choice there).
+- Each Memorial entry = a red pixel poppy in a stable (hashed) arc above its operation's marker (matched by `mission_code`), unknown → "UNKNOWN GROUND" bottom-left. Tap → rank, name, cause + Memorial link. Read-only: no writes.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD
