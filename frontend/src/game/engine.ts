@@ -3,6 +3,7 @@
 
 import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
+import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
 export const MAP_W = 2400;
 export const MAP_H = 1350;
@@ -13,6 +14,37 @@ const COLS = Math.ceil(MAP_W / CELL);
 const ROWS = Math.ceil(MAP_H / CELL);
 const UNIT_R = 9;
 const PAN_SPEED = 900;
+const PX = 3; // world units per screen pixel — the whole battlefield renders as chunky pixel art
+const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
+const PIXEL_FONT = "24px Silkscreen, monospace";
+const snap = (v: number) => Math.round(v / PX) * PX;
+
+interface Corpse {
+  x: number;
+  y: number;
+  img: HTMLCanvasElement;
+  axis: boolean;
+}
+
+// Sprite look for each unit: palette, headgear, weapon.
+function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean }): { pal: string; head: Head; weapon: Weapon } {
+  if (u.side === "allies") {
+    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka" } as const)[u.type];
+    return { pal: u.npc ? "usNpc" : "us", head: u.type === "medic" ? "us-medic" : "us", weapon };
+  }
+  switch (u.enemyType) {
+    case "volks": return { pal: "volks", head: "cap", weapon: "rifle" };
+    case "grenadier": return { pal: "wehr", head: "stahl", weapon: "smg" };
+    case "mg42": return { pal: "wehr", head: "stahl", weapon: "mg" };
+    case "officer": return { pal: "officer", head: "officer", weapon: "pistol" };
+    case "panzerfaust": return { pal: "wehr", head: "stahl", weapon: "panzerfaust" };
+    case "flak": return { pal: "wehr", head: "stahl", weapon: "flak" };
+    case "scharfschutze": return { pal: "sniperDe", head: "stahl", weapon: "sniper" };
+    case "mortar": return { pal: "wehr", head: "stahl", weapon: "mortar" };
+    case "fallschirmjager": return { pal: "para", head: "para", weapon: "rifle" };
+    default: return { pal: "wehr", head: "stahl", weapon: "rifle" };
+  }
+}
 
 export type Variant = "beach" | "airborne" | "";
 export type Formation = "wedge" | "line" | "column" | "spread";
@@ -73,6 +105,10 @@ interface Unit {
   npc: boolean; // AI-controlled friendly (not the player's squad, no permadeath)
   cover: Cover | null;
   coverT: number;
+  // animation
+  deathT?: number;
+  shootT?: number;
+  prevWalk?: number;
 }
 
 interface Cover {
@@ -130,7 +166,7 @@ interface Particle {
   life: number;
   max: number;
   size: number;
-  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring";
+  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom";
 }
 
 interface Blocker {
@@ -371,6 +407,7 @@ export class GameEngine {
   private blockers: Blocker[] = [];
   private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
   private covers: Cover[] = [];
+  private corpses: Corpse[] = [];
   private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean; t0: number } | null = null;
   private touchBox = false;
   private formation: Formation = "wedge";
@@ -415,6 +452,7 @@ export class GameEngine {
     this.canvas = canvas;
     this.ctx = canvas.getContext("2d")!;
     this.onHud = onHud;
+    void document.fonts?.load(PIXEL_FONT).catch(() => {});
   }
 
   // ---------------- lifecycle ----------------
@@ -427,6 +465,7 @@ export class GameEngine {
     this.projectiles = [];
     this.particles = [];
     this.fallen = [];
+    this.corpses = [];
     this.log = [];
     this.selected = [];
     this.aimUnitId = null;
@@ -451,11 +490,13 @@ export class GameEngine {
     const rng = mulberry32(hashStr(mission.id));
     const kind = mission.terrain === "dday" ? (variant === "airborne" ? "airborne" : "beach") : mission.terrain;
     const built = buildTerrain(kind, rng);
-    this.terrain = built.canvas;
+    // Paint smooth, then crush to a palette-reduced pixel canvas (1 px = PX world units).
+    this.terrain = pixelize(built.canvas, PX);
     this.blockers = built.blockers;
     this.blocked = buildBlockedGrid(built.blockers);
     this.covers = built.covers;
-    this.tctx = built.canvas.getContext("2d");
+    this.tctx = this.terrain.getContext("2d");
+    this.tctx?.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
 
     this.fog = document.createElement("canvas");
     this.fog.width = COLS;
@@ -509,11 +550,11 @@ export class GameEngine {
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
     if (rect.width === 0 || rect.height === 0) return;
-    this.canvas.width = Math.round(rect.width * dpr);
-    this.canvas.height = Math.round(rect.height * dpr);
-    const s = Math.min(rect.width / VIEW_W, rect.height / VIEW_H);
+    const s = Math.max(MIN_SCALE, Math.min(rect.width / VIEW_W, rect.height / VIEW_H));
+    // Low-res backing store, upscaled with `image-rendering: pixelated`: true chunky pixels.
+    this.canvas.width = Math.max(1, Math.round(rect.width / (PX * s)));
+    this.canvas.height = Math.max(1, Math.round(rect.height / (PX * s)));
     this.viewW = Math.min(MAP_W, rect.width / s);
     this.viewH = Math.min(MAP_H, rect.height / s);
     this.view = {
@@ -1334,6 +1375,7 @@ export class GameEngine {
           u.cooldown = u.fireInterval;
           const tx = prey.x + (Math.random() - 0.5) * 110;
           const ty = prey.y + (Math.random() - 0.5) * 110;
+          u.shootT = 0.35;
           this.projectiles.push({
             x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0, dur: 1.6, side: "axis", dmg: u.dmg, aoe: 62,
             kind: "grenade", sourceType: "mortar", killerId: u.id, smokeT: 0,
@@ -1455,6 +1497,8 @@ export class GameEngine {
     }
 
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 18);
+    this.stepDeaths(dt);
+    for (const u of this.units) if (u.shootT && u.shootT > 0) u.shootT -= dt;
   }
 
   private autoTarget(u: Unit): Unit | null {
@@ -1558,6 +1602,7 @@ export class GameEngine {
   }
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
+    u.shootT = 0.16;
     const ang = Math.atan2(ty - u.y, tx - u.x) + (Math.random() - 0.5) * spread * 2;
     const mx = u.x + Math.cos(u.facing) * 14;
     const my = u.y + Math.sin(u.facing) * 14;
@@ -1601,6 +1646,7 @@ export class GameEngine {
   private kill(u: Unit, sourceType: string, killerId: number | null) {
     u.alive = false;
     u.hp = 0;
+    u.deathT = 0;
     this.corpseFx(u);
     if (u.side === "allies" && u.npc) {
       this.pushLog(`${u.name} of 2nd Platoon is hit.`, "death");
@@ -1660,13 +1706,22 @@ export class GameEngine {
         kind: i < 6 ? "spark" : "smoke",
       });
     }
-    this.particles.push({ x, y, vx: 0, vy: 0, life: 0.35, max: 0.35, size: aoe, kind: "ring" });
+    this.particles.push({ x, y, vx: 0, vy: 0, life: 0.7, max: 0.7, size: aoe * 0.75, kind: "boom" });
     this.blastCover(x, y, aoe, dmg);
     if (this.tctx) {
-      this.tctx.fillStyle = "rgba(14,13,10,0.5)";
-      this.tctx.beginPath();
-      this.tctx.ellipse(x, y, aoe * 0.45, aoe * 0.35, Math.random() * Math.PI, 0, Math.PI * 2);
-      this.tctx.fill();
+      // Pixel crater: dark core with dithered scorch rim.
+      const t = this.tctx;
+      const r = aoe * 0.45;
+      const n = Math.ceil(r / PX);
+      for (let j = -n; j <= n; j++) {
+        for (let i = -n; i <= n; i++) {
+          const d = Math.hypot(i, j * 1.25) * PX;
+          if (d > r) continue;
+          if (d > r * 0.6 && (i + j) & 1) continue;
+          t.fillStyle = d < r * 0.35 ? "rgba(12,11,8,0.7)" : "rgba(24,22,16,0.45)";
+          t.fillRect(snap(x) + i * PX, snap(y) + j * PX, PX, PX);
+        }
+      }
     }
     if (!prefersReducedMotion) this.shake = Math.min(10, this.shake + 6);
   }
@@ -1784,20 +1839,34 @@ export class GameEngine {
   private corpseFx(u: Unit) {
     const t = this.tctx;
     if (!t) return;
-    // Permanent blood stain + fallen silhouette etched into the terrain.
-    t.fillStyle = "rgba(56,14,14,0.55)";
-    t.beginPath();
-    t.ellipse(u.x, u.y, 14, 10, Math.random() * Math.PI, 0, Math.PI * 2);
-    t.fill();
-    t.strokeStyle = u.side === "allies" ? "rgba(28,32,22,0.9)" : "rgba(40,36,28,0.9)";
-    t.lineWidth = 3;
-    t.beginPath();
-    t.ellipse(u.x, u.y + 2, 7, 5, u.facing, 0, Math.PI * 2);
-    t.stroke();
-    t.beginPath();
-    t.moveTo(u.x - 5, u.y - 6);
-    t.lineTo(u.x + 7, u.y - 2);
-    t.stroke();
+    // Permanent pixel blood pool soaked into the ground (the body itself is a corpse sprite).
+    const bx = snap(u.x + (Math.cos(u.facing) < 0 ? 6 : -6));
+    const by = snap(u.y + 6);
+    for (let j = -2; j <= 2; j++) {
+      for (let i = -4; i <= 4; i++) {
+        if (Math.abs(i) / 4.5 + Math.abs(j) / 2.5 > 1 + Math.random() * 0.25) continue;
+        t.fillStyle = (i + j) & 1 ? "rgba(86,18,16,0.8)" : "rgba(62,12,12,0.85)";
+        t.fillRect(bx + i * PX, by + j * PX, PX, PX);
+      }
+    }
+  }
+
+  // Dying units play out their fall, then become a lasting corpse sprite.
+  private stepDeaths(dt: number) {
+    for (const u of this.units) {
+      if (u.alive || u.deathT === undefined || u.deathT > 1) continue;
+      u.deathT += dt;
+      if (u.deathT >= 0.75) {
+        u.deathT = 99;
+        const look = lookOf(u);
+        this.corpses.push({
+          x: u.x,
+          y: u.y,
+          axis: u.side === "axis",
+          img: sprite(look.pal, "dead", look.weapon, look.head, Math.cos(u.facing) < 0),
+        });
+      }
+    }
   }
 
   private pushLog(text: string, kind: LogLine["kind"]) {
@@ -1928,18 +1997,26 @@ export class GameEngine {
     const { s, ox, oy } = this.view;
     const dpr = this.canvas.width / Math.max(1, this.canvas.getBoundingClientRect().width);
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = "#080A08";
     ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
 
     const shakeX = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
     const shakeY = this.shake > 0 ? (Math.random() - 0.5) * this.shake : 0;
-    ctx.setTransform(dpr * s, 0, 0, dpr * s, dpr * (ox + shakeX - this.cam.x * s), dpr * (oy + shakeY - this.cam.y * s));
+    // Whole-pixel translation keeps every sprite pixel on the screen-pixel grid.
+    ctx.setTransform(dpr * s, 0, 0, dpr * s, Math.round(dpr * (ox + shakeX - this.cam.x * s)), Math.round(dpr * (oy + shakeY - this.cam.y * s)));
     ctx.save();
     ctx.beginPath();
     ctx.rect(this.cam.x, this.cam.y, this.viewW, this.viewH);
     ctx.clip();
 
-    if (this.terrain) ctx.drawImage(this.terrain, 0, 0);
+    if (this.terrain) ctx.drawImage(this.terrain, 0, 0, this.terrain.width * PX, this.terrain.height * PX);
+
+    // Fallen bodies stay where they dropped.
+    for (const c of this.corpses) {
+      if (c.axis && !this.explored[this.cellAt(c.x, c.y)]) continue;
+      ctx.drawImage(c.img, snap(c.x) - FEET_X * PX, snap(c.y + 9) - SPR_H * PX, c.img.width * PX, c.img.height * PX);
+    }
 
     // Order lines for the selected squad.
     for (const u of this.units) {
@@ -1947,8 +2024,8 @@ export class GameEngine {
       if (u.orders.length > 0) {
         const o = u.orders[u.orders.length - 1];
         ctx.strokeStyle = "rgba(78,205,196,0.85)";
-        ctx.setLineDash([6, 5]);
-        ctx.lineWidth = 1.2;
+        ctx.setLineDash([9, 9]);
+        ctx.lineWidth = PX;
         ctx.beginPath();
         ctx.moveTo(u.x, u.y);
         for (const wp of u.orders) ctx.lineTo(wp.x, wp.y);
@@ -1963,8 +2040,8 @@ export class GameEngine {
         const t = this.unitById(u.attackId);
         if (t?.alive) {
           ctx.strokeStyle = "rgba(226,74,74,0.8)";
-          ctx.setLineDash([3, 4]);
-          ctx.lineWidth = 1;
+          ctx.setLineDash([6, 9]);
+          ctx.lineWidth = PX;
           ctx.beginPath();
           ctx.moveTo(u.x, u.y);
           ctx.lineTo(t.x, t.y);
@@ -1979,15 +2056,15 @@ export class GameEngine {
       const u = this.unitById(this.aimUnitId);
       if (u) {
         ctx.strokeStyle = "rgba(229,169,60,0.9)";
-        ctx.setLineDash([4, 4]);
-        ctx.lineWidth = 1;
+        ctx.setLineDash([9, 9]);
+        ctx.lineWidth = PX;
         ctx.beginPath();
         ctx.arc(u.x, u.y, u.range, 0, Math.PI * 2);
         ctx.stroke();
         ctx.setLineDash([]);
         if (this.mouse.inside) {
           ctx.strokeStyle = "rgba(229,169,60,1)";
-          ctx.lineWidth = 1.4;
+          ctx.lineWidth = PX;
           ctx.beginPath();
           ctx.moveTo(this.mouse.x - 10, this.mouse.y);
           ctx.lineTo(this.mouse.x + 10, this.mouse.y);
@@ -2001,21 +2078,21 @@ export class GameEngine {
       }
     }
 
-    // Units.
-    for (const u of this.units) {
-      if (!u.alive) continue;
-      if (u.side === "axis" && !this.visible[this.cellAt(u.x, u.y)]) continue;
-      this.drawUnit(ctx, u);
-    }
+    // Units (and the dying), back to front so overlapping sprites read correctly.
+    const drawList = this.units
+      .filter((u) => (u.alive || (u.deathT !== undefined && u.deathT < 1)) && (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]))
+      .sort((a, b) => a.y - b.y);
+    for (const u of drawList) this.drawUnit(ctx, u);
 
-    // Bullets.
+    // Bullets: a hot pixel with a two-pixel fading trail.
     for (const b of this.bullets) {
-      ctx.strokeStyle = b.ally ? "rgba(255,217,125,0.9)" : "rgba(255,122,92,0.9)";
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.moveTo(b.x, b.y);
-      ctx.lineTo(b.x - b.vx * 0.02, b.y - b.vy * 0.02);
-      ctx.stroke();
+      const sp = Math.hypot(b.vx, b.vy) || 1;
+      for (let k = 0; k < 3; k++) {
+        ctx.fillStyle = b.ally
+          ? ["#FFF0B0", "rgba(255,217,125,0.75)", "rgba(229,169,60,0.4)"][k]
+          : ["#FFD0B0", "rgba(255,122,92,0.75)", "rgba(200,80,60,0.4)"][k];
+        ctx.fillRect(snap(b.x - (b.vx / sp) * k * PX * 1.5), snap(b.y - (b.vy / sp) * k * PX * 1.5), PX, PX);
+      }
     }
 
     // Projectiles.
@@ -2023,16 +2100,17 @@ export class GameEngine {
       const k = p.t / p.dur;
       const x = p.x + (p.tx - p.sx) * k;
       const y = p.y + (p.ty - p.sy) * k;
-      const arc = p.kind === "grenade" ? Math.sin(Math.PI * k) * 14 : 0;
-      ctx.fillStyle = p.kind === "grenade" ? "#3A3A2E" : "#2E2A22";
-      ctx.beginPath();
-      ctx.arc(x, y - arc, p.kind === "grenade" ? 3 : 3.5, 0, Math.PI * 2);
-      ctx.fill();
+      const arc = p.kind === "grenade" ? Math.sin(Math.PI * k) * (p.dur > 1 ? 60 : 18) : 0;
+      // Ground shadow, then the round itself.
+      ctx.fillStyle = "rgba(0,0,0,0.35)";
+      ctx.fillRect(snap(x) - PX, snap(y), PX * 2, PX);
+      ctx.fillStyle = "#121110";
+      ctx.fillRect(snap(x) - PX, snap(y - arc) - PX, PX * 2, PX * 2);
+      ctx.fillStyle = p.kind === "grenade" ? "#4E4E3C" : "#6A6450";
+      ctx.fillRect(snap(x) - PX, snap(y - arc) - PX, PX, PX);
       if (p.kind === "rocket") {
-        ctx.fillStyle = "rgba(255,170,80,0.9)";
-        ctx.beginPath();
-        ctx.arc(x - (p.tx - p.sx) * 0.01, y + (p.ty - p.sy) * 0.01 + 3, 2, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.fillStyle = Math.random() < 0.5 ? "#FFD97D" : "#F2A03A";
+        ctx.fillRect(snap(x - ((p.tx - p.sx) / (Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1)) * 6), snap(y - ((p.ty - p.sy) / (Math.hypot(p.tx - p.sx, p.ty - p.sy) || 1)) * 6), PX, PX);
       }
     }
 
@@ -2059,21 +2137,20 @@ export class GameEngine {
           ctx.fillStyle = `rgba(94,184,114,${a})`;
           break;
         case "ring":
-          ctx.strokeStyle = `rgba(229,169,60,${a})`;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size * (1.2 - a), 0, Math.PI * 2);
-          ctx.stroke();
+          continue;
+        case "boom":
+          drawBoom(ctx, p.x, p.y, p.size, 1 - a, PX);
           continue;
       }
-      ctx.beginPath();
-      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-      ctx.fill();
+      const sz = Math.max(PX, snap(p.size * 1.4));
+      ctx.fillRect(snap(p.x) - sz / 2, snap(p.y) - sz / 2, sz, sz);
     }
 
     // Fog of war.
     if (this.fog) {
+      ctx.imageSmoothingEnabled = true;
       ctx.drawImage(this.fog, 0, 0, COLS, ROWS, 0, 0, MAP_W, MAP_H);
+      ctx.imageSmoothingEnabled = false;
     }
 
     // Vignette.
@@ -2089,8 +2166,8 @@ export class GameEngine {
     if (this.marquee) {
       const { x0, y0, x1, y1 } = this.marquee;
       ctx.strokeStyle = "rgba(78,205,196,0.95)";
-      ctx.lineWidth = 1.2;
-      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = PX;
+      ctx.setLineDash([9, 6]);
       ctx.strokeRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
       ctx.setLineDash([]);
       ctx.fillStyle = "rgba(78,205,196,0.08)";
@@ -2103,115 +2180,127 @@ export class GameEngine {
 
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {
     const isAlly = u.side === "allies";
-    // Shadow.
-    ctx.fillStyle = "rgba(0,0,0,0.35)";
-    ctx.beginPath();
-    ctx.ellipse(u.x, u.y + 6, 8, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
+    const look = lookOf(u);
+    const flip = Math.cos(u.facing) < 0;
+    const moving = u.alive && u.prevWalk !== undefined && u.walk !== u.prevWalk;
+    u.prevWalk = u.walk;
 
-    // Facing / weapon.
-    ctx.strokeStyle = isAlly ? "#20261A" : "#2A2820";
-    ctx.lineWidth = u.type === "sniper" ? 1.6 : u.type === "mg" || u.enemyType === "mg42" ? 3 : 2.2;
-    ctx.beginPath();
-    ctx.moveTo(u.x, u.y);
-    ctx.lineTo(u.x + Math.cos(u.facing) * (u.type === "sniper" ? 18 : 13), u.y + Math.sin(u.facing) * (u.type === "sniper" ? 18 : 13));
-    ctx.stroke();
+    // Pick the animation frame.
+    let pose: Pose;
+    if (!u.alive) {
+      const t = u.deathT ?? 1;
+      pose = t < 0.22 ? "hit" : t < 0.48 ? "kneel" : "dead";
+    } else if ((u.shootT ?? 0) > 0) pose = u.cover || u.pinned || u.isStatic ? "crouch" : "shoot";
+    else if (moving) {
+      const f = Math.floor(u.walk / 1.6) % 4;
+      pose = f === 0 ? "walkA" : f === 2 ? "walkB" : "stand";
+    } else if (u.cover || u.pinned || u.isStatic) pose = "crouch";
+    else pose = "stand";
+    if (u.isStatic && pose === "shoot") pose = "crouch";
 
-    // Body.
-    ctx.fillStyle = u.isStatic ? "#4A4A3C" : isAlly ? "#4E5D3C" : "#565040";
-    ctx.strokeStyle = "#101208";
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.arc(u.x, u.y, u.isStatic ? 12 : UNIT_R, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
+    const fx = snap(u.x);
+    const feetY = snap(u.y + 9);
+    const bob = moving && pose === "stand" ? -PX : 0;
 
-    // Helmet.
-    ctx.fillStyle = isAlly ? "#3B472C" : "#453F2E";
-    ctx.beginPath();
-    ctx.arc(u.x, u.y, u.isStatic ? 7 : 5.5, 0, Math.PI * 2);
-    ctx.fill();
+    // Pixel shadow under the feet.
+    ctx.fillStyle = "rgba(0,0,0,0.38)";
+    for (let i = -3; i <= 3; i++) ctx.fillRect(fx + i * PX, feetY - (Math.abs(i) === 3 ? PX : 0), PX, PX * (Math.abs(i) === 3 ? 1 : 2));
 
-    // Type glyphs.
-    if (isAlly && u.type === "medic") {
-      ctx.fillStyle = "#E3E7DC";
-      ctx.fillRect(u.x - 3.5, u.y - 1, 7, 2);
-      ctx.fillRect(u.x - 1, u.y - 3.5, 2, 7);
-    }
-    if (u.enemyType === "officer") {
-      ctx.fillStyle = "#C9A227";
-      ctx.fillRect(u.x - 4, u.y - 1, 8, 2);
-    }
-    if (u.enemyType === "flak") {
-      ctx.strokeStyle = "#1A1812";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(u.x, u.y);
-      ctx.lineTo(u.x + Math.cos(u.facing) * 20, u.y + Math.sin(u.facing) * 20);
-      ctx.stroke();
-    }
-
-    // Sandbag ring for statics.
+    // Sandbag ring around emplacements (vertical bag stack on the firing side).
     if (u.isStatic) {
-      ctx.strokeStyle = "#6B5B3F";
-      ctx.lineWidth = 4;
-      ctx.beginPath();
-      ctx.arc(u.x, u.y, 17, Math.PI * 0.25, Math.PI * 1.75);
-      ctx.stroke();
+      for (let k = -3; k <= 3; k++) {
+        const bx = fx + (flip ? -1 : 1) * PX * (6 - Math.abs(k) * 0.5);
+        const by = feetY - PX * 4 + k * PX * 2;
+        ctx.fillStyle = "#1E1A12";
+        ctx.fillRect(snap(bx) - PX, by - PX, PX * 4, PX * 3);
+        ctx.fillStyle = k & 1 ? "#8A7A52" : "#7A6C48";
+        ctx.fillRect(snap(bx), by, PX * 2, PX * 2);
+        ctx.fillStyle = "#A08E62";
+        ctx.fillRect(snap(bx), by, PX * 2, PX);
+      }
     }
 
-    // Selection ring.
-    if (this.selected.includes(u.id)) {
-      ctx.strokeStyle = "#4ECDC4";
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(u.x, u.y, 15, 0, Math.PI * 2);
-      ctx.stroke();
+    // Selection: chunky pixel ring under the feet.
+    if (u.alive && this.selected.includes(u.id)) {
+      ctx.fillStyle = "#4ECDC4";
+      for (let i = 0; i < 20; i++) {
+        const ang = (i / 20) * Math.PI * 2;
+        ctx.fillRect(snap(fx + Math.cos(ang) * 15), snap(feetY - PX + Math.sin(ang) * 7), PX, PX);
+      }
+    }
+    if (u.alive && u.npc) {
+      ctx.fillStyle = "rgba(160,180,210,0.7)";
+      for (let i = 0; i < 12; i++) {
+        const ang = (i / 12) * Math.PI * 2;
+        ctx.fillRect(snap(fx + Math.cos(ang) * 13), snap(feetY - PX + Math.sin(ang) * 6), PX, PX);
+      }
     }
 
-    // Name tag for selected allies.
-    if (isAlly && this.selected.includes(u.id)) {
-      ctx.fillStyle = "rgba(234,240,226,0.9)";
-      ctx.font = "9px 'IBM Plex Mono', monospace";
-      ctx.textAlign = "center";
-      ctx.fillText(u.name.split(" ").slice(-1)[0].toUpperCase(), u.x, u.y - 22);
+    const img = sprite(look.pal, pose, look.weapon, look.head, flip);
+    const ax = flip ? img.width - 1 - FEET_X : FEET_X;
+    const top = feetY - SPR_H * PX + bob;
+    ctx.drawImage(img, fx - ax * PX, top, img.width * PX, img.height * PX);
+
+    if (!u.alive) return;
+
+    // Muzzle flash on the first frames of a shot.
+    if ((u.shootT ?? 0) > 0.08 && look.weapon !== "mortar" && look.weapon !== "none") {
+      const crouch = pose === "crouch";
+      const reach = look.weapon === "sniper" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
+      const wy = look.weapon === "bazooka" ? 4 + (crouch ? 0 : 1) : look.weapon === "flak" ? 6 : 6 + (crouch ? 3 : 0);
+      const mx = fx + (flip ? -1 : 1) * (reach - FEET_X + (flip ? 1 : 0)) * PX - (flip ? PX : 0);
+      const my = top + wy * PX;
+      ctx.fillStyle = "#FFF6D8";
+      ctx.fillRect(mx, my, PX, PX);
+      ctx.fillStyle = "#FFD97D";
+      ctx.fillRect(mx + (flip ? -PX : PX), my, PX, PX);
+      ctx.fillRect(mx, my - PX, PX, PX);
+      ctx.fillRect(mx, my + PX, PX, PX);
+    }
+    if (look.weapon === "mortar" && (u.shootT ?? 0) > 0.2) {
+      ctx.fillStyle = "rgba(200,190,160,0.8)";
+      ctx.fillRect(fx + (flip ? -5 : 5) * PX, top + 5 * PX, PX * 2, PX * 2);
     }
 
-    // Health bar.
+    const headY = top + (pose === "crouch" ? 3 * PX : 0);
+    // Health bar: pixel segments above the head.
     if (u.hp < u.maxHp || isAlly) {
-      const w = 22;
+      const segs = 8;
       const pct = Math.max(0, u.hp / u.maxHp);
-      ctx.fillStyle = "rgba(10,12,8,0.8)";
-      ctx.fillRect(u.x - w / 2, u.y + (u.isStatic ? 20 : 14), w, 3.5);
-      ctx.fillStyle = isAlly ? "#5EB872" : "#E24A4A";
-      ctx.fillRect(u.x - w / 2, u.y + (u.isStatic ? 20 : 14), w * pct, 3.5);
+      const on = Math.ceil(pct * segs);
+      const bx = fx - (segs / 2) * PX;
+      const by = headY - PX * 2;
+      ctx.fillStyle = "rgba(10,12,8,0.85)";
+      ctx.fillRect(bx - PX, by - PX, (segs + 2) * PX, PX * 3);
+      ctx.fillStyle = isAlly ? (pct > 0.5 ? "#5EB872" : pct > 0.2 ? "#E5A93C" : "#E24A4A") : "#E24A4A";
+      ctx.fillRect(bx, by, on * PX, PX);
     }
 
+    // In-cover marker: small pixel shield beside the head.
     if (u.cover && (isAlly || this.visible[this.cellAt(u.x, u.y)])) {
-      ctx.fillStyle = u.cover.q >= 0.6 ? "#4ECDC4" : "rgba(78,205,196,0.6)";
-      ctx.beginPath();
-      ctx.moveTo(u.x - 12, u.y - 13);
-      ctx.lineTo(u.x - 6, u.y - 13);
-      ctx.lineTo(u.x - 6, u.y - 8);
-      ctx.lineTo(u.x - 9, u.y - 5);
-      ctx.lineTo(u.x - 12, u.y - 8);
-      ctx.closePath();
-      ctx.fill();
-    }
-    if (u.npc) {
-      ctx.strokeStyle = "rgba(160,180,210,0.8)";
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(u.x, u.y, 12, 0, Math.PI * 2);
-      ctx.stroke();
+      const sx = fx - 7 * PX;
+      const sy = headY + PX;
+      ctx.fillStyle = "#0D0F0C";
+      ctx.fillRect(sx - PX, sy - PX, PX * 5, PX * 5);
+      ctx.fillStyle = u.cover.q >= 0.6 ? "#4ECDC4" : "#2E8A84";
+      ctx.fillRect(sx, sy, PX * 3, PX * 2);
+      ctx.fillRect(sx + PX, sy + PX * 2, PX, PX);
     }
 
-    // Pinned marker.
+    ctx.textAlign = "center";
+    ctx.font = PIXEL_FONT;
+    if (isAlly && this.selected.includes(u.id) && this.selected.length <= 3) {
+      const name = u.name.split(" ").slice(-1)[0].toUpperCase();
+      ctx.fillStyle = "#0D0F0C";
+      ctx.fillText(name, fx + PX, headY - PX * 4 + PX);
+      ctx.fillStyle = "#EAF0E2";
+      ctx.fillText(name, fx, headY - PX * 4);
+    }
     if (u.pinned) {
+      ctx.fillStyle = "#0D0F0C";
+      ctx.fillText("PINNED", fx + PX, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4) + PX);
       ctx.fillStyle = "#E24A4A";
-      ctx.font = "bold 9px 'IBM Plex Mono', monospace";
-      ctx.textAlign = "center";
-      ctx.fillText("PINNED", u.x, u.y - (isAlly ? 30 : 26));
+      ctx.fillText("PINNED", fx, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4));
     }
   }
 }
@@ -2255,20 +2344,25 @@ function paintDebris(ctx: Ctx, c: Cover) {
   }
 }
 
-function drawSandbags(ctx: Ctx, x: number, y: number, ang: number, n = 5) {
-  // Low cover: doesn't block movement, stops most rounds from the front.
+function drawSandbags(ctx: Ctx, x: number, y: number, _ang: number, n = 5) {
+  // Low cover: doesn't block movement, stops most rounds. Always stacked top-to-bottom.
+  void _ang;
+  const top = y - ((n - 1) / 2) * 12;
   for (let i = 0; i < n; i++) {
-    const off = (i - (n - 1) / 2) * 13;
-    const bx = x + Math.cos(ang + Math.PI / 2) * off;
-    const by = y + Math.sin(ang + Math.PI / 2) * off;
-    ctx.fillStyle = "#8A7A52";
-    ctx.strokeStyle = "#3A3222";
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.ellipse(bx, by, 7, 5, ang, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    COVERS.push({ x: bx, y: by, r: 6, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110 });
+    const bx = x + (i % 2 ? 3 : -3);
+    const by = top + i * 12;
+    ctx.fillStyle = "rgba(0,0,0,0.4)";
+    ctx.fillRect(bx - 8 + 4, by - 6 + 4, 16, 12);
+    ctx.fillStyle = "#2E2618";
+    ctx.fillRect(bx - 9, by - 7, 18, 14);
+    ctx.fillStyle = i % 2 ? "#8A7A52" : "#7E6F4A";
+    ctx.fillRect(bx - 7, by - 5, 14, 10);
+    ctx.fillStyle = "#A6946A";
+    ctx.fillRect(bx - 7, by - 5, 14, 3);
+    ctx.fillStyle = "#5E5236";
+    ctx.fillRect(bx - 7, by + 3, 14, 2);
+    ctx.fillRect(bx - 1, by - 5, 2, 10); // tied seam
+    COVERS.push({ x: bx, y: by, r: 7, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110 });
   }
 }
 

@@ -93,6 +93,13 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
 - **Briefing fix**: briefing panel scrolls; BEGIN THE ASSAULT sits in a fixed footer so it's always tappable regardless of squad size.
 - **Landscape on phones**: BEGIN requests fullscreen + `screen.orientation.lock("landscape")` (Android); if still portrait during battle, a "Turn your phone sideways" overlay pauses the fight. Short landscape (`short:` variant = landscape & max-height 520px) hides the app header and the combat log, docks the squad list as a right-hand column.
 
+## v6 — Pixel art pass
+- **Battlefield renders as real pixel art**: low-res backing canvas (1 px = 3 world units, `PX` in engine.ts) upscaled with `image-rendering: pixelated`; min zoom 0.7 so sprites read. Terrain is painted smooth then crushed by `pixelize()` (palette-reduced + Bayer dither). Bullets, grenades, particles, health bars, selection rings are drawn in whole pixels; canvas labels use Silkscreen.
+- **Animated 16-bit sprites** (`src/game/sprites.ts`, procedural + cached, dark outline): poses stand / walkA / walkB (walk cycle) / shoot (recoil + muzzle flash) / crouch (in cover, pinned, emplacements) / hit → kneel → dead (death animation ~0.75s, then a persistent corpse sprite + pixel blood pool). Per-faction looks: US olive with M1 helmet (medic red-cross helmet, MG, sniper scope, bazooka), 2nd Platoon AI lighter olive, Wehrmacht field-grey stahlhelm (MP40, MG42, Panzerfaust, mortar tube, Flak gun shield), Volkssturm brown coat + cap + armband, Fallschirmjäger camo smock, SS officer peaked cap. Explosions are pixel fireballs (white core → amber → dithered smoke) with pixel craters.
+- **Sandbags** are always stacked vertically (top to bottom).
+- **Pixel UI everywhere**: fonts Pixelify Sans (headings), VT323 (body, self-hosted `/fonts/vt323.woff2` with size-adjust 138%), Silkscreen (canvas). Zero radius, 2px bevel buttons with press-in, stepped hard shadows on olive panels, dithered body backdrop, chunky scrollbars, crisp-edged icons.
+- No campaign map exists (by design).
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD

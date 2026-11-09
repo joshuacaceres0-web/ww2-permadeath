@@ -58,9 +58,9 @@ export default function Battlefield() {
       });
   };
 
-  const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
-  const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
-  const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
+  const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: 2 });
+  const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: 2 });
+  const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: 2 });
 
   const liveMission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
   const activeSquad = (squad ?? []).filter((s) => s.status === "active");
@@ -173,6 +173,16 @@ export default function Battlefield() {
             RETURN TO THE WAR ROOM
           </Link>
         </div>
+      </Shell>
+    );
+  }
+
+  if (!deployed && (!squad || !state || !missions)) {
+    return (
+      <Shell>
+        <p className="animate-pixel-blink font-mono text-sm text-[#8D9A83]" data-testid="battle-loading">
+          RAISING DIVISION ON THE WIRE…
+        </p>
       </Shell>
     );
   }

@@ -47,7 +47,7 @@ export default function BattleCanvas({ mission, squad, commanderBonus, variant, 
     <canvas
       ref={canvasRef}
       data-testid="battle-canvas"
-      className="absolute inset-0 h-full w-full cursor-crosshair touch-none select-none"
+      className="absolute inset-0 h-full w-full cursor-crosshair touch-none select-none [image-rendering:pixelated]"
     />
   );
 }
