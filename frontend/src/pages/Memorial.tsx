@@ -39,6 +39,9 @@ export default function Memorial() {
 
   return (
     <div className="space-y-6">
+      <Link to="/" data-testid="memorial-top-back-btn" className={buttonVariants({ variant: "outline", size: "sm" })}>
+        ◂ START MENU
+      </Link>
       <div className="border border-[#2E3628] bg-[#0E100D] p-8 text-center">
         <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-[#75826F]">The price of the line</p>
         <h1 className="mt-2 font-heading text-4xl font-bold tracking-tight text-[#F3F7EE]">THE WALL OF HONOR</h1>
@@ -146,7 +149,7 @@ export default function Memorial() {
 
       <div className="text-center">
         <Link to="/" data-testid="memorial-back-btn" className={buttonVariants({ variant: "outline", size: "sm" })}>
-          BACK TO THE WAR ROOM
+          ◂ START MENU
         </Link>
       </div>
     </div>

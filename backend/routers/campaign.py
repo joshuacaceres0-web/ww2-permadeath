@@ -12,6 +12,7 @@ from models.models import (
     MissionOut,
     ReinforceIn,
     ReinforceOut,
+    SaveSummaryOut,
     WipeIn,
 )
 from lib.db import db
@@ -34,6 +35,24 @@ async def rename_commander(input: CommanderIn):
     await get_state()
     await S.game_state.update_one({"id": STATE_ID}, {"$set": {"commander_name": input.name.strip()}})
     return state_out(await get_state())
+
+
+@router.get("/save/summary", response_model=SaveSummaryOut)
+async def save_summary():
+    """Start-menu status. Read-only: does NOT create a save if none exists."""
+    st = await S.game_state.find_one({"id": STATE_ID})
+    if not st:
+        return SaveSummaryOut(exists=False)
+    m = mission_by_index(st.get("mission_index", 0))
+    return SaveSummaryOut(
+        exists=True,
+        mission_code=None if st.get("campaign_complete") or not m else m.code,
+        mission_index=st.get("mission_index", 0),
+        campaign_complete=bool(st.get("campaign_complete")),
+        requisition=st.get("requisition", 0),
+        squad_size=await S.soldiers.count_documents({"status": "active"}),
+        fallen=await S.memorial.count_documents({}),
+    )
 
 
 @router.get("/missions", response_model=List[MissionOut])

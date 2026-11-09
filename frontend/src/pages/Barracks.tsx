@@ -187,7 +187,7 @@ export default function Barracks() {
               <p className="font-mono text-xs text-[#75826F]">The reserve is empty. Bench a veteran to keep him safe.</p>
             )}
             {!squad && <p className="font-mono text-xs text-[#5A664F]">Roster offline…</p>}
-            <Link to="/" data-testid="barracks-back-btn" className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}>
+            <Link to="/war-room" data-testid="barracks-back-btn" className={buttonVariants({ variant: "outline", size: "sm", className: "w-full" })}>
               BACK TO THE WAR ROOM
             </Link>
           </CardContent>

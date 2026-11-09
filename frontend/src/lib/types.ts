@@ -114,3 +114,13 @@ export interface ReinforceOut {
   cost: number;
   requisition: number;
 }
+
+export interface SaveSummary {
+  exists: boolean;
+  mission_code: string | null;
+  mission_index: number;
+  campaign_complete: boolean;
+  requisition: number;
+  squad_size: number;
+  fallen: number;
+}

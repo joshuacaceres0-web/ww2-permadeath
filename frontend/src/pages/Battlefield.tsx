@@ -166,7 +166,7 @@ export default function Battlefield() {
             war room; the memorial keeps its dead either way.
           </p>
           <Link
-            to="/"
+            to="/war-room"
             data-testid="campaign-complete-back-btn"
             className={buttonVariants({ variant: "default", size: "sm", className: "mt-6" })}
           >
@@ -512,7 +512,7 @@ export default function Battlefield() {
                 data-testid="debrief-return-btn"
                 size="lg"
                 className="mt-5 w-full"
-                onClick={() => (fileReport.isError ? fileReport.mutate(report) : navigate("/"))}
+                onClick={() => (fileReport.isError ? fileReport.mutate(report) : navigate("/war-room"))}
                 disabled={fileReport.isPending}
               >
                 {fileReport.isPending

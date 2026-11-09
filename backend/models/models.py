@@ -177,3 +177,15 @@ class ReinforceOut(BaseModel):
     kind: ReinforcementKind
     cost: int
     requisition: int
+
+
+class SaveSummaryOut(BaseModel):
+    """Read-only peek at the save for the start menu; never creates or changes anything."""
+
+    exists: bool
+    mission_code: str | None = None
+    mission_index: int = 0
+    campaign_complete: bool = False
+    requisition: int = 0
+    squad_size: int = 0
+    fallen: int = 0

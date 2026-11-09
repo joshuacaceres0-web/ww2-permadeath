@@ -106,6 +106,12 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
 - Tap a marker → briefing (side panel on md+, bottom sheet on phones): code, location, threat, RP, objective, intel by wave, fallen count there. DEPLOY only on ACTIVE (same as War Room deploy → /game, D-Day choice there).
 - Each Memorial entry = a red pixel poppy in a stable (hashed) arc above its operation's marker (matched by `mission_code`), unknown → "UNKNOWN GROUND" bottom-left. Tap → rank, name, cause + Memorial link. Read-only: no writes.
 
+## v8 — Start menu
+- `/` = StartMenu (outside Layout): animated pixel backdrop (`StartScene.tsx`, dusk ruins + marching squad sprites, 8 fps), title VANGUARD '44, subtitle PERMAFROST, THE SACRIFICE DIVISION. Buttons: CONTINUE (→ /war-room; disabled with "No campaign yet" when no save), NEW GAME (dialog "Start a new campaign? Your current squad, RP, and Memorial will be lost." Cancel/Confirm → only Confirm calls POST /api/campaign/wipe then → /war-room), HOW TO PLAY (/how-to-play, back to /), MEMORIAL (/memorial, with ◂ START MENU buttons top & bottom).
+- Footer (only when a save exists): operation n/4 + code (or CAMPAIGN COMPLETE), RP, squad size (active), fallen count.
+- `GET /api/save/summary` → `{exists, mission_code, mission_index, campaign_complete, requisition, squad_size, fallen}` — read-only, does NOT create a save (unlike /state). The start menu only calls this; nothing resets on load.
+- War Room moved from `/` to `/war-room` (nav, brand link, barracks back, battle exit/debrief all point there). Unknown routes → `/`.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD

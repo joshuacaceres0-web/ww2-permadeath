@@ -8,7 +8,7 @@ import type { GameState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const NAV = [
-  { to: "/", label: "WAR ROOM", testid: "nav-link-war-room" },
+  { to: "/war-room", label: "WAR ROOM", testid: "nav-link-war-room" },
   { to: "/barracks", label: "BARRACKS", testid: "nav-link-barracks" },
   { to: "/memorial", label: "MEMORIAL", testid: "nav-link-memorial" },
 ];
@@ -26,7 +26,7 @@ export default function Layout() {
     <div className="flex min-h-svh flex-col bg-[#121411] text-[#E3E7DC]">
       <header className={cn("sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur", inGame && "short:hidden")}>
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-          <Link to="/" className="flex items-center gap-2.5" data-testid="brand-link">
+          <Link to="/war-room" className="flex items-center gap-2.5" data-testid="brand-link">
             <span className="flex h-8 w-8 items-center justify-center border border-[#E5A93C] text-[#E5A93C]">
               <Crosshair size={16} strokeWidth={2.4} />
             </span>
