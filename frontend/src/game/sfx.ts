@@ -2,15 +2,24 @@
 // Volume comes from Settings; 0 = silent.
 let ctx: AudioContext | null = null;
 let noise: AudioBuffer | null = null;
-let volume = 0.6;
+import { loadSettings } from "@/lib/settings";
+
+const initial = loadSettings();
+let volume = initial.volume / 100;
+let muted = initial.muted;
 const lastAt: Record<string, number> = {};
 
 export function setSfxVolume(v: number) {
   volume = Math.max(0, Math.min(1, v / 100));
 }
 
+/** Mute switch from Settings — silences battle and menu sounds alike. */
+export function setSfxMuted(m: boolean) {
+  muted = m;
+}
+
 function audio(): AudioContext | null {
-  if (volume <= 0) return null;
+  if (muted || volume <= 0) return null;
   try {
     if (!ctx) {
       const AC = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -32,6 +41,7 @@ function audio(): AudioContext | null {
 }
 
 export type Sfx = "shot" | "mg" | "boom" | "death" | "click";
+export type MenuSfx = "nav" | "select" | "back";
 
 const SPEC: Record<Sfx, { dur: number; gain: number; freq: number; gap: number; tone?: number }> = {
   shot: { dur: 0.09, gain: 0.25, freq: 2200, gap: 0.05 },
@@ -40,6 +50,41 @@ const SPEC: Record<Sfx, { dur: number; gain: number; freq: number; gap: number; 
   death: { dur: 0.25, gain: 0.25, freq: 600, gap: 0.15, tone: 180 },
   click: { dur: 0.04, gain: 0.2, freq: 3000, gap: 0.03, tone: 880 },
 };
+
+// Menu blips: pure square-wave notes, NES-style. [frequency Hz, start s, length s]
+const MENU: Record<MenuSfx, Array<[number, number, number]>> = {
+  nav: [[660, 0, 0.035]],
+  select: [[523, 0, 0.05], [784, 0.05, 0.08]],
+  back: [[587, 0, 0.05], [392, 0.05, 0.08]],
+};
+
+export function menuSfx(kind: MenuSfx) {
+  const a = audio();
+  if (!a) return;
+  const now = a.currentTime;
+  if (now - (lastAt[kind] ?? -1) < 0.04) return;
+  lastAt[kind] = now;
+  for (const [f, t, d] of MENU[kind]) {
+    const o = a.createOscillator();
+    o.type = "square";
+    o.frequency.setValueAtTime(f, now + t);
+    const g = a.createGain();
+    g.gain.setValueAtTime(0.0001, now);
+    g.gain.setValueAtTime(0.12 * volume, now + t);
+    g.gain.exponentialRampToValueAtTime(0.0001, now + t + d);
+    o.connect(g).connect(a.destination);
+    o.start(now + t);
+    o.stop(now + t + d + 0.01);
+  }
+}
+
+/** Click-capture handler: blip on any button/link inside a menu screen. */
+export function onMenuClick(e: { target: EventTarget | null }) {
+  const el = (e.target as HTMLElement | null)?.closest?.("a,button,[role=radio]") as HTMLElement | null;
+  if (!el || el.hasAttribute("disabled") || el.getAttribute("data-testid") === "settings-mute-toggle") return;
+  const id = el.getAttribute("data-testid") ?? "";
+  menuSfx(/back|close|cancel/.test(id) ? "back" : /^(map-|warroom-view|settings-)/.test(id) ? "nav" : "select");
+}
 
 /** Play a sound; rapid repeats are throttled so gunfire doesn't clip. */
 export function sfx(kind: Sfx) {

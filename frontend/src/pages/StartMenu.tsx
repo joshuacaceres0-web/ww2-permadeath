@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import StartScene from "@/components/StartScene";
+import { onMenuClick } from "@/game/sfx";
 import { apiGet, apiPost } from "@/lib/api";
 import type { GameState, SaveSummary } from "@/lib/types";
 
@@ -36,7 +37,7 @@ export default function StartMenu() {
   const hasSave = !!save?.exists;
 
   return (
-    <div className="relative flex min-h-svh flex-col overflow-hidden bg-[#0D0F0C] text-[#E3E7DC]" data-testid="start-menu">
+    <div className="relative flex min-h-svh flex-col overflow-hidden bg-[#0D0F0C] text-[#E3E7DC]" data-testid="start-menu" onClickCapture={onMenuClick}>
       <StartScene />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(13,15,12,0.92)_0%,rgba(13,15,12,0.7)_45%,rgba(13,15,12,0.15)_100%)]" />
 

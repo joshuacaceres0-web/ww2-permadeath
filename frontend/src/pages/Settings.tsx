@@ -3,7 +3,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { buttonVariants } from "@/components/ui/button";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type GameSpeed, type Settings as S, type ShakeLevel } from "@/lib/settings";
-import { setSfxVolume, sfx } from "@/game/sfx";
+import { menuSfx, onMenuClick, setSfxMuted, setSfxVolume, sfx } from "@/game/sfx";
 
 const SPEEDS: Array<{ v: GameSpeed; label: string }> = [
   { v: 0.75, label: "SLOW" },
@@ -45,9 +45,10 @@ export default function Settings() {
     setS(next);
     saveSettings(next);
     setSfxVolume(next.volume);
+    setSfxMuted(next.muted);
   };
   return (
-    <div className="min-h-svh bg-[#0D0F0C] px-5 py-8 text-[#E3E7DC] sm:px-12" data-testid="settings-page">
+    <div className="min-h-svh bg-[#0D0F0C] px-5 py-8 text-[#E3E7DC] sm:px-12" data-testid="settings-page" onClickCapture={onMenuClick}>
       <div className="mx-auto max-w-xl">
         <Link to="/" data-testid="settings-back-btn" className={buttonVariants({ variant: "outline", size: "sm" })}>
           ◂ START MENU
@@ -71,12 +72,31 @@ export default function Settings() {
 
         <section className="mt-3 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
           <div className="flex items-center justify-between">
+            <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">SOUND</h2>
+            <button
+              role="switch"
+              aria-checked={s.muted}
+              data-testid="settings-mute-toggle"
+              onClick={() => {
+                const m = !s.muted;
+                update({ muted: m });
+                if (!m) menuSfx("select");
+              }}
+              className={`border-2 px-3 py-2 font-[Silkscreen] text-xs shadow-[2px_2px_0_0_#050605] transition-colors duration-100 ${
+                s.muted ? "border-[#E24A4A] bg-[#3A1414] text-[#F0B4B4]" : "border-[#2E3628] bg-[#121411] text-[#A2B29A]"
+              }`}
+            >
+              {s.muted ? "■ MUTED" : "□ MUTE ALL"}
+            </button>
+          </div>
+          <p className="font-mono text-sm text-[#8D9A83]">Mute silences battle and menu sounds.</p>
+          <div className="flex items-center justify-between">
             <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">VOLUME</h2>
             <span className="font-[Silkscreen] text-sm text-[#E5A93C]" data-testid="settings-volume-value">
-              {s.volume === 0 ? "MUTE" : `${s.volume}%`}
+              {s.muted || s.volume === 0 ? "MUTE" : `${s.volume}%`}
             </span>
           </div>
-          <p className="font-mono text-sm text-[#8D9A83]">Gunfire, explosions and casualties in battle.</p>
+          <p className="font-mono text-sm text-[#8D9A83]">Battle sounds and menu blips.</p>
           <input
             type="range"
             min={0}

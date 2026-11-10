@@ -4,7 +4,7 @@
 import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
-import { setSfxVolume, sfx } from "./sfx";
+import { setSfxMuted, setSfxVolume, sfx } from "./sfx";
 import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
 export const MAP_W = 2400;
@@ -461,6 +461,7 @@ export class GameEngine {
     this.speed = st.speed;
     this.shakeK = SHAKE_FACTOR[st.shake];
     setSfxVolume(st.volume);
+    setSfxMuted(st.muted);
   }
 
   // ---------------- lifecycle ----------------

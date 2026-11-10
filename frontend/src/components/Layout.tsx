@@ -6,6 +6,10 @@ import { buttonVariants } from "@/components/ui/button";
 import { apiGet } from "@/lib/api";
 import type { GameState } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { onMenuClick } from "@/game/sfx";
+
+// Menu blips on these screens (battle has its own sounds).
+const MENU_SOUND_PATHS = ["/war-room", "/memorial"];
 
 const NAV = [
   { to: "/war-room", label: "WAR ROOM", testid: "nav-link-war-room" },
@@ -23,7 +27,10 @@ export default function Layout() {
   });
 
   return (
-    <div className="flex min-h-svh flex-col bg-[#121411] text-[#E3E7DC]">
+    <div
+      className="flex min-h-svh flex-col bg-[#121411] text-[#E3E7DC]"
+      onClickCapture={MENU_SOUND_PATHS.includes(pathname) ? onMenuClick : undefined}
+    >
       <header className={cn("sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur", inGame && "short:hidden")}>
         <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
           <Link to="/war-room" className="flex items-center gap-2.5" data-testid="brand-link">

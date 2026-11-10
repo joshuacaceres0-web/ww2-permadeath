@@ -116,6 +116,10 @@ and TRUE permadeath. React 19 canvas engine frontend + FastAPI/Mongo meta backen
 - `/settings` (from start menu, back to /): game speed SLOW 0.75 / NORMAL 1 / FAST 1.25 / FASTER 1.5 (engine multiplies dt), screen shake OFF/LOW/FULL (0/0.4/1), volume 0–100 (WebAudio synth sfx in `game/sfx.ts`: shot, mg, boom, death). Stored per device in localStorage `vanguard-settings` (`lib/settings.ts`); never touches the save. Engine reads settings when a battle loads.
 - Last battle recap: `battle/complete` stores `game_state.last_battle {mission_code, victory, fallen[names], survivors, at}`; `/api/save/summary` returns it as `last_battle`; start-menu footer shows op, VICTORY/DEFEAT and who fell. Cleared by wipe (state replaced) and /campaign/reset.
 
+## v10 — Menu sounds + mute
+- `game/sfx.ts` `menuSfx("nav"|"select"|"back")`: square-wave blips (WebAudio, no files). `onMenuClick` (click-capture) plays them on the start menu, Settings, and in Layout only on /war-room (incl. campaign map) and /memorial; testids with back/close/cancel → "back", map-/warroom-view/settings- → "nav", else "select".
+- Settings has MUTE ALL (`settings.muted`), which silences battle sfx + menu blips (`setSfxMuted`, also read at module init and by the engine). Battle sounds unchanged.
+
 ## Missions (sequential, victory advances; defeat does not)
 1. op_01 OPERATION HEDGE-CLEAR — bocage — 250 RP — MODERATE
 2. op_02 OPERATION SILENT CHATEAU — town — 400 RP — HARD
