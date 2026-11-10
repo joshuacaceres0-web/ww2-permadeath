@@ -179,6 +179,14 @@ class ReinforceOut(BaseModel):
     requisition: int
 
 
+class LastBattleOut(BaseModel):
+    mission_code: str
+    victory: bool
+    fallen: List[str] = []
+    survivors: int = 0
+    at: str
+
+
 class SaveSummaryOut(BaseModel):
     """Read-only peek at the save for the start menu; never creates or changes anything."""
 
@@ -189,3 +197,4 @@ class SaveSummaryOut(BaseModel):
     requisition: int = 0
     squad_size: int = 0
     fallen: int = 0
+    last_battle: LastBattleOut | None = None

@@ -6,6 +6,7 @@ import Memorial from "@/pages/Memorial";
 import Battlefield from "@/pages/Battlefield";
 import StartMenu from "@/pages/StartMenu";
 import HowToPlay from "@/pages/HowToPlay";
+import Settings from "@/pages/Settings";
 
 // One <Route> per page in src/pages; BrowserRouter already wraps this in main.tsx.
 export default function App() {
@@ -13,6 +14,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<StartMenu />} />
       <Route path="/how-to-play" element={<HowToPlay />} />
+      <Route path="/settings" element={<Settings />} />
       <Route element={<Layout />}>
         <Route path="/war-room" element={<Home />} />
         <Route path="/barracks" element={<Barracks />} />

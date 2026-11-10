@@ -87,6 +87,13 @@ export default function StartMenu() {
               <span>▸ HOW TO PLAY</span>
             </Link>
             <Link
+              to="/settings"
+              data-testid="menu-settings"
+              className={`${item} border-[#2E3628] bg-[#1A1D17]/90 text-[#E3E7DC] hover:border-[#4ECDC4] hover:text-[#4ECDC4]`}
+            >
+              <span>▸ SETTINGS</span>
+            </Link>
+            <Link
               to="/memorial"
               data-testid="menu-memorial"
               className={`${item} border-[#2E3628] bg-[#1A1D17]/90 text-[#E3E7DC] hover:border-[#E24A4A] hover:text-[#F0B4B4]`}
@@ -121,6 +128,23 @@ export default function StartMenu() {
             <span className="text-[#5A664F]">FALLEN </span>
             <span className="text-[#E24A4A]">{save.fallen}</span>
           </span>
+          {save.last_battle && (
+            <span className="w-full border-t border-[#2E3628] pt-1.5" data-testid="footer-last-battle">
+              <span className="text-[#5A664F]">LAST BATTLE </span>
+              <span className="text-[#E3E7DC]">{save.last_battle.mission_code}</span>{" "}
+              <span
+                className={save.last_battle.victory ? "font-[Silkscreen] text-[#5EB872]" : "font-[Silkscreen] text-[#E24A4A]"}
+                data-testid="footer-last-result"
+              >
+                {save.last_battle.victory ? "VICTORY" : "DEFEAT"}
+              </span>
+              <span className="block text-[#B88080]" data-testid="footer-last-fallen">
+                {save.last_battle.fallen.length
+                  ? `✝ Fell: ${save.last_battle.fallen.join(", ")}`
+                  : "No men lost."}
+              </span>
+            </span>
+          )}
         </footer>
       )}
 

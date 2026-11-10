@@ -13,6 +13,7 @@ from models.models import (
     ReinforceIn,
     ReinforceOut,
     SaveSummaryOut,
+    LastBattleOut,
     WipeIn,
 )
 from lib.db import db
@@ -52,6 +53,7 @@ async def save_summary():
         requisition=st.get("requisition", 0),
         squad_size=await S.soldiers.count_documents({"status": "active"}),
         fallen=await S.memorial.count_documents({}),
+        last_battle=LastBattleOut(**st["last_battle"]) if st.get("last_battle") else None,
     )
 
 
@@ -163,6 +165,13 @@ async def battle_complete(input: BattleCompleteIn):
                 "mission_index": mission_index,
                 "campaign_complete": campaign_complete,
                 "career_wins": career_wins(state) + (1 if input.victory else 0),
+                "last_battle": {
+                    "mission_code": mission.code,
+                    "victory": input.victory,
+                    "fallen": [f"{n}" for n in memorial_names],
+                    "survivors": len(input.survivors),
+                    "at": now,
+                },
             },
             "$inc": {
                 "requisition": mission.reward if input.victory else 0,
@@ -208,6 +217,7 @@ async def reset_campaign():
         {"id": STATE_ID},
         {
             "$set": {
+                "last_battle": None,
                 "requisition": 300,
                 "mission_index": 0,
                 "battles_won": 0,

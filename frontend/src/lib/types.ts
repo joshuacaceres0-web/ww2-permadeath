@@ -115,6 +115,14 @@ export interface ReinforceOut {
   requisition: number;
 }
 
+export interface LastBattle {
+  mission_code: string;
+  victory: boolean;
+  fallen: string[];
+  survivors: number;
+  at: string;
+}
+
 export interface SaveSummary {
   exists: boolean;
   mission_code: string | null;
@@ -123,4 +131,5 @@ export interface SaveSummary {
   requisition: number;
   squad_size: number;
   fallen: number;
+  last_battle: LastBattle | null;
 }

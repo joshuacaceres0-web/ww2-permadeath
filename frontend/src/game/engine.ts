@@ -3,6 +3,8 @@
 
 import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
+import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
+import { setSfxVolume, sfx } from "./sfx";
 import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
 export const MAP_W = 2400;
@@ -408,6 +410,8 @@ export class GameEngine {
   private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
   private covers: Cover[] = [];
   private corpses: Corpse[] = [];
+  private speed = 1; // Settings: game speed multiplier
+  private shakeK = 1; // Settings: screen shake strength
   private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean; t0: number } | null = null;
   private touchBox = false;
   private formation: Formation = "wedge";
@@ -453,6 +457,10 @@ export class GameEngine {
     this.ctx = canvas.getContext("2d")!;
     this.onHud = onHud;
     void document.fonts?.load(PIXEL_FONT).catch(() => {});
+    const st = loadSettings();
+    this.speed = st.speed;
+    this.shakeK = SHAKE_FACTOR[st.shake];
+    setSfxVolume(st.volume);
   }
 
   // ---------------- lifecycle ----------------
@@ -1603,6 +1611,7 @@ export class GameEngine {
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
     u.shootT = 0.16;
+    if (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]) sfx(u.type === "mg" || u.enemyType === "mg42" || u.enemyType === "grenadier" ? "mg" : "shot");
     const ang = Math.atan2(ty - u.y, tx - u.x) + (Math.random() - 0.5) * spread * 2;
     const mx = u.x + Math.cos(u.facing) * 14;
     const my = u.y + Math.sin(u.facing) * 14;
@@ -1647,6 +1656,7 @@ export class GameEngine {
     u.alive = false;
     u.hp = 0;
     u.deathT = 0;
+    if (u.side === "allies" && !u.npc) sfx("death");
     this.corpseFx(u);
     if (u.side === "allies" && u.npc) {
       this.pushLog(`${u.name} of 2nd Platoon is hit.`, "death");
@@ -1723,7 +1733,8 @@ export class GameEngine {
         }
       }
     }
-    if (!prefersReducedMotion) this.shake = Math.min(10, this.shake + 6);
+    if (!prefersReducedMotion && this.shakeK > 0) this.shake = Math.min(10 * this.shakeK, this.shake + 6 * this.shakeK);
+    sfx("boom");
   }
 
   // Sandbags and crates soak blast damage, get less protective, then come apart.
@@ -1981,7 +1992,7 @@ export class GameEngine {
       this.cam.y += vy * PAN_SPEED * dt;
       this.clampCam();
     }
-    this.update(dt);
+    this.update(dt * this.speed);
     this.hudT += dt;
     if (this.hudT >= 0.15 || this.dirty) {
       this.hudT = 0;
