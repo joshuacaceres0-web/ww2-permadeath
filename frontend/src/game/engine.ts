@@ -107,6 +107,16 @@ interface Unit {
   npc: boolean; // AI-controlled friendly (not the player's squad, no permadeath)
   cover: Cover | null;
   coverT: number;
+  // Unstuck / cover-seek state. stuckT accumulates while a unit has a
+  // move order but makes no progress; lastX/lastY is the position sampled
+  // at the start of that window. coverSeekT is the cooldown between
+  // automatic cover-seeking attempts, so a unit does not re-path to cover
+  // every frame.
+  stuckT: number;
+  lastX: number;
+  lastY: number;
+  stuckFails: number;
+  coverSeekT: number;
   // animation
   deathT?: number;
   shootT?: number;
@@ -325,31 +335,96 @@ function lineClear(g: Uint8Array, x0: number, y0: number, x1: number, y1: number
   return true;
 }
 
+// Like lineClear, but with a full unit-radius clearance on both sides of
+// the line. The plain check only samples the centre line, so a
+// string-pulled path could graze a blocker: the unit then walked straight
+// into it, resolveCollisions pushed it back out, and it sat there forever
+// with orders still queued. Paths smoothed with this check keep a unit's
+// whole body clear of blockers.
+function lineClearWide(g: Uint8Array, x0: number, y0: number, x1: number, y1: number): boolean {
+  if (!lineClear(g, x0, y0, x1, y1)) return false;
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  if (d < 1) return true;
+  const nx = (-(y1 - y0) / d) * UNIT_R;
+  const ny = ((x1 - x0) / d) * UNIT_R;
+  return lineClear(g, x0 + nx, y0 + ny, x1 + nx, y1 + ny) && lineClear(g, x0 - nx, y0 - ny, x1 - nx, y1 - ny);
+}
+
+// Binary-heap priority queue for A*: the old open list was a plain array
+// scanned linearly for the minimum every step, O(n^2) on a 100x57 grid,
+// which is why long cross-map paths were slow and could hit the iteration
+// cap before reaching the goal.
+function heapPush(heap: number[], f: Float32Array, i: number) {
+  heap.push(i);
+  let c = heap.length - 1;
+  while (c > 0) {
+    const p = (c - 1) >> 1;
+    if (f[heap[p]] <= f[heap[c]]) break;
+    [heap[p], heap[c]] = [heap[c], heap[p]];
+    c = p;
+  }
+}
+
+function heapPop(heap: number[], f: Float32Array): number {
+  const top = heap[0];
+  const last = heap.pop()!;
+  if (heap.length) {
+    heap[0] = last;
+    let p = 0;
+    for (;;) {
+      const l = p * 2 + 1;
+      const r = l + 1;
+      let s = p;
+      if (l < heap.length && f[heap[l]] < f[heap[s]]) s = l;
+      if (r < heap.length && f[heap[r]] < f[heap[s]]) s = r;
+      if (s === p) break;
+      [heap[p], heap[s]] = [heap[s], heap[p]];
+      p = s;
+    }
+  }
+  return top;
+}
+
 function findPath(g: Uint8Array, sx: number, sy: number, tx: number, ty: number): Order[] {
-  if (lineClear(g, sx, sy, tx, ty)) return [{ x: tx, y: ty }];
+  if (lineClearWide(g, sx, sy, tx, ty)) return [{ x: tx, y: ty }];
   const clampC = (v: number, m: number) => Math.max(0, Math.min(m - 1, v));
   const [scx, scy] = nearestOpen(g, clampC(Math.floor(sx / CELL), COLS), clampC(Math.floor(sy / CELL), ROWS));
   const [tcx, tcy] = nearestOpen(g, clampC(Math.floor(tx / CELL), COLS), clampC(Math.floor(ty / CELL), ROWS));
   const start = scy * COLS + scx;
   const goal = tcy * COLS + tcx;
+  if (start === goal) return [{ x: tx, y: ty }];
   const gScore = new Float32Array(COLS * ROWS).fill(Infinity);
   const came = new Int32Array(COLS * ROWS).fill(-1);
   const closed = new Uint8Array(COLS * ROWS);
-  const open: number[] = [start];
+  const inOpen = new Uint8Array(COLS * ROWS);
+  const open: number[] = [];
   const f = new Float32Array(COLS * ROWS).fill(Infinity);
   gScore[start] = 0;
   const h = (i: number) => Math.hypot((i % COLS) - tcx, Math.floor(i / COLS) - tcy);
   f[start] = h(start);
+  heapPush(open, f, start);
+  inOpen[start] = 1;
   let iter = 0;
-  while (open.length && iter++ < 6000) {
-    let bi = 0;
-    for (let i = 1; i < open.length; i++) if (f[open[i]] < f[open[bi]]) bi = i;
-    const cur = open[bi];
-    open[bi] = open[open.length - 1];
-    open.pop();
-    if (cur === goal) break;
+  // Best cell reached, by heuristic distance to the goal. If the goal
+  // turns out unreachable (walled off, iteration cap), the path ends at
+  // the closest reachable cell instead of the old fallback: a straight
+  // line to the blocked target, which the unit walked into forever.
+  let best = start;
+  let bestH = h(start);
+  let reached = false;
+  while (open.length && iter++ < 20000) {
+    const cur = heapPop(open, f);
+    inOpen[cur] = 0;
+    if (cur === goal) {
+      reached = true;
+      break;
+    }
     if (closed[cur]) continue;
     closed[cur] = 1;
+    if (f[cur] - gScore[cur] < bestH) {
+      best = cur;
+      bestH = f[cur] - gScore[cur];
+    }
     const cx = cur % COLS;
     const cy = Math.floor(cur / COLS);
     for (let dy = -1; dy <= 1; dy++)
@@ -366,29 +441,37 @@ function findPath(g: Uint8Array, sx: number, sy: number, tx: number, ty: number)
           gScore[ni] = tentative;
           came[ni] = cur;
           f[ni] = tentative + h(ni);
-          open.push(ni);
+          if (!inOpen[ni]) {
+            heapPush(open, f, ni);
+            inOpen[ni] = 1;
+          } else {
+            // Score improved for a cell already queued: re-heapify by
+            // pushing a duplicate; the closed check above discards the
+            // stale entry when it is popped.
+            heapPush(open, f, ni);
+          }
         }
       }
   }
-  if (came[goal] === -1 && goal !== start) return [{ x: tx, y: ty }];
+  const end = reached ? goal : best;
   const cells: Order[] = [];
-  for (let i = goal; i !== -1 && i !== start; i = came[i]) {
+  for (let i = end; i !== -1 && i !== start; i = came[i]) {
     cells.push({ x: (i % COLS) * CELL + CELL / 2, y: Math.floor(i / COLS) * CELL + CELL / 2 });
   }
   cells.reverse();
-  if (!g[Math.floor(ty / CELL) * COLS + Math.floor(tx / CELL)]) cells[cells.length - 1] = { x: tx, y: ty };
-  // String-pull: drop waypoints we can see past.
+  if (reached && !g[Math.floor(ty / CELL) * COLS + Math.floor(tx / CELL)]) cells[cells.length - 1] = { x: tx, y: ty };
+  // String-pull: drop waypoints we can see past, with full unit clearance.
   const out: Order[] = [];
   let ax = sx;
   let ay = sy;
   for (let i = 0; i < cells.length; i++) {
     const next = cells[i + 1];
-    if (next && lineClear(g, ax, ay, next.x, next.y)) continue;
+    if (next && lineClearWide(g, ax, ay, next.x, next.y)) continue;
     out.push(cells[i]);
     ax = cells[i].x;
     ay = cells[i].y;
   }
-  return out.length ? out : [{ x: tx, y: ty }];
+  return out.length ? out : [{ x: (end % COLS) * CELL + CELL / 2, y: Math.floor(end / COLS) * CELL + CELL / 2 }];
 }
 
 export class GameEngine {
@@ -515,12 +598,13 @@ export class GameEngine {
     this.explored = new Uint8Array(COLS * ROWS);
 
     this.spawnAllies(squad, rng, commanderBonus);
-    // 2nd Platoon: exactly 3 weak allies, so they support the fight but
-    // can never clear a wave on their own — in the Emergent play test
+    // 2nd Platoon: 6 weak allies, so they support the fight but can
+    // never clear a wave on their own — in the Emergent play test
     // Wave 1 was cleared entirely by them while the player's squad stood
     // idle and fired nothing. The real count was 2 + min(3, mission.index),
-    // i.e. 2-5; the design decision here is a fixed 3, weak.
-    this.spawnNpcAllies(3, rng);
+    // i.e. 2-5; the design decision here is a fixed 6, weak, spread down
+    // the western edge so they do not spawn stacked on each other.
+    this.spawnNpcAllies(6, rng);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -658,8 +742,11 @@ export class GameEngine {
   private spawnNpcAllies(n: number, rng: () => number) {
     // Weak riflemen only: the old types list gave the NPCs an MG and an AT
     // gun at full damage, so they could win a wave on their own.
+    // Spread down the western edge instead of clustering at one y, so
+    // they do not spawn stacked and deadlock on each other.
     for (let i = 0; i < n; i++) {
-      this.addNpc("rifleman", 90 + rng() * 80, 120 + rng() * (MAP_H - 240), i, rng(), true);
+      const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
+      this.addNpc("rifleman", 90 + rng() * 80, py, i, rng(), true);
     }
   }
 
@@ -702,6 +789,7 @@ export class GameEngine {
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
+        stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2,
       });
     }
   }
@@ -783,10 +871,13 @@ export class GameEngine {
   }
 
   // Nearest cover spot (on the side facing the closest threat) within `radius`.
+  // Scores by distance, with a bonus for cover that sits between the unit
+  // and the threat — that is the cover that actually stops incoming fire
+  // while the unit advances or holds, rather than cover behind it.
   private bestCover(u: Unit, radius: number): { x: number; y: number } | null {
     const threat = this.nearestAlly(u);
     let best: { x: number; y: number } | null = null;
-    let bestD = radius;
+    let bestScore = Infinity;
     for (const c of this.covers) {
       const d0 = dist(u.x, u.y, c.x, c.y);
       if (d0 > radius + c.r) continue;
@@ -799,12 +890,33 @@ export class GameEngine {
       }
       if (this.blocked[Math.floor(sy / CELL) * COLS + Math.floor(sx / CELL)]) continue;
       const d = dist(u.x, u.y, sx, sy);
-      if (d < bestD) {
-        bestD = d;
+      // Threat-side bonus: cover roughly in the direction of the enemy
+      // (dot product of unit->cover and unit->threat above 0) counts as
+      // 60 units closer, so a slightly farther sandbag facing the enemy
+      // beats a nearer one behind the unit.
+      let score = d;
+      if (threat) {
+        const dot = (sx - u.x) * (threat.x - u.x) + (sy - u.y) * (threat.y - u.y);
+        if (dot > 0) score -= 60;
+      }
+      if (score < bestScore) {
+        bestScore = score;
         best = { x: sx, y: sy };
       }
     }
     return best;
+  }
+
+  // Send a unit to the nearest cover spot and hold there. Returns false
+  // when there is no reachable cover in range. The caller sets the
+  // cooldown; the unit's orders are a normal path, so the stuck detector
+  // re-paths or sidesteps it if that path wedges.
+  private seekCover(u: Unit, radius: number): boolean {
+    const c = this.bestCover(u, radius);
+    if (!c) return false;
+    u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
+    u.chase = [];
+    return true;
   }
 
   /** Dev/test probe: living allied positions + open-cell check. */
@@ -1179,6 +1291,7 @@ export class GameEngine {
         npc: false,
         cover: null,
         coverT: 0,
+        stuckT: 0, lastX: sx, lastY: y, stuckFails: 0, coverSeekT: Math.random() * 2,
       });
     });
   }
@@ -1195,9 +1308,12 @@ export class GameEngine {
         const x = isStatic
           ? MAP_W * (0.6 + rng() * 0.25)
           : MAP_W - 40 - rng() * 90;
+        // Spread mobile spawns 26 units apart (wrapping down the edge)
+        // instead of 8: with more enemies per wave the old spacing stacked
+        // them on top of each other and they deadlocked on spawn.
         const y = isStatic
           ? MAP_H * (0.2 + rng() * 0.6)
-          : 90 + rng() * (MAP_H - 180) + mobileCount * 8;
+          : 90 + ((rng() * (MAP_H - 180) + mobileCount * 26) % (MAP_H - 180));
         mobileCount++;
         const [ecx, ecy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
         this.units.push({
@@ -1247,6 +1363,7 @@ export class GameEngine {
           npc: false,
           cover: null,
           coverT: 0,
+          stuckT: 0, lastX: ecx * CELL + CELL / 2, lastY: ecy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2,
         });
       }
     }
@@ -1361,6 +1478,80 @@ export class GameEngine {
       }
 
       if (!moving && focus) u.facing = Math.atan2(focus.y - u.y, focus.x - u.x);
+
+      // Stuck detection: a unit with a move order that makes almost no
+      // progress for a full second is wedged — on a blocker corner, in a
+      // head-on deadlock, or chasing an unreachable tile. Re-path to the
+      // final destination, sidestep perpendicular to the way it was
+      // heading, and after three failed attempts drop the order entirely
+      // instead of freezing the unit (and the squad behind it) forever.
+      // Units that are standing and firing are not stuck; only units
+      // that were told to move are tracked here.
+      u.coverSeekT = Math.max(0, u.coverSeekT - dt);
+      if (moving && (u.orders.length > 0 || u.chase.length > 0)) {
+        u.stuckT += dt;
+        if (u.stuckT >= 1) {
+          const moved = dist(u.x, u.y, u.lastX, u.lastY);
+          u.lastX = u.x;
+          u.lastY = u.y;
+          u.stuckT = 0;
+          if (moved < 4) {
+            u.stuckFails++;
+            const finalDest = u.orders.length ? u.orders[u.orders.length - 1] : null;
+            if (u.orders.length) u.orders.shift();
+            if (u.chase.length) u.chase.shift();
+            if (u.stuckFails >= 3) {
+              u.orders = [];
+              u.chase = [];
+              u.attackId = null;
+              u.stuckFails = 0;
+            } else {
+              // Sidestep: a waypoint 70 units off to one side of the
+              // direction the unit was heading, on open ground. The
+              // next frame the unit follows it as a normal order, then
+              // re-paths to its real destination from the new spot.
+              const toX = finalDest ? finalDest.x : u.x + Math.cos(u.facing) * 70;
+              const toY = finalDest ? finalDest.y : u.y + Math.sin(u.facing) * 70;
+              const ang = Math.atan2(toY - u.y, toX - u.x);
+              const side = u.stuckFails % 2 === 0 ? 1 : -1;
+              for (const s of [side, -side]) {
+                const sx = u.x + Math.cos(ang + (Math.PI / 2) * s) * 70;
+                const sy = u.y + Math.sin(ang + (Math.PI / 2) * s) * 70;
+                if (!this.pointBlocked(sx, sy)) {
+                  u.orders = [{ x: sx, y: sy }, ...(finalDest ? findPath(this.blocked, sx, sy, finalDest.x, finalDest.y) : [])];
+                  break;
+                }
+              }
+              if (finalDest && !u.orders.length) u.orders = findPath(this.blocked, u.x, u.y, finalDest.x, finalDest.y);
+            }
+          } else {
+            u.stuckFails = 0;
+          }
+        }
+      } else {
+        u.stuckT = 0;
+        u.lastX = u.x;
+        u.lastY = u.y;
+        if (u.orders.length === 0 && u.chase.length === 0) u.stuckFails = 0;
+      }
+
+      // Cover: when a unit is pinned / under fire, or idle with no order
+      // and no target in range, it looks for the nearest cover on the
+      // threat side and moves there instead of standing in open ground.
+      // Player-controlled men are only pulled out of a live order when
+      // pinned — an idle player squad, NPC allies and enemies seek cover
+      // freely. Enemies only seek cover when pinned or idle with no prey
+      // in sight; when they have a prey they advance or use the existing
+      // in-range cover branch above, so they do not just camp.
+      if (!u.isStatic && !u.cover && u.coverSeekT <= 0) {
+        const underFire = u.pinned || u.suppression >= 35;
+        const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
+        const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
+        if ((underFire && !playerOrdered) || (idle && u.side !== "axis") || (idle && u.side === "axis" && !this.nearestAlly(u))) {
+          if (this.seekCover(u, underFire ? 220 : 280)) u.coverSeekT = 5;
+          else u.coverSeekT = 2;
+        }
+      }
 
       // Officer aura: axis near an officer shoot faster.
       let aura = 1;
@@ -1570,12 +1761,48 @@ export class GameEngine {
     return best;
   }
 
+  private pointBlocked(x: number, y: number): boolean {
+    // Is a unit's body clear at (x, y)? Check the centre and the four
+    // points a unit radius out, against the blocked grid.
+    const pts: Array<[number, number]> = [
+      [x, y],
+      [x + UNIT_R, y],
+      [x - UNIT_R, y],
+      [x, y + UNIT_R],
+      [x, y - UNIT_R],
+    ];
+    for (const [px, py] of pts) {
+      const cx = Math.floor(px / CELL);
+      const cy = Math.floor(py / CELL);
+      if (cx < 0 || cy < 0 || cx >= COLS || cy >= ROWS) return true;
+      if (this.blocked[cy * COLS + cx]) return true;
+    }
+    return false;
+  }
+
   private moveToward(u: Unit, x: number, y: number, dt: number) {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
     const sp = u.speed * (u.pinned ? 0.35 : 1);
-    u.x += ((x - u.x) / d) * sp * dt;
-    u.y += ((y - u.y) / d) * sp * dt;
+    const step = sp * dt;
+    const dx = ((x - u.x) / d) * step;
+    const dy = ((y - u.y) / d) * step;
+    // Slide along obstacles instead of walking straight into them: the
+    // old code moved the full diagonal step and let resolveCollisions
+    // push the unit back out every frame, so a unit whose waypoint was
+    // across a wall or around a corner made no net progress at all.
+    // Try the full step, then X-only, then Y-only; if all are blocked,
+    // stay put and let the stuck detector re-path or sidestep.
+    if (!this.pointBlocked(u.x + dx, u.y + dy)) {
+      u.x += dx;
+      u.y += dy;
+    } else if (!this.pointBlocked(u.x + dx, u.y)) {
+      u.x += dx;
+    } else if (!this.pointBlocked(u.x, u.y + dy)) {
+      u.y += dy;
+    } else {
+      return;
+    }
     u.facing = Math.atan2(y - u.y, x - u.x);
     u.walk += dt * 10;
   }
@@ -1604,13 +1831,19 @@ export class GameEngine {
           const push = (min - d) / 2;
           const nx = (a.x - b.x) / d;
           const ny = (a.y - b.y) / d;
+          // Tangential nudge so two units meeting head-on slide past each
+          // other instead of shoving straight back into each other's
+          // path every frame and deadlocking in a corridor or gap.
+          const side = (a.id % 2 === 0 ? 1 : -1) * 0.35;
+          const tx = -ny * side;
+          const ty = nx * side;
           if (!a.isStatic) {
-            a.x += nx * push;
-            a.y += ny * push;
+            a.x += nx * push + tx * push;
+            a.y += ny * push + ty * push;
           }
           if (!b.isStatic) {
-            b.x -= nx * push;
-            b.y -= ny * push;
+            b.x -= nx * push + tx * push;
+            b.y -= ny * push + ty * push;
           }
         }
       }
