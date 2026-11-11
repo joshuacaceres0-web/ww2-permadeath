@@ -20,15 +20,18 @@ logger = logging.getLogger(__name__)
 INDEXES: dict[str, list[IndexModel]] = {
     "status_checks": [IndexModel([("timestamp", DESCENDING)], name="timestamp_desc")],
     "game_state": [IndexModel([("save_id", ASCENDING)], name="save_id", unique=True)],
+    # Identity is per save, never global: the old unique index on `id` alone
+    # meant a soldier id used in one save could not exist in another, and the
+    # founding memorial ids ("founding-1"/"founding-2") collided across saves.
     "soldiers": [
-        IndexModel([("id", ASCENDING)], name="id", unique=True),
+        IndexModel([("save_id", ASCENDING), ("id", ASCENDING)], name="save_id_id", unique=True),
         IndexModel([("save_id", ASCENDING), ("status", ASCENDING)], name="save_status"),
     ],
     "memorial": [
         IndexModel([("died_at", DESCENDING)], name="died_at_desc"),
-        IndexModel([("id", ASCENDING)], name="id"),
+        IndexModel([("save_id", ASCENDING), ("id", ASCENDING)], name="save_id_id", unique=True),
     ],
-    "graveyard_decor": [IndexModel([("id", ASCENDING)], name="id", unique=True)],
+    "graveyard_decor": [IndexModel([("save_id", ASCENDING), ("id", ASCENDING)], name="save_id_id", unique=True)],
 }
 
 

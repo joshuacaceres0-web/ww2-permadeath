@@ -29,10 +29,12 @@ export default function Home() {
   const navigate = useNavigate();
   const qc = useQueryClient();
 
-  const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
-  const { data: missions } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
-  const { data: squad } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
+  const { data: state, isLoading: stateLoading, isError: stateError } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
+  const { data: missions, isLoading: missionsLoading, isError: missionsError } = useQuery({ queryKey: ["missions"], queryFn: () => apiGet<Mission[]>("/missions"), retry: false });
+  const { data: squad, isLoading: squadLoading } = useQuery({ queryKey: ["squad"], queryFn: () => apiGet<Soldier[]>("/squad"), retry: false });
   const { data: memorial } = useQuery({ queryKey: ["memorial"], queryFn: () => apiGet<MemorialEntry[]>("/memorial"), retry: false });
+  const loading = stateLoading || missionsLoading;
+  const loadFailed = stateError || missionsError;
 
   const [view, setView] = useState<"list" | "map">(() => {
     try {
@@ -211,12 +213,20 @@ export default function Home() {
                 )}
               </div>
             </div>
+          ) : loading ? (
+            <div className="mt-6 space-y-2" data-testid="war-room-loading">
+              <p className="animate-pixel-blink font-heading text-2xl text-[#8D9A83]">Raising division on the wire…</p>
+            </div>
+          ) : loadFailed ? (
+            <div className="mt-6 space-y-2" data-testid="war-room-error">
+              <p className="font-heading text-2xl text-[#E24A4A]">Could not reach division</p>
+              <p className="font-mono text-xs text-[#5A664F]">
+                The wire is down. Reload the page to try again.
+              </p>
+            </div>
           ) : (
             <div className="mt-6 space-y-2" data-testid="war-room-loading">
-              <p className="font-heading text-2xl text-[#8D9A83]">Awaiting signals…</p>
-              <p className="font-mono text-xs text-[#5A664F]">
-                The wire to division is down. Retry shortly.
-              </p>
+              <p className="font-heading text-2xl text-[#8D9A83]">Raising division on the wire…</p>
             </div>
           )}
         </div>
@@ -263,7 +273,7 @@ export default function Home() {
               );
             })}
             {!missions && (
-              <p className="font-mono text-xs text-[#5A664F]">Campaign map offline…</p>
+              <p className="font-mono text-xs text-[#5A664F]">Raising division on the wire…</p>
             )}
           </CardContent>
         </Card>
@@ -315,7 +325,7 @@ export default function Home() {
                 The line is empty. Hire men or hold nothing.
               </p>
             )}
-            {!squad && <p className="font-mono text-xs text-[#5A664F]">Roster offline…</p>}
+            {!squad && <p className="font-mono text-xs text-[#5A664F]">{squadLoading ? "Raising division on the wire…" : "Could not reach division — reload to try again."}</p>}
             <Link
               to="/barracks"
               data-testid="open-barracks-btn"

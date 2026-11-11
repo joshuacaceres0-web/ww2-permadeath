@@ -110,6 +110,12 @@ class BattleCompleteIn(BaseModel):
     duration_sec: float = 0
     fallen: List[FallenIn] = []
     survivors: List[SurvivorIn] = []
+    # Idempotency key, one per deployment (frontend generates it when a
+    # battle is deployed). The same battle filed twice — retry after a
+    # failed request, a pagehide retreat beacon racing the hud effect,
+    # a reload — must count once. Clients that omit it get the old
+    # behaviour (no dedupe), so existing tests still pass.
+    battle_id: str | None = None
 
 
 class MemorialOut(BaseModel):

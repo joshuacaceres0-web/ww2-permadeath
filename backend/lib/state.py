@@ -102,10 +102,17 @@ async def get_state() -> dict:
         return state
     # A brand-new save slot. Parallel first requests race here, so creation is one atomic
     # upsert (unique index on save_id); only the request that actually inserted seeds the squad.
+    # The upsert filter includes the state id, so a doc for another id can never be mistaken
+    # for this save's state, and seeding is done inside the same lock (see seed_squad).
     async with save_lock():
+        state = await S.game_state.find_one({"id": STATE_ID})
+        if state:
+            return state
         try:
             res = await db.game_state.update_one(
-                {"save_id": sid()}, {"$setOnInsert": {**DEFAULT_STATE, "save_id": sid()}}, upsert=True
+                {"save_id": sid(), "id": STATE_ID},
+                {"$setOnInsert": {**DEFAULT_STATE, "save_id": sid()}},
+                upsert=True,
             )
             created = res.upserted_id is not None
         except DuplicateKeyError:
@@ -145,61 +152,79 @@ async def backfill() -> None:
 
 
 async def seed_squad() -> None:
-    docs = []
-    for name, unit_type, status, kills, missions, quirk, hometown in INITIAL_SQUAD:
-        doc = make_soldier(unit_type, status)
-        rng = random.Random(name)
-        doc.update(
-            {
-                "name": name,
-                "kills": kills,
-                "missions": missions,
-                "xp": kills * 20 + missions * 50,
-                "quirk": quirk,
-                "hometown": hometown,
-                "portrait_seed": rng.getrandbits(31),
-                **make_backstory(name, hometown, quirk, rng),
-            }
-        )
-        docs.append(doc)
-    await S.soldiers.insert_many(docs)
+    """Idempotent by founding name, under the save lock: concurrent first
+    touches, a startup seed, and a wipe can all call this at once, and the
+    old check-then-insert (count == 0, then insert_many, no lock) inserted
+    the 7-man founding squad twice, so one load showed 7 men and the next
+    showed 14, with different RP/mission counts underneath. Only founding
+    names that are missing are inserted; hired soldiers are never touched."""
+    async with save_lock():
+        existing = {d["name"] for d in await S.soldiers.find({"name": {"$in": [n for n, *_ in INITIAL_SQUAD]}}).to_list(20)}
+        docs = []
+        for name, unit_type, status, kills, missions, quirk, hometown in INITIAL_SQUAD:
+            if name in existing:
+                continue
+            doc = make_soldier(unit_type, status)
+            rng = random.Random(name)
+            doc.update(
+                {
+                    "name": name,
+                    "kills": kills,
+                    "missions": missions,
+                    "xp": kills * 20 + missions * 50,
+                    "quirk": quirk,
+                    "hometown": hometown,
+                    "portrait_seed": rng.getrandbits(31),
+                    **make_backstory(name, hometown, quirk, rng),
+                }
+            )
+            docs.append(doc)
+        if docs:
+            await S.soldiers.insert_many(docs)
 
 
 async def seed_all() -> None:
     """Idempotent: fills only what is missing. Founding memorial only on a brand-new save,
-    so a full wipe stays wiped across restarts."""
-    await migrate_legacy()
-    brand_new = await S.game_state.find_one({"id": STATE_ID}) is None
-    await get_state()
-    if await S.soldiers.count_documents({}) == 0:
-        await seed_squad()
-    if brand_new and await S.memorial.count_documents({}) == 0:
-        docs = []
-        for i, (name, utype, kills, ops, cause, code, location, died, hometown) in enumerate(INITIAL_MEMORIAL):
-            rng = random.Random(name)
-            info = make_backstory(name, hometown, "Pops", rng)
-            docs.append(
-                {
-                    "id": f"founding-{i + 1}",
-                    "name": name,
-                    "type": utype,
-                    "rank": rank_for(ops),
-                    "kills": kills,
-                    "missions_survived": ops,
-                    "cause": cause,
-                    "mission_code": code,
-                    "died_at": died,
-                    "hometown": hometown,
-                    "unit": info["unit"],
-                    "portrait_seed": rng.getrandbits(31),
-                    "story": (
-                        f"{info['backstory']}\n\n{rank_for(ops)} {name} was killed by {cause_phrase(cause)} "
-                        f"during {code} at {location} — {ops} operations behind him and {kills} confirmed. "
-                        f"His mother kept a blue star in the window until the telegram came."
-                    ),
-                    "grave_x": 0.2 + 0.18 * i,
-                    "grave_y": 0.35,
-                }
-            )
-        await S.memorial.insert_many(docs)
-    await backfill()
+    so a full wipe stays wiped across restarts. Held under the save lock for the
+    whole run, so a startup seed cannot race a first-touch request or a wipe."""
+    async with save_lock():
+        await migrate_legacy()
+        brand_new = await S.game_state.find_one({"id": STATE_ID}) is None
+        await get_state()
+        if await S.soldiers.count_documents({}) == 0:
+            await seed_squad()
+        if brand_new and await S.memorial.count_documents({}) == 0:
+            docs = []
+            for i, (name, utype, kills, ops, cause, code, location, died, hometown) in enumerate(INITIAL_MEMORIAL):
+                rng = random.Random(name)
+                info = make_backstory(name, hometown, "Pops", rng)
+                docs.append(
+                    {
+                        "id": f"founding-{i + 1}",
+                        "name": name,
+                        "type": utype,
+                        "rank": rank_for(ops),
+                        "kills": kills,
+                        "missions_survived": ops,
+                        "cause": cause,
+                        "mission_code": code,
+                        "died_at": died,
+                        "hometown": hometown,
+                        "unit": info["unit"],
+                        "portrait_seed": rng.getrandbits(31),
+                        "story": (
+                            f"{info['backstory']}\n\n{rank_for(ops)} {name} was killed by {cause_phrase(cause)} "
+                            f"during {code} at {location} — {ops} operations behind him and {kills} confirmed. "
+                            f"His mother kept a blue star in the window until the telegram came."
+                        ),
+                        "grave_x": 0.2 + 0.18 * i,
+                        "grave_y": 0.35,
+                    }
+                )
+            # Upsert by fixed id, not blind insert: two saves / two seeds must
+            # never create a second Dale Mercer or Otis Crane in one save.
+            for d in docs:
+                await db.memorial.update_one(
+                    {"save_id": sid(), "id": d["id"]}, {"$setOnInsert": {**d, "save_id": sid()}}, upsert=True
+                )
+        await backfill()

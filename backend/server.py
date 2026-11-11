@@ -25,7 +25,11 @@ from lib.save import clean_save_id, current_save
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     app.state.index_task = asyncio.create_task(ensure_indexes())  # background: a big index build must not block boot
-    asyncio.create_task(seed_all())  # idempotent: state, founding squad, memorial
+    # Seed synchronously, before any request is served. The old background
+    # task raced first-touch requests: seed_all() (no lock, check-then-insert)
+    # and get_state()/wipe() could all seed the founding squad at once,
+    # duplicating it and making a single load show different squads/RP.
+    await seed_all()
     yield
     app.state.index_task.cancel()  # stop a build still running before its client closes
     with suppress(asyncio.CancelledError):

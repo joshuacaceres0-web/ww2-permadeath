@@ -24,6 +24,15 @@ export default function Battlefield() {
   const qc = useQueryClient();
   const engineRef = useRef<GameEngine | null>(null);
   const endedRef = useRef(false);
+  // One id per deployment: the backend files a battle_id only once, so a
+  // retry, a pagehide beacon racing the hud effect, or a reload can never
+  // file the same battle twice (that is how Battles Lost went 1->3 before
+  // a battle was fought, then 3->5 for one defeat).
+  const battleIdRef = useRef<string | null>(null);
+  const newBattleId = () =>
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? crypto.randomUUID()
+      : `battle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [report, setReport] = useState<BattleReport | null>(null);
   const [variant, setVariant] = useState<Variant>("");
@@ -68,6 +77,7 @@ export default function Battlefield() {
   const [deployed, setDeployed] = useState<{ mission: Mission; squad: Soldier[] } | null>(null);
   useEffect(() => {
     if (!deployed && liveMission && activeSquad.length && !state?.campaign_complete) {
+      battleIdRef.current = newBattleId();
       setDeployed({ mission: liveMission, squad: activeSquad });
     }
   }, [deployed, liveMission, activeSquad, state?.campaign_complete]);
@@ -101,7 +111,7 @@ export default function Battlefield() {
   hudRef.current = hud;
 
   const fileReport = useMutation({
-    mutationFn: (r: BattleReport) => apiPost<BattleResult>("/battle/complete", reportBody(r)),
+    mutationFn: (r: BattleReport) => apiPost<BattleResult>("/battle/complete", reportBody(r, battleIdRef.current)),
     onSuccess: (res) => {
       qc.invalidateQueries({ queryKey: ["state"] });
       qc.invalidateQueries({ queryKey: ["squad"] });
@@ -126,11 +136,17 @@ export default function Battlefield() {
   }, [hud]);
 
   // Leaving mid-battle (navigation or closing the tab) counts as a retreat — the dead stay dead.
+  // Only pagehide files it, never unmount cleanup: the old cleanup called
+  // retreatBeacon() on every unmount, so a React remount or a navigation
+  // away from a battle that had not started yet still filed a defeat.
+  // And a battle that never started (elapsed 0 — still in briefing, or
+  // stuck at the rotate screen before BEGIN THE ASSAULT) files nothing:
+  // deployments stuck at the rotate screen used to count as lost battles.
   useEffect(() => {
     const retreatBeacon = () => {
       const h = hudRef.current;
       const eng = engineRef.current;
-      if (!eng || !h || h.briefing || endedRef.current) return;
+      if (!eng || !h || h.briefing || (h.elapsed ?? 0) <= 0 || endedRef.current) return;
       endedRef.current = true;
       eng.retreat();
       const r = eng.getReport();
@@ -139,7 +155,7 @@ export default function Battlefield() {
         method: "POST",
         keepalive: true,
         headers: { "Content-Type": "application/json", "X-Save-Id": saveId() },
-        body: JSON.stringify(reportBody(r)),
+        body: JSON.stringify(reportBody(r, battleIdRef.current)),
       }).then(() => {
         qc.invalidateQueries({ queryKey: ["state"] });
         qc.invalidateQueries({ queryKey: ["squad"] });
@@ -149,7 +165,6 @@ export default function Battlefield() {
     window.addEventListener("pagehide", retreatBeacon);
     return () => {
       window.removeEventListener("pagehide", retreatBeacon);
-      retreatBeacon();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -580,7 +595,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function reportBody(r: BattleReport) {
+function reportBody(r: BattleReport, battleId: string | null) {
   const stats = (x: { damageTaken: number; healed: number; heavyKills: number; officerKills: number }) => ({
     damage_taken: x.damageTaken,
     healed: x.healed,
@@ -591,6 +606,7 @@ function reportBody(r: BattleReport) {
     mission_id: r.missionId,
     victory: r.victory,
     duration_sec: r.durationSec,
+    battle_id: battleId ?? undefined,
     fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
     survivors: r.survivors.map((v) => ({ soldier_id: v.soldierId, kills: v.kills, ...stats(v) })),
   };

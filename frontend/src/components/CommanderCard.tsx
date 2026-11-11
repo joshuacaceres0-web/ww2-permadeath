@@ -32,7 +32,7 @@ export default function CommanderCard({ state }: { state: GameState | undefined 
   if (!state) {
     return (
       <div className="border border-[#2E3628] bg-[#1A1D17] p-4 font-mono text-xs text-[#5A664F]" data-testid="commander-card">
-        Commander dossier offline…
+        Commander dossier loading…
       </div>
     );
   }
@@ -105,8 +105,8 @@ export default function CommanderCard({ state }: { state: GameState | undefined 
       </div>
       <div className="mt-3 grid grid-cols-3 gap-1.5 font-mono text-[10px]">
         <div className="border border-[#2E3628] p-2" data-testid="commander-unlock-squad">
-          <p className="uppercase tracking-[0.15em] text-[#8D9A83]">Squad</p>
-          <p className="text-sm text-[#E3E7DC]">{state.max_squad} men</p>
+          <p className="uppercase tracking-[0.15em] text-[#8D9A83]">Squad max</p>
+          <p className="text-sm text-[#E3E7DC]">{state.max_squad} max</p>
         </div>
         <div className="border border-[#2E3628] p-2" data-testid="commander-unlock-discount">
           <p className="uppercase tracking-[0.15em] text-[#8D9A83]">Hire cost</p>

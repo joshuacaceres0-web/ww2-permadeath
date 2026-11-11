@@ -21,7 +21,7 @@ from lib.save import S, save_lock, sid
 from lib.gen import XP_PER_KILL, XP_PER_MISSION, commander_level, COMMANDER_RANKS, make_epitaph, rank_for
 from lib.medals import NAMES, award
 from lib.missions import mission_by_index, mission_list
-from lib.state import DEFAULT_STATE, STATE_ID, career_wins, get_state, seed_all, seed_squad, state_out
+from lib.state import DEFAULT_STATE, STATE_ID, career_wins, get_state, seed_squad, state_out
 
 router = APIRouter()
 
@@ -84,7 +84,34 @@ async def battle_reinforce(input: ReinforceIn):
 
 @router.post("/battle/complete", response_model=BattleResultOut)
 async def battle_complete(input: BattleCompleteIn):
+    # The whole filing is serialised per save: two concurrent POSTs for the
+    # same battle (hud effect + pagehide beacon, or a retry) used to both
+    # read the pre-battle state, both increment battles_won/lost, both
+    # advance the mission and both pay the reward — Battles Lost went 1->3
+    # before a battle was fought, then 3->5 for one defeat.
+    async with save_lock():
+        return await _battle_complete_locked(input)
+
+
+async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
     state = await get_state()
+    # Idempotency: a battle_id already filed returns the current result
+    # as a no-op, without touching RP, mission, wins/losses or the
+    # memorial. This also stops a second filing overwriting last_battle
+    # with an empty fallen list (the "No men lost" start-menu bug).
+    if input.battle_id:
+        filed = state.get("filed_battles") or []
+        if input.battle_id in filed:
+            return BattleResultOut(
+                requisition=state["requisition"],
+                mission_index=state["mission_index"],
+                campaign_complete=state["campaign_complete"],
+                memorial_names=[],
+                promotions=[],
+                medals_awarded=[],
+                commander_promoted=False,
+                commander_rank=COMMANDER_RANKS[commander_level(career_wins(state)) - 1],
+            )
     if state["campaign_complete"]:
         raise HTTPException(status_code=409, detail="Campaign already complete")
     mission = mission_by_index(state["mission_index"])
@@ -107,26 +134,31 @@ async def battle_complete(input: BattleCompleteIn):
         new_medals = award(fallen, doc["type"], False, input.victory, False, doc.get("medals", []))
         for m in new_medals:
             medals_awarded.append(f"{doc['name']} — {NAMES[m]} (posthumous)")
-        await S.memorial.insert_one(
-            {
-                "id": doc["id"],
-                "name": doc["name"],
-                "type": doc["type"],
-                "rank": rank_for(doc.get("missions", 0)),
-                "kills": kills,
-                "missions_survived": doc.get("missions", 0),
-                "cause": cause,
-                "mission_code": mission.code,
-                "died_at": now,
-                "unit": doc.get("unit", ""),
-                "hometown": doc.get("hometown", ""),
-                "portrait_seed": doc.get("portrait_seed", 0),
-                "medals": doc.get("medals", []) + new_medals,
-                "story": make_epitaph(doc, cause, mission.code, mission.location, kills),
-                "grave_x": None,
-                "grave_y": None,
-            }
-        )
+        # Guard against a duplicate memorial entry for the same soldier:
+        # a re-filed report (or a double-seeded roster) must never put
+        # Chester Pruitt on the wall twice.
+        existing = await S.memorial.find_one({"id": doc["id"]})
+        if not existing:
+            await S.memorial.insert_one(
+                {
+                    "id": doc["id"],
+                    "name": doc["name"],
+                    "type": doc["type"],
+                    "rank": rank_for(doc.get("missions", 0)),
+                    "kills": kills,
+                    "missions_survived": doc.get("missions", 0),
+                    "cause": cause,
+                    "mission_code": mission.code,
+                    "died_at": now,
+                    "unit": doc.get("unit", ""),
+                    "hometown": doc.get("hometown", ""),
+                    "portrait_seed": doc.get("portrait_seed", 0),
+                    "medals": doc.get("medals", []) + new_medals,
+                    "story": make_epitaph(doc, cause, mission.code, mission.location, kills),
+                    "grave_x": None,
+                    "grave_y": None,
+                }
+            )
         await S.soldiers.delete_one({"id": fallen.soldier_id})
         memorial_names.append(doc["name"])
 
@@ -158,28 +190,28 @@ async def battle_complete(input: BattleCompleteIn):
     if input.victory:
         mission_index = min(mission_index + 1, len(mission_list()))
         campaign_complete = mission_index >= len(mission_list())
-    await S.game_state.update_one(
-        {"id": STATE_ID},
-        {
-            "$set": {
-                "mission_index": mission_index,
-                "campaign_complete": campaign_complete,
-                "career_wins": career_wins(state) + (1 if input.victory else 0),
-                "last_battle": {
-                    "mission_code": mission.code,
-                    "victory": input.victory,
-                    "fallen": [f"{n}" for n in memorial_names],
-                    "survivors": len(input.survivors),
-                    "at": now,
-                },
-            },
-            "$inc": {
-                "requisition": mission.reward if input.victory else 0,
-                "battles_won": 1 if input.victory else 0,
-                "battles_lost": 0 if input.victory else 1,
+    state_update: dict = {
+        "$set": {
+            "mission_index": mission_index,
+            "campaign_complete": campaign_complete,
+            "career_wins": career_wins(state) + (1 if input.victory else 0),
+            "last_battle": {
+                "mission_code": mission.code,
+                "victory": input.victory,
+                "fallen": [f"{n}" for n in memorial_names],
+                "survivors": len(input.survivors),
+                "at": now,
             },
         },
-    )
+        "$inc": {
+            "requisition": mission.reward if input.victory else 0,
+            "battles_won": 1 if input.victory else 0,
+            "battles_lost": 0 if input.victory else 1,
+        },
+    }
+    if input.battle_id:
+        state_update["$addToSet"] = {"filed_battles": input.battle_id}
+    await S.game_state.update_one({"id": STATE_ID}, state_update)
     return BattleResultOut(
         requisition=state["requisition"] + (mission.reward if input.victory else 0),
         mission_index=mission_index,
@@ -199,7 +231,7 @@ async def wipe_everything(input: WipeIn):
         raise HTTPException(status_code=400, detail='Type RESET to confirm')
     # Rewrite the save in place (never delete it) so a concurrent read can't re-seed mid-wipe.
     async with save_lock():
-        await db.game_state.replace_one({"save_id": sid()}, {**DEFAULT_STATE, "save_id": sid()}, upsert=True)
+        await db.game_state.replace_one({"save_id": sid(), "id": STATE_ID}, {**DEFAULT_STATE, "save_id": sid()}, upsert=True)
         await S.soldiers.delete_many({})
         await S.memorial.delete_many({})
         await S.graveyard_decor.delete_many({})
@@ -210,23 +242,27 @@ async def wipe_everything(input: WipeIn):
 @router.post("/campaign/reset", response_model=GameStateOut)
 async def reset_campaign():
     """Fresh campaign: state + roster reset. The memorial, graveyard and the commander's
-    career (rank, name) stand forever."""
-    state = await get_state()
-    await S.soldiers.delete_many({})
-    await S.game_state.update_one(
-        {"id": STATE_ID},
-        {
-            "$set": {
-                "last_battle": None,
-                "requisition": 300,
-                "mission_index": 0,
-                "battles_won": 0,
-                "battles_lost": 0,
-                "campaign_complete": False,
-                "career_wins": career_wins(state),
-            }
-        },
-        upsert=True,
-    )
-    await seed_all()
-    return state_out(await get_state())
+    career (rank, name) stand forever. Held under the save lock for the whole
+    reset, so a concurrent first touch cannot re-seed the old squad mid-reset
+    (the old code called seed_all() unlocked, which raced get_state())."""
+    async with save_lock():
+        state = await get_state()
+        await S.soldiers.delete_many({})
+        await S.game_state.update_one(
+            {"id": STATE_ID},
+            {
+                "$set": {
+                    "last_battle": None,
+                    "requisition": 300,
+                    "mission_index": 0,
+                    "battles_won": 0,
+                    "battles_lost": 0,
+                    "campaign_complete": False,
+                    "career_wins": career_wins(state),
+                    "filed_battles": [],
+                }
+            },
+            upsert=True,
+        )
+        await seed_squad()
+        return state_out(await get_state())

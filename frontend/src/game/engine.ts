@@ -515,7 +515,12 @@ export class GameEngine {
     this.explored = new Uint8Array(COLS * ROWS);
 
     this.spawnAllies(squad, rng, commanderBonus);
-    this.spawnNpcAllies(2 + Math.min(3, mission.index), rng);
+    // 2nd Platoon: exactly 3 weak allies, so they support the fight but
+    // can never clear a wave on their own — in the Emergent play test
+    // Wave 1 was cleared entirely by them while the player's squad stood
+    // idle and fired nothing. The real count was 2 + min(3, mission.index),
+    // i.e. 2-5; the design decision here is a fixed 3, weak.
+    this.spawnNpcAllies(3, rng);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -651,9 +656,10 @@ export class GameEngine {
   }
 
   private spawnNpcAllies(n: number, rng: () => number) {
-    const types: UnitTypeId[] = ["rifleman", "rifleman", "mg", "rifleman", "at"];
+    // Weak riflemen only: the old types list gave the NPCs an MG and an AT
+    // gun at full damage, so they could win a wave on their own.
     for (let i = 0; i < n; i++) {
-      this.addNpc(types[i % types.length], 90 + rng() * 80, 120 + rng() * (MAP_H - 240), i, rng());
+      this.addNpc("rifleman", 90 + rng() * 80, 120 + rng() * (MAP_H - 240), i, rng(), true);
     }
   }
 
@@ -676,17 +682,22 @@ export class GameEngine {
     this.dirty = true;
   }
 
-  private addNpc(type: UnitTypeId, px: number, py: number, i: number, r: number) {
+  private addNpc(type: UnitTypeId, px: number, py: number, i: number, r: number, weak = false) {
     {
       const spec = UNIT_TYPES[type];
       const [cx, cy] = nearestOpen(this.blocked, Math.floor(Math.max(12, Math.min(MAP_W - 12, px)) / CELL), Math.floor(Math.max(12, Math.min(MAP_H - 12, py)) / CELL));
       const SURN = ["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs", "Delgado", "Novak", "Pruitt", "Lindqvist", "O'Hara", "Tasker", "Wexler"];
+      // Weak NPCs (2nd Platoon): half damage, 70% health, slower and
+      // shorter vision, so they support the fight instead of winning it
+      // alone. Paid reinforcements call addNpc without `weak` and keep
+      // full stats.
+      const hp = weak ? Math.round(spec.hp * 0.7) : spec.hp;
       this.units.push({
         id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
         name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${SURN[i % SURN.length]}`,
         rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
-        hp: spec.hp, maxHp: spec.hp, speed: spec.speed * 0.9, range: spec.range, vision: spec.vision,
-        dmg: spec.dmg, fireInterval: spec.fireInterval * 1.1, spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
+        hp, maxHp: hp, speed: spec.speed * (weak ? 0.85 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.8 : 1),
+        dmg: spec.dmg * (weak ? 0.5 : 1), fireInterval: spec.fireInterval * (weak ? 1.6 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
@@ -1339,10 +1350,11 @@ export class GameEngine {
               if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
             }
           }
-        } else if (u.npc) {
-          this.chaseTo(u, MAP_W - 200, MAP_H / 2, dt); // push east until contact
-          moving = true;
         }
+        // No prey: NPCs hold position instead of pushing east blind into
+        // the next wave. The old push-east made 2nd Platoon meet Wave 1
+        // in the middle and clear it alone while the player's squad
+        // stood idle at the west edge.
       } else if (u.side === "allies" && attackOrder && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
         this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
         moving = true;
@@ -1386,10 +1398,14 @@ export class GameEngine {
           const ty = prey.y + (Math.random() - 0.5) * 110;
           u.shootT = 0.35;
           this.projectiles.push({
-            x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0, dur: 1.6, side: "axis", dmg: u.dmg, aoe: 62,
+            x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0, dur: 2.4, side: "axis", dmg: u.dmg, aoe: 62,
             kind: "grenade", sourceType: "mortar", killerId: u.id, smokeT: 0,
           });
-          if (Math.random() < 0.4) this.pushLog("Incoming mortar!", "wave");
+          // Always warn: the old 40% roll meant most shells arrived with
+          // no radio line at all, and there was no visible marker. The
+          // 2.4s flight time is the warning window — drawObjectiveMarkers
+          // draws a pulsing red circle at the impact point for its whole flight.
+          this.pushLog("Incoming mortar!", "wave");
         }
       } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && this.los(u, focus)) {
         const interval = u.fireInterval * aura;
@@ -2188,6 +2204,93 @@ export class GameEngine {
     ctx.restore();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // Objective markers and mortar warnings are drawn last, in screen
+    // space, so the fog of war can never hide them — the MG42 and mortar
+    // used to sit in the dark east side with nothing pointing at them.
+    this.drawObjectiveMarkers(ctx);
+  }
+
+  /** Permanent objective markers for key enemies, plus a pulsing red
+   * warning circle under every incoming mortar shell for its whole
+   * 2.4s flight. Markers off-screen become edge arrows. */
+  private drawObjectiveMarkers(ctx: CanvasRenderingContext2D) {
+    const rect = this.canvas.getBoundingClientRect();
+    const dpr = this.canvas.width / Math.max(1, rect.width);
+    const { s, ox, oy } = this.view;
+    const W = rect.width;
+    const H = rect.height;
+    const toScreen = (x: number, y: number) => ({
+      x: ox + (x - this.cam.x) * s,
+      y: oy + (y - this.cam.y) * s,
+    });
+    const onScreen = (p: { x: number; y: number }) => p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H;
+
+    // Mortar warning: pulsing red circle at the shell's impact point.
+    for (const p of this.projectiles) {
+      if (p.sourceType !== "mortar") continue;
+      const sp = toScreen(p.tx, p.ty);
+      const r = Math.max(10, p.aoe * s);
+      const pulse = 0.55 + 0.35 * Math.sin(this.elapsed * 10);
+      ctx.fillStyle = `rgba(226,74,74,${0.14 * pulse + 0.06})`;
+      ctx.beginPath();
+      ctx.arc(sp.x * dpr, sp.y * dpr, r * dpr, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(226,74,74,${pulse})`;
+      ctx.lineWidth = Math.max(2, 2 * dpr);
+      ctx.beginPath();
+      ctx.arc(sp.x * dpr, sp.y * dpr, r * dpr, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = `rgba(255,120,120,${pulse})`;
+      ctx.font = `bold ${Math.max(12, 13 * dpr)}px sans-serif`;
+      ctx.textAlign = "center";
+      ctx.fillText("!", sp.x * dpr, sp.y * dpr + 4 * dpr);
+    }
+
+    // Objective markers: SS officer, MG42 bunker, mortar team, flak gun.
+    const targets = this.units.filter(
+      (u) => u.alive && u.side === "axis" && u.enemyType && ["officer", "mg42", "mortar", "flak"].includes(u.enemyType)
+    );
+    for (const u of targets) {
+      const sp = toScreen(u.x, u.y);
+      const label = u.enemyType === "officer" ? "SS OFFICER" : u.enemyType === "mg42" ? "MG42" : u.enemyType === "mortar" ? "MORTAR" : "FLAK";
+      if (onScreen(sp)) {
+        const cx = sp.x * dpr;
+        const cy = sp.y * dpr;
+        const r = Math.max(8, 10 * dpr);
+        ctx.fillStyle = "rgba(226,74,74,0.95)";
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - r);
+        ctx.lineTo(cx + r, cy);
+        ctx.lineTo(cx, cy + r);
+        ctx.lineTo(cx - r, cy);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = "#FFF0B0";
+        ctx.font = `bold ${Math.max(10, 11 * dpr)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText(label, cx, cy - r - 4 * dpr);
+      } else {
+        // Off-screen: clamp to the edge and point at it.
+        const ex = Math.max(18, Math.min(W - 18, sp.x));
+        const ey = Math.max(18, Math.min(H - 18, sp.y));
+        const ang = Math.atan2(sp.y - ey, sp.x - ex);
+        ctx.save();
+        ctx.translate(ex * dpr, ey * dpr);
+        ctx.rotate(ang);
+        ctx.fillStyle = "rgba(226,74,74,0.95)";
+        ctx.beginPath();
+        ctx.moveTo(12 * dpr, 0);
+        ctx.lineTo(-8 * dpr, -8 * dpr);
+        ctx.lineTo(-8 * dpr, 8 * dpr);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+        ctx.fillStyle = "rgba(255,240,176,0.95)";
+        ctx.font = `bold ${Math.max(10, 11 * dpr)}px sans-serif`;
+        ctx.textAlign = "center";
+        ctx.fillText(label, ex * dpr, (ey + 20) * dpr);
+      }
+    }
   }
 
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {

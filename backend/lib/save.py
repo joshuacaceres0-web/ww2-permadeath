@@ -23,14 +23,47 @@ def clean_save_id(raw: str | None) -> str:
 
 
 _locks: dict[str, "asyncio.Lock"] = {}
+_lock_holders: dict[str, tuple[object, int]] = {}
 
 
-def save_lock() -> "asyncio.Lock":
-    """Serialises create/wipe of one save (single uvicorn process)."""
-    key = sid()
-    if key not in _locks:
-        _locks[key] = asyncio.Lock()
-    return _locks[key]
+class _ReentrantSaveLock:
+    """An asyncio lock that is re-entrant for the task that already holds it.
+
+    Seeding nests: seed_all() -> get_state() -> seed_squad(), and each of
+    those takes the save lock. A plain asyncio.Lock would deadlock on the
+    second acquire in the same task, so re-entry by the owning task just
+    bumps a depth counter; a different task still waits its turn."""
+
+    def __init__(self, key: str):
+        self._key = key
+
+    async def __aenter__(self):
+        task = asyncio.current_task()
+        holder = _lock_holders.get(self._key)
+        if holder and holder[0] is task:
+            _lock_holders[self._key] = (task, holder[1] + 1)
+            return self
+        lock = _locks.setdefault(self._key, asyncio.Lock())
+        await lock.acquire()
+        _lock_holders[self._key] = (task, 1)
+        return self
+
+    async def __aexit__(self, *exc):
+        task = asyncio.current_task()
+        holder = _lock_holders.get(self._key)
+        if not holder or holder[0] is not task:
+            return False
+        if holder[1] > 1:
+            _lock_holders[self._key] = (task, holder[1] - 1)
+            return False
+        del _lock_holders[self._key]
+        _locks[self._key].release()
+        return False
+
+
+def save_lock() -> "_ReentrantSaveLock":
+    """Serialises create/wipe/seed of one save (single uvicorn process)."""
+    return _ReentrantSaveLock(sid())
 
 
 class _Scoped:
@@ -89,3 +122,11 @@ async def migrate_legacy() -> None:
         await db.game_state.drop_index("id")  # was unique on id alone; now unique per save
     except Exception:
         pass
+    # Drop the old global unique indexes on `id` alone: identity is per save
+    # now (see INDEXES), and a global unique on soldiers.id / decor.id made
+    # the same soldier impossible in two saves.
+    for name in ("soldiers", "memorial", "graveyard_decor"):
+        try:
+            await db[name].drop_index("id")
+        except Exception:
+            pass
