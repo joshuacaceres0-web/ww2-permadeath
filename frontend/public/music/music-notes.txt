@@ -1,0 +1,251 @@
+VANGUARD '44 — Original 16-bit 1940s music samples
+=====================================================
+All 4 tracks are ORIGINAL compositions written for this game.
+No copyrighted 1940s songs, melodies, or samples were used.
+No Glenn Miller, no Andrews Sisters, no existing tunes, and
+Battle Drums is NOT the Battlefield 1942 theme — it is an original
+track in the same feel/style only (driving war drums, heroic
+brass-like fanfare, minor key, march tempo), inspired by, not a
+copy of, Battlefield 1942.
+Composed in Python (stdlib wave + math only), square/triangle waves,
+22050 Hz, 16-bit mono PCM WAV. Each is 16 bars, loopable (ends on tonic,
+total beats = 64), under 60 seconds.
+
+Files (in frontend/public/music/):
+- march-to-normandy.wav
+- swing-in-the-barracks.wav
+- letters-home.wav
+- battle-drums.wav
+
+How to use in the game:
+- Play as audio files from /music/<name>.wav, loop=true, or
+- Port the note sequences below to WebAudio in frontend/src/game/sfx.ts
+  (square = lead, triangle = bass/lead, sine = pads, noise = snare/hat).
+  Note format below: Note:Beats, R = rest. Bar lines | separate bars.
+
+------------------------------------------------------------
+1. MARCH TO NORMANDY — v2 (redone darker, 2026-11-10)
+File: march-to-normandy.wav — 40.00 s, 22050 Hz, 16-bit mono
+Key: D minor | Time: 4/4 | BPM: 96 | Bars: 16 | Beats: 64
+Use: battle / Overlord, marching in
+Sound: low square-wave lead (D4-A4, half notes, rests), low sine minor
+pads + drone, low triangle bass (root beat 1, fifth beat 3), sparse
+muted drums (kick beat 1 only, snare beat 3 only, quiet). No bright
+major lift, no high rising motif — heavy, somber, tense.
+What changed vs v1: C major 120 BPM -> D minor 96 BPM, lead dropped
+an octave-ish (C5-G5 -> D4-A4), long half notes instead of bright
+quarter-note runs, drums cut back, minor pads added.
+
+Lead melody (Note:Beats, half = 2 beats, whole = 4):
+Bar 1:  D4:2 A4:2 | Bar 2:  Bb4:2 A4:2
+Bar 3:  F4:2 G4:2 | Bar 4:  A4:4
+Bar 5:  D4:2 F4:2 | Bar 6:  A4:2 Bb4:2
+Bar 7:  C5:2 Bb4:2 | Bar 8:  A4:4
+Bar 9:  D5:2 C5:2 | Bar 10: Bb4:2 A4:2
+Bar 11: G4:2 F4:2 | Bar 12: E4:2 F4:2
+Bar 13: D4:2 A4:2 | Bar 14: Bb4:2 C5:2
+Bar 15: D5:2 C5:1 Bb4:1 | Bar 16: A4:2 D4:2
+
+Pad chords per bar (sine, whole bar, quiet):
+Dm, Bb, F, Am, Dm, Bb, F, Am, Dm, Bb, Gm, Am, Dm, Bb, Gm, Dm
+Dm = D3 F3 A3 | Bb = Bb2 D3 F3 | F = F3 A3 C4 | Am = A2 C3 E3 | Gm = G2 B2 D3
+
+Bass roots per bar (triangle, low):
+D2, Bb2, F2, A2, D2, Bb2, F2, A2, D2, Bb2, G2, A2, D2, Bb2, G2, D2
+------------------------------------------------------------
+2. SWING IN THE BARRACKS — v2 (redone darker, 2026-11-10)
+File: swing-in-the-barracks.wav — 34.91 s, 22050 Hz, 16-bit mono
+Key: D minor | Time: 4/4, swung 8ths | BPM: 110 | Bars: 16 | Beats: 64
+Use: War Room / Barracks, between battles
+Sound: low square lead (D4-A4 range) + harmony a minor 3rd below,
+triangle walking bass in minor, muted hat every beat, snare 2 & 4
+quiet, soft kick beat 1 only. Swung but weary / late-night, not happy.
+Swing: each pair of 8th notes = 2/3 beat + 1/3 beat.
+What changed vs v1: F major 140 BPM -> D minor 110 BPM, lead dropped
+to D4-A4 range with many rests, harmony minor 3rd (was major 3rd),
+walking bass in minor, drums muted, no bright Bb/D major lift.
+
+Lead melody (128 eighth notes, in order, R = rest, 8 per bar):
+Bar 1:  D4 R F4 R A4 R D4 R
+Bar 2:  C4 R D4 F4 G4 F4 D4 R
+Bar 3:  Bb3 R D4 R F4 D4 Bb3 R
+Bar 4:  A3 R C4 A3 G3 F3 E3 R
+Bar 5:  D4 R F4 A4 Bb4 A4 F4 D4
+Bar 6:  C4 D4 C4 Bb3 A3 G3 A3 R
+Bar 7:  Bb3 R D4 R F4 R A4 R
+Bar 8:  G4 F4 D4 C4 Bb3 A3 G3 R
+Bar 9:  D4 R F4 R A4 R D4 F4
+Bar 10: Bb4 A4 G4 F4 E4 F4 G4 R
+Bar 11: F4 R A4 F4 D4 C4 Bb3 A3
+Bar 12: G3 A3 Bb3 C4 D4 C4 Bb3 R
+Bar 13: D4 F4 A4 Bb4 C5 Bb4 A4 F4
+Bar 14: G4 F4 D4 C4 Bb3 A3 Bb3 R
+Bar 15: D4 R F4 G4 A4 G4 F4 D4
+Bar 16: D4 R R R R R R R
+
+Walking bass (4 quarter notes per bar, minor):
+Bar 1:  D3 F3 A3 F3 | Bar 2:  D3 C3 Bb2 C3
+Bar 3:  Bb2 D3 F3 D3 | Bar 4:  A2 C3 E3 C3
+Bar 5:  D3 F3 A3 F3 | Bar 6:  C3 Bb2 A2 G2
+Bar 7:  Bb2 D3 F3 D3 | Bar 8:  G2 Bb2 D3 Bb2
+Bar 9:  D3 F3 A3 F3 | Bar 10: Bb2 D3 F3 D3
+Bar 11: F3 A3 C4 A3 | Bar 12: G2 A2 Bb2 C3
+Bar 13: D3 F3 A3 Bb3 | Bar 14: G2 Bb2 D3 Bb2
+Bar 15: A2 C3 E3 G3 | Bar 16: D3 A2 D3 A2
+------------------------------------------------------------
+3. LETTERS HOME
+File: letters-home.wav — 54.86 s, 22050 Hz, 16-bit mono
+Key: A minor | Time: 4/4 | BPM: 70 | Bars: 16 | Beats: 64
+Use: start menu / Memorial, slow and somber
+Sound: triangle lead with gentle vibrato, soft sine/triangle pads
+(whole-bar chords), soft sine octave below lead.
+
+Lead melody (Note:Beats, half = 2 beats, whole = 4):
+Bar 1:  A4:2 C5:2 | Bar 2:  E5:2 D5:2
+Bar 3:  C5:2 B4:2 | Bar 4:  A4:4
+Bar 5:  E4:2 G4:2 | Bar 6:  A4:2 B4:2
+Bar 7:  C5:2 D5:2 | Bar 8:  E5:4
+Bar 9:  A5:2 G5:2 | Bar 10: E5:2 D5:2
+Bar 11: C5:2 B4:2 | Bar 12: A4:4
+Bar 13: E5:2 D5:2 | Bar 14: C5:2 B4:2
+Bar 15: A4:2 G4:2 | Bar 16: A4:4
+
+Pad chords per bar (sine, whole bar):
+Am, Am, F, Em, Am, Am, F, Em, Am, F, C, Em, F, Em, Am, Am
+Am = A3 C4 E4 | F = F3 A3 C4 | C = C3 E3 G3 | Em = E3 G3 B3
+
+------------------------------------------------------------
+4. BATTLE DRUMS — new, inspired by Battlefield 1942 feel, NOT a copy
+File: battle-drums.wav — 28.24 s, 22050 Hz, 16-bit mono
+Key: D minor | Time: 4/4 | BPM: 136 | Bars: 16 | Beats: 64
+Use: battle starting / army advancing, intense combat
+Sound: deep synthesized war drums front (sine kick 120->45 Hz,
+noise snare, low toms), low D-minor drone underneath, plus a
+simple ORIGINAL brass-like square-wave fanfare motif on top
+(D-F-A-D, call/response, long notes) — not the Battlefield 1942
+notes/melody. No bright melody, no upbeat major tune, just drums,
+tense, driving.
+Note: 16 bars at 136 BPM = 28.24 s (64 beats x 0.441 s/beat).
+
+Drum pattern per bar (beats 1-4):
+Base every bar: Kick beat 1, Snare beat 2, Kick beat 3, Snare beat 4,
+hat every 8th note.
+Even bars: extra Kick on the & of 3.
+Bars 4, 8, 12: extra Kick on the & of 1.
+Bar 8: tom fill beats 3-4 (130 Hz, then 98 Hz).
+Bar 12: tom hit beat 3 (110 Hz).
+Bar 16: snare roll (8 hits, rising) + low tom 82 Hz on & of 4,
+ending on beat 1 of the loop.
+
+Brass-like fanfare motif (square wave, Note:StartBeat:Beats):
+D4:0:2 F4:2:2 A4:4:2 D5:6:2 | C5:8:2 Bb4:10:2 A4:12:4
+D4:16:2 F4:18:2 A4:20:2 D5:22:2 | C5:24:2 A4:26:2 G4:28:2 A4:30:2
+D4:32:2 F4:34:2 A4:36:2 D5:38:2 | D5:40:1 C5:41:1 Bb4:42:1 A4:43:1
+G4:44:2 A4:46:2 Bb4:48:2 A4:50:2 | D4:52:2 F4:54:2 A4:56:2 D5:58:2
+C5:60:2 A4:62:2 (ends on A4, loop returns to D4)
+Harmony: a 3rd below the lead, quieter, same rhythm.
+Drone: D2 (73.42 Hz) + A2 (110 Hz) sine, quiet, whole track.
+
+------------------------------------------------------------
+Looping: all 4 end on the tonic (D / D / A / D) and start on the tonic,
+so looping the WAV seamlessly returns to bar 1.
+Generator script (not in the repo): /tmp/gen_music.py
+Verified: ffprobe + Python wave — PCM s16le, 22050 Hz, mono,
+durations 40.00 / 34.91 / 54.86 / 28.24 s (v2 for tracks 1-2, track 3 unchanged, track 4 new), peak levels non-silent.
+
+------------------------------------------------------------
+V3 — BETTER SOUND (2026-11-10, rebuilt from scratch)
+All 4 tracks overwritten as v3, same names / roles / BPM / key /
+melodies as v2, but with richer synthesis:
+- Multiple detuned oscillators per note (sine + detuned sine +
+  soft square + octave), not a single harsh square wave.
+- Attack/decay/sustain envelopes, vibrato on leads, dynamics
+  (downbeats louder, passing notes softer).
+- Simple echo / reverb tail: delayed quiet copies at 0.18s (22%)
+  and 0.36s (10%), so it does not sound dry.
+- Fuller arrangement: lead + harmony + bass + low string-like
+  pads/chords with proper voice leading, not just root notes.
+- Brass-like swells (slow 0.25s attack, harmonic stack) for
+  march fanfare and Battle Drums fanfare.
+- Better drums: layered kick (sine 120->45 Hz drop + click),
+  snare (noise + 190 Hz tone), toms with pitch drop, hats
+  with decay, not just noise bursts.
+- Generator: /tmp/gen_music_v3.py (Python stdlib only).
+- Verified v3 with ffprobe + python wave: all PCM s16le,
+  22050 Hz, mono, 16-bit, loopable 16 bars / 64 beats,
+  under 60s, non-silent:
+  letters-home.wav 54.86s, 70 BPM, A minor, RMS 7502
+  march-to-normandy.wav 40.00s, 96 BPM, D minor, RMS 3367
+  swing-in-the-barracks.wav 34.91s, 110 BPM, D minor, RMS 3068
+  battle-drums.wav 28.24s, 136 BPM, D minor, RMS 2974
+  (RMS is lower on drum tracks because drums are punchy /
+  transient, not sustained; peaks are all 27851.)
+- Roles: letters-home = Start Menu + Memorial, battle-drums =
+  War Room, swing = Barracks, march = unused for now (ready).
+- All original, no Battlefield 1942 melody, no Glenn Miller,
+  no existing tunes.
+
+------------------------------------------------------------
+V4 — REAL INSTRUMENTS (2026-11-10, rebuilt from scratch)
+All 4 tracks overwritten as v4, same names / roles / BPM / keys /
+melodies / chords as v3 (note sequences in sections 1-4 above are
+unchanged), but with realistic instrument synthesis instead of
+chiptune-style waves. No square-wave leads anywhere.
+- Format: 44100 Hz, STEREO, 16-bit PCM (pcm_s16le), 16 bars / 64 beats,
+  loopable, under 60 s. Stereo width: leads panned slightly off-centre,
+  pads spread wide (L -0.55 / centre / R +0.55), drums and bass centred.
+- Strings: 3 detuned sine-stack voices (+5/-5 cents chorus detune) +
+  2nd harmonic, slow attack (0.18-0.8 s), 5.5 Hz vibrato ramping in,
+  release tails — used for pads and the Letters Home lead.
+- Brass: FM synthesis, carrier + modulator at 1:1 ratio, modulation
+  index 4.5 decaying to 2.2 (breath-like swell), slow attack,
+  detuned second carrier for section chorus — fanfare leads in
+  March and Battle Drums, stabs in Swing.
+- Piano / keys: Karplus-Strong plucked-string synthesis (noise-excited
+  delay line, 0.9962 decay) + sine body with exponential decay —
+  Swing lead + harmony, Letters Home chord arpeggios.
+- Bass: sine + 2nd harmonic, fast attack, exponential pluck decay.
+- Drums: kick = sine 150->45 Hz pitch drop + click transient + low
+  thump; snare = high-passed noise burst + 190 Hz body tone;
+  hats/cymbals = high-passed (differentiated) noise with decay;
+  toms/timpani = sine pitch drop with long decay.
+- Dynamics: downbeats louder than passing notes, per-event velocity,
+  attack/release envelopes on every voice — no flat chiptune volume.
+- Reverb: circular multi-tap stereo echo (0.13 s @ 16%, 0.27 s @ 9%,
+  0.41 s @ 5%) — taps wrap around the loop point so the tail feeds
+  bar 1 and the loop stays seamless.
+- Generator: /tmp/gen_music_v4.py (Python stdlib only: wave, math,
+  audioop for C-speed mixing; no external libs, no samples, no
+  copyrighted songs). v3 files backed up to /tmp/music-v3-backup/.
+- One correction vs v2/v3 notes: the Gm chord is G-Bb-D (the old
+  notes listed G-B-D); v4 uses Bb, as a minor triad requires.
+
+Per-track v4 details (verified with ffprobe + Python wave/audioop):
+- letters-home.wav — 54.86 s, 70 BPM, A minor, 44100 Hz stereo,
+  peak 29162 (-1.0 dB), RMS 7156 (-13.2 dB). Start Menu + Memorial.
+  Strings lead (pan -0.18) + octave-below strings double, string
+  pads (Am/F/Em/C), Karplus-Strong piano chord arpeggios, sine bass
+  roots, soft timpani (A1) on bars 1 and 9. Slow, somber.
+- march-to-normandy.wav — 40.00 s, 96 BPM, D minor, 44100 Hz stereo,
+  peak 29162 (-1.0 dB), RMS 7019 (-13.4 dB). Unused for now, ready.
+  FM brass fanfare lead + minor-3rd brass harmony + string doubling,
+  string pads (Dm/Bb/F/Am/Gm), walking bass roots/fifths, kick beat 1,
+  snare beat 3, quiet hats, timpani on bars 1/5/9/13, snare roll
+  into the final bar.
+- swing-in-the-barracks.wav — 34.91 s, 110 BPM, D minor, swung 8ths
+  (2/3 + 1/3 beat), 44100 Hz stereo, peak 29162 (-1.0 dB),
+  RMS 6207 (-14.5 dB). Barracks. Karplus-Strong piano lead + minor-3rd
+  piano harmony, walking bass, soft string pads, FM brass stabs on
+  beats 2 & 4, swung hats, snare 2 & 4, kick beat 1 (+ & of 3 on odd
+  bars), opening cymbal swell. Darker swing, weary / late-night.
+- battle-drums.wav — 28.24 s, 136 BPM, D minor, 44100 Hz stereo,
+  peak 29162 (-1.0 dB), RMS 7478 (-12.8 dB). War Room.
+  Driving layered war drums front (kick/snare/hats/toms/timpani/
+  cymbal, fills bars 8 & 12, snare roll + low tom bar 16), low
+  D2+A2 string drone, Dm string pads per 4-bar phrase, ORIGINAL
+  FM brass fanfare (D-F-A-D call/response) + minor-3rd harmony.
+  Battlefield 1942 feel only — original melody, NOT that theme.
+- Roles: letters-home = Start Menu + Memorial, battle-drums =
+  War Room, swing = Barracks, march = unused for now (ready).
+- All original, no Battlefield 1942 melody, no Glenn Miller,
+  no existing tunes, no sampled recordings.
