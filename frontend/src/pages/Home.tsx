@@ -14,6 +14,7 @@ import CommanderCard from "@/components/CommanderCard";
 import ResetEverything from "@/components/ResetEverything";
 import { RibbonRack } from "@/components/Medals";
 import CampaignMap from "@/components/map/CampaignMap";
+import { useMusic } from "@/game/music";
 
 const VIEW_KEY = "vanguard-warroom-view";
 
@@ -26,6 +27,7 @@ const THREAT_TEXT: Record<string, string> = {
 };
 
 export default function Home() {
+  useMusic("war-room"); // Battle Drums, looped; stops on leaving the War Room.
   const navigate = useNavigate();
   const qc = useQueryClient();
 

@@ -9,6 +9,7 @@ import { UNIT_TYPES } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import Graveyard from "@/components/memorial/Graveyard";
 import { MedalList } from "@/components/Medals";
+import { useMusic } from "@/game/music";
 
 function Story({ text }: { text: string }) {
   return (
@@ -23,6 +24,7 @@ function Story({ text }: { text: string }) {
 }
 
 export default function Memorial() {
+  useMusic("memorial"); // Letters Home, looped, same track as the Start Menu.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data: entries } = useQuery({
     queryKey: ["memorial"],

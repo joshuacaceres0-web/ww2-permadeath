@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { buttonVariants } from "@/components/ui/button";
 import { DEFAULT_SETTINGS, loadSettings, saveSettings, type GameSpeed, type Settings as S, type ShakeLevel } from "@/lib/settings";
 import { menuSfx, onMenuClick, setSfxMuted, setSfxVolume, sfx } from "@/game/sfx";
+import { setMusicEnabled, setMusicMuted, setMusicVolume, useMusic } from "@/game/music";
 
 const SPEEDS: Array<{ v: GameSpeed; label: string }> = [
   { v: 0.75, label: "SLOW" },
@@ -39,6 +40,7 @@ function Choice<T extends string | number>({ name, value, options, onPick }: { n
 }
 
 export default function Settings() {
+  useMusic(null); // No music on Settings (except TEST SOUND).
   const [s, setS] = useState<S>(() => loadSettings());
   const update = (patch: Partial<S>) => {
     const next = { ...s, ...patch };
@@ -46,6 +48,9 @@ export default function Settings() {
     saveSettings(next);
     setSfxVolume(next.volume);
     setSfxMuted(next.muted);
+    setMusicVolume(next.musicVolume);
+    setMusicMuted(next.muted);
+    setMusicEnabled(next.musicEnabled);
   };
   return (
     <div className="min-h-svh bg-[#0D0F0C] px-5 py-8 text-[#E3E7DC] sm:px-12" data-testid="settings-page" onClickCapture={onMenuClick}>
@@ -117,6 +122,43 @@ export default function Settings() {
           >
             ▸ TEST SOUND
           </button>
+        </section>
+
+        <section className="mt-3 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">MUSIC</h2>
+            <button
+              role="switch"
+              aria-checked={s.musicEnabled}
+              data-testid="settings-music-toggle"
+              onClick={() => update({ musicEnabled: !s.musicEnabled })}
+              className={`border-2 px-3 py-2 font-[Silkscreen] text-xs shadow-[2px_2px_0_0_#050605] transition-colors duration-100 ${
+                s.musicEnabled ? "border-[#2E3628] bg-[#121411] text-[#A2B29A]" : "border-[#E24A4A] bg-[#3A1414] text-[#F0B4B4]"
+              }`}
+            >
+              {s.musicEnabled ? "♪ MUSIC ON" : "■ MUSIC OFF"}
+            </button>
+          </div>
+          <p className="font-mono text-sm text-[#8D9A83]">
+            Menu, War Room, Barracks and Memorial only. No music in battle. Mute All above also silences music.
+          </p>
+          <div className="flex items-center justify-between">
+            <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">MUSIC VOLUME</h2>
+            <span className="font-[Silkscreen] text-sm text-[#E5A93C]" data-testid="settings-music-volume-value">
+              {!s.musicEnabled || s.muted || s.musicVolume === 0 ? "MUTE" : `${s.musicVolume}%`}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            step={10}
+            value={s.musicVolume}
+            onChange={(e) => update({ musicVolume: Number(e.target.value) })}
+            data-testid="settings-music-volume-slider"
+            aria-label="Music volume"
+            className="w-full accent-[#E5A93C]"
+          />
         </section>
 
         <button

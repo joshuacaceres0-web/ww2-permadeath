@@ -1,6 +1,7 @@
 // How to Play: the loop in plain words.
 import { Link } from "react-router-dom";
 import { buttonVariants } from "@/components/ui/button";
+import { useMusic } from "@/game/music";
 
 const STEPS: Array<{ n: string; title: string; body: string }> = [
   { n: "01", title: "Lead a 5-man squad", body: "You command five soldiers. Each has a name, a rank and a job — rifleman, medic, machine gunner, sniper or bazooka. Keep them alive and they get better." },
@@ -10,6 +11,7 @@ const STEPS: Array<{ n: string; title: string; body: string }> = [
 ];
 
 export default function HowToPlay() {
+  useMusic(null); // No music on How to Play.
   return (
     <div className="min-h-svh bg-[#0D0F0C] px-5 py-8 text-[#E3E7DC] sm:px-12" data-testid="how-to-play">
       <div className="mx-auto max-w-2xl">

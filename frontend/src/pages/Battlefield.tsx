@@ -15,11 +15,13 @@ import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
 import { UNIT_TYPES } from "@/game/data";
+import { useMusic } from "@/game/music";
 
 const mmss = (t: number) =>
   `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
 
 export default function Battlefield() {
+  useMusic(null); // No music in battle: any menu / War Room / Barracks / Memorial track stops here.
   const navigate = useNavigate();
   const qc = useQueryClient();
   const engineRef = useRef<GameEngine | null>(null);

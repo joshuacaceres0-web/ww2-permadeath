@@ -8,6 +8,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Button } from "@/components/ui/button";
 import StartScene from "@/components/StartScene";
 import { onMenuClick } from "@/game/sfx";
+import { useMusic } from "@/game/music";
 import { apiGet, apiPost } from "@/lib/api";
 import type { GameState, SaveSummary } from "@/lib/types";
 
@@ -15,6 +16,7 @@ const item =
   "pixel-btn group flex w-full items-center justify-between gap-3 border-2 px-4 py-3 text-left font-[Silkscreen] text-sm tracking-wider transition-colors duration-100 sm:text-base";
 
 export default function StartMenu() {
+  useMusic("menu"); // Letters Home, looped; stops on leaving the menu.
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);

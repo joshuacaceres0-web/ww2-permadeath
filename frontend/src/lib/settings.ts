@@ -7,10 +7,12 @@ export interface Settings {
   shake: ShakeLevel;
   volume: number; // 0..100
   muted: boolean; // mutes battle + menu sounds
+  musicVolume: number; // 0..100, separate from SFX volume
+  musicEnabled: boolean; // music on/off, menu / War Room / Barracks / Memorial only
 }
 
 const KEY = "vanguard-settings";
-export const DEFAULT_SETTINGS: Settings = { speed: 1, shake: "full", volume: 60, muted: false };
+export const DEFAULT_SETTINGS: Settings = { speed: 1, shake: "full", volume: 60, muted: false, musicVolume: 50, musicEnabled: true };
 
 export function loadSettings(): Settings {
   try {
@@ -20,6 +22,11 @@ export function loadSettings(): Settings {
       shake: (["off", "low", "full"] as const).includes(raw.shake as ShakeLevel) ? (raw.shake as ShakeLevel) : DEFAULT_SETTINGS.shake,
       volume: typeof raw.volume === "number" ? Math.max(0, Math.min(100, Math.round(raw.volume))) : DEFAULT_SETTINGS.volume,
       muted: raw.muted === true,
+      musicVolume:
+        typeof raw.musicVolume === "number"
+          ? Math.max(0, Math.min(100, Math.round(raw.musicVolume)))
+          : DEFAULT_SETTINGS.musicVolume,
+      musicEnabled: raw.musicEnabled === undefined ? DEFAULT_SETTINGS.musicEnabled : raw.musicEnabled === true,
     };
   } catch {
     return DEFAULT_SETTINGS;

@@ -12,6 +12,7 @@ import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
 import { RANKS, UNIT_TYPES, levelBonus } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
+import { useMusic } from "@/game/music";
 
 const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at"];
 
@@ -32,6 +33,7 @@ function StatBar({ label, pct }: { label: string; pct: number }) {
 }
 
 export default function Barracks() {
+  useMusic("barracks"); // Swing in the Barracks v2, looped; stops on leaving.
   const qc = useQueryClient();
   const [dossier, setDossier] = useState<Soldier | null>(null);
   const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
