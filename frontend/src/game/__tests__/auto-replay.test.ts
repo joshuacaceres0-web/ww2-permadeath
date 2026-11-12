@@ -121,6 +121,12 @@ describe("AUTO replay recorder", () => {
         alive: u.alive,
         kills: u.kills,
         cover: !!u.cover,
+        // Same fields the in-game replay records, so the standalone
+        // viewer shows morale, cover type and medics too.
+        coverType: u.cover ? ((u.cover as { type?: string }).type ?? "light") : null,
+        morale: Math.round(u.morale as number),
+        broken: !!u.broken,
+        medic: u.type === "medic" || u.enemyType === "medic",
       }));
       frames.push({ t, phase: engine.phase, battleState: engine.battleState, wave: (engine.waveIndex as number) + 1, units });
     };
