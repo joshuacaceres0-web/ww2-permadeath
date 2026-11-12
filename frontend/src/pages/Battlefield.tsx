@@ -312,6 +312,17 @@ export default function Battlefield() {
       )}
       {/* CRT status bar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-[#2E3628] bg-[#0D0F0C] px-4 py-2 font-mono text-xs short:flex-nowrap short:gap-2 short:px-2 short:py-1">
+        <Button
+          data-testid="auto-battle-btn"
+          variant="outline"
+          size="xs"
+          onClick={() => engineRef.current?.toggleAutoBattle()}
+          disabled={hud?.briefing || hud?.state !== "active"}
+          className={hud?.autoBattle ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]" : ""}
+          title="Auto Battle: the squad fights on its own. Tap again, or give any order, to take command."
+        >
+          {hud?.autoBattle ? "AUTO ON" : "AUTO"}
+        </Button>
         <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
           {mission.code}
         </span>
@@ -333,6 +344,14 @@ export default function Battlefield() {
             data-testid="paused-banner"
           >
             TACTICAL PAUSE ENGAGED
+          </span>
+        )}
+        {hud?.autoBattle && !hud.briefing && (
+          <span
+            className="border border-[#E5A93C] bg-[#3A2B0E] px-2 py-0.5 font-bold tracking-[0.2em] text-[#FFD97D]"
+            data-testid="auto-battle-banner"
+          >
+            AUTO BATTLE ON — SQUAD FIGHTING ON ITS OWN
           </span>
         )}
         <div className="ml-auto flex items-center gap-2">

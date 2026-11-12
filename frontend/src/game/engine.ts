@@ -250,6 +250,7 @@ export interface HudSnapshot {
   formation: Formation;
   touchBox: boolean;
   reinforcementsLeft: number;
+  autoBattle: boolean;
 }
 
 export interface FallenReport {
@@ -559,6 +560,11 @@ export class GameEngine {
   private stalemateActive = false;
   private phase: "briefing" | "battle" | "over" = "briefing";
   private paused = false;
+  // Auto Battle: when on, the player's squad fights on its own using
+  // the same chase / cover / fire logic as the NPC allies, and manual
+  // orders are off. Any manual order takes command back instantly.
+  private autoBattle = false;
+  private autoAbilityT = 0;
   private battleState: "active" | "victory" | "defeat" = "active";
   private shake = 0;
 
@@ -750,7 +756,48 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  /** Auto Battle: on, the squad fights on its own; off, you have it back. */
+  setAutoBattle(on: boolean) {
+    if (this.phase !== "battle" || this.autoBattle === on) return;
+    this.autoBattle = on;
+    this.autoAbilityT = 0;
+    if (on) {
+      // Hand the men over clean: drop any manual orders and selection,
+      // so no stale move / attack order fights the auto AI.
+      for (const u of this.units) {
+        if (u.side === "allies" && !u.npc) {
+          u.orders = [];
+          u.chase = [];
+          u.attackId = null;
+        }
+      }
+      this.selected = [];
+      this.aimUnitId = null;
+      this.pushLog("AUTO BATTLE — the squad fights on its own. Tap AUTO to take command.", "info");
+    } else {
+      this.pushLog("Manual command — you have the squad.", "info");
+    }
+    this.dirty = true;
+  }
+
+  toggleAutoBattle() {
+    this.setAutoBattle(!this.autoBattle);
+  }
+
+  isAutoBattle() {
+    return this.autoBattle;
+  }
+
+  /** Any manual order takes command back from Auto Battle instantly. */
+  private takeManualControl() {
+    if (!this.autoBattle) return;
+    this.autoBattle = false;
+    this.pushLog("Manual command — you have the squad.", "info");
+    this.dirty = true;
+  }
+
   selectAll() {
+    this.takeManualControl();
     this.selected = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc).map((u) => u.id);
     this.dirty = true;
   }
@@ -765,6 +812,7 @@ export class GameEngine {
 
   startAim(unitId: number) {
     if (this.phase !== "battle") return;
+    this.takeManualControl();
     const u = this.unitById(unitId);
     if (!u || !u.alive || u.abilityCd > 0) return;
     const spec = UNIT_TYPES[u.type].ability;
@@ -839,6 +887,7 @@ export class GameEngine {
   /** Selected men run to the nearest cover facing the enemy. */
   takeCover() {
     if (this.phase !== "battle") return;
+    this.takeManualControl();
     for (const u of this.units) {
       if (!u.alive || !this.selected.includes(u.id)) continue;
       // seekCover only orders to a cover spot the unit can actually
@@ -851,6 +900,7 @@ export class GameEngine {
 
   /** Pick a squad formation; the selected men re-form on their current objective. */
   setFormation(f: Formation) {
+    this.takeManualControl();
     this.formation = f;
     const squad = this.units.filter((u) => u.side === "allies" && u.alive && this.selected.includes(u.id));
     if (this.phase === "battle" && squad.length > 1) {
@@ -999,6 +1049,7 @@ export class GameEngine {
   selectUnit(id: number) {
     const u = this.unitById(id);
     if (!u?.alive) return;
+    this.takeManualControl();
     this.selected = [id];
     this.aimUnitId = null;
     this.dirty = true;
@@ -1043,6 +1094,7 @@ export class GameEngine {
       const idx = parseInt(k, 10) - 1;
       const allies = this.units.filter((u) => u.side === "allies" && !u.npc);
       if (allies[idx]) {
+        this.takeManualControl();
         this.selected = allies[idx].alive ? [allies[idx].id] : [];
         if (allies[idx].alive) this.centerOn(allies[idx].x, allies[idx].y);
         this.aimUnitId = null;
@@ -1204,6 +1256,7 @@ export class GameEngine {
   private issueOrder(x: number, y: number, queue: boolean) {
     const squad = this.units.filter((u) => u.side === "allies" && u.alive && this.selected.includes(u.id));
     if (squad.length === 0) return;
+    this.takeManualControl();
     // Attack order if an enemy is under the cursor.
     let target: Unit | null = null;
     let bestD = 26;
@@ -1302,6 +1355,23 @@ export class GameEngine {
       this.pushLog(`${u.name} fires the tube.`, "info");
     }
     this.dirty = true;
+  }
+
+  private autoUseAbilities() {
+    for (const u of this.units) {
+      if (u.side !== "allies" || u.npc || !u.alive || u.abilityCd > 0) continue;
+      if (u.type === "medic") {
+        const hurt = this.units.some(
+          (a) => a.side === "allies" && a.alive && a.hp < a.maxHp && dist(u.x, u.y, a.x, a.y) <= 130,
+        );
+        if (hurt) this.castAuto(u);
+      } else if (u.type === "sniper" || u.type === "at") {
+        if (this.bestTarget(u, (a, b) => a.maxHp - b.maxHp)) this.castAuto(u);
+      } else if (u.type === "rifleman" || u.type === "mg") {
+        const t = this.autoTarget(u);
+        if (t) this.castGround(u, t.x, t.y);
+      }
+    }
   }
 
   private bestTarget(u: Unit, cmp: (a: Unit, b: Unit) => number): Unit | null {
@@ -1548,6 +1618,18 @@ export class GameEngine {
       }
     }
 
+    // Auto Battle add-on 1: once a second, each squad man uses his
+    // ability on his own — medic heals, sniper / AT pick a target,
+    // rifleman frags and MG barrages the nearest enemy in range.
+    // Guards run first so castAuto never spams "no shot" log lines.
+    if (this.autoBattle) {
+      this.autoAbilityT -= dt;
+      if (this.autoAbilityT <= 0) {
+        this.autoAbilityT = 1;
+        this.autoUseAbilities();
+      }
+    }
+
     // Units.
     for (const u of this.units) {
       if (!u.alive) continue;
@@ -1583,7 +1665,11 @@ export class GameEngine {
           this.moveToward(u, o.x, o.y, dt);
           moving = true;
         }
-      } else if ((u.side === "axis" || u.npc) && !u.isStatic && u.enemyType !== "mortar") {
+      } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc)) && !u.isStatic && u.enemyType !== "mortar") {
+        // Auto Battle core: a player squad man with AUTO on fights the
+        // same way as an NPC ally — chase the nearest enemy when out of
+        // range or without line of sight, else hold and fire, seeking
+        // cover in range. Manual squad men still hold until ordered.
         const prey = this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
@@ -1787,7 +1873,7 @@ export class GameEngine {
       // NPCs/axis when the prey is out of range or has no LOS, but it
       // never runs for a unit whose orders just emptied while it was
       // in cover with a target in range but behind its own cover.
-      if (!u.isStatic && u.cover && (u.npc || u.side === "axis") && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
+      if (!u.isStatic && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
         const prey = this.nearestAlly(u);
         const hasLosTarget = focus && d <= u.range && this.los(u, focus);
         if (prey && !hasLosTarget) {
@@ -2561,6 +2647,7 @@ export class GameEngine {
       formation: this.formation,
       touchBox: this.touchBox,
       reinforcementsLeft: MAX_REINFORCEMENTS - this.reinforcements,
+      autoBattle: this.autoBattle,
     });
   }
 
