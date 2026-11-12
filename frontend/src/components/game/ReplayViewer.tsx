@@ -1,6 +1,40 @@
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import type { BattleReplay } from "@/game/engine";
+import type { BattleReplay, ReplayObstacle } from "@/game/engine";
+
+/** Ruin walls, hedgerows and buildings are built from overlapping
+ * blocker circles on purpose, so a wall reads as one wall in the
+ * game. Drawing every circle separately on the replay map made 169
+ * overlapping pairs look like a mess. Merge any same-kind obstacles
+ * that touch into one cluster and draw one shape per cluster. */
+export function mergeObstacles(obstacles: ReplayObstacle[]) {
+  const parent = obstacles.map((_, i) => i);
+  const find = (i: number): number => (parent[i] === i ? i : (parent[i] = find(parent[i])));
+  for (let i = 0; i < obstacles.length; i++) {
+    for (let j = i + 1; j < obstacles.length; j++) {
+      const a = obstacles[i];
+      const b = obstacles[j];
+      if (a.kind !== b.kind) continue;
+      if (Math.hypot(a.x - b.x, a.y - b.y) < a.r + b.r) {
+        parent[find(i)] = find(j);
+      }
+    }
+  }
+  const groups = new Map<number, ReplayObstacle[]>();
+  obstacles.forEach((o, i) => {
+    const g = groups.get(find(i)) ?? [];
+    g.push(o);
+    groups.set(find(i), g);
+  });
+  return [...groups.values()].map((g) => {
+    const kind = g[0].kind;
+    const minX = Math.min(...g.map((o) => o.x - o.r));
+    const maxX = Math.max(...g.map((o) => o.x + o.r));
+    const minY = Math.min(...g.map((o) => o.y - o.r));
+    const maxY = Math.max(...g.map((o) => o.y + o.r));
+    return { kind, x: (minX + maxX) / 2, y: (minY + maxY) / 2, r: Math.max((maxX - minX) / 2, (maxY - minY) / 2), w: maxX - minX, h: maxY - minY, count: g.length };
+  });
+}
 
 /** Plays back the battle just fought, from the frames the engine
  * recorded every 0.5s. Green = your squad, teal = 2nd Platoon,
@@ -47,14 +81,16 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
       ctx.fillStyle = "#E5A93C";
       ctx.font = "bold 16px monospace";
       ctx.fillText("REPLAY", 12, 24);
-      // Trees, ruins and every other obstacle, exactly where the
-      // engine put them: trees green, ruins grey stone, buildings
-      // brown, hedgerows dark green, wrecks / hedgehogs / pillboxes
-      // dark steel, crates and bushes tan.
-      for (const o of replay.obstacles ?? []) {
+      // Trees, ruins and every other obstacle, merged so overlapping
+      // pieces draw as one shape: trees green, ruins grey stone,
+      // buildings brown, hedgerows dark green, wrecks / hedgehogs /
+      // pillboxes dark steel, crates and bushes tan.
+      for (const o of mergeObstacles(replay.obstacles ?? [])) {
         const x = o.x * sx;
         const y = o.y * sy;
         const r = Math.max(3, o.r * sx);
+        const w = Math.max(3, (o.w * sx) / 2);
+        const h = Math.max(3, (o.h * sy) / 2);
         if (o.kind === "tree") {
           ctx.fillStyle = "#2D5222";
           ctx.beginPath();
@@ -64,22 +100,14 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           ctx.beginPath();
           ctx.arc(x, y, r * 0.45, 0, 7);
           ctx.fill();
-        } else if (o.kind === "ruin") {
-          ctx.fillStyle = "#8C877A";
-          ctx.fillRect(x - r, y - r, r * 2, r * 2);
-          ctx.strokeStyle = "#2A2824";
-          ctx.strokeRect(x - r, y - r, r * 2, r * 2);
-        } else if (o.kind === "building") {
-          ctx.fillStyle = "#5A3A2A";
-          ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        } else if (o.kind === "ruin" || o.kind === "building" || o.kind === "crate" || o.kind === "bush") {
+          ctx.fillStyle = o.kind === "ruin" ? "#8C877A" : o.kind === "building" ? "#5A3A2A" : "#6B5232";
+          ctx.fillRect(x - w, y - h, w * 2, h * 2);
         } else if (o.kind === "hedgerow") {
           ctx.fillStyle = "#2C4A1C";
           ctx.beginPath();
           ctx.arc(x, y, r, 0, 7);
           ctx.fill();
-        } else if (o.kind === "crate" || o.kind === "bush") {
-          ctx.fillStyle = "#6B5232";
-          ctx.fillRect(x - r, y - r, r * 2, r * 2);
         } else {
           ctx.fillStyle = "#3A3E30";
           ctx.beginPath();
