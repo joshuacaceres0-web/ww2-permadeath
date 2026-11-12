@@ -2,6 +2,8 @@
 
 from datetime import datetime, timezone
 from typing import List
+import hashlib
+import json
 
 from fastapi import APIRouter, HTTPException
 from models.models import (
@@ -63,23 +65,39 @@ async def get_missions():
 
 
 REINFORCEMENT_COST = {"rifle": 15, "heavy": 25}
+MAX_REINFORCEMENTS = 3
 
 
 @router.post("/battle/reinforce", response_model=ReinforceOut)
 async def battle_reinforce(input: ReinforceIn):
-    """Spend requisition mid-battle to call in an AI-controlled 2nd Platoon team."""
-    state = await get_state()
-    mission = mission_by_index(state["mission_index"])
-    if state["campaign_complete"] or not mission or mission.id != input.mission_id:
-        raise HTTPException(status_code=409, detail="That mission is not the current operation")
-    cost = REINFORCEMENT_COST[input.kind]
-    res = await S.game_state.update_one(
-        {"id": STATE_ID, "requisition": {"$gte": cost}}, {"$inc": {"requisition": -cost}}
-    )
-    if res.modified_count == 0:
-        raise HTTPException(status_code=402, detail="Insufficient requisition points")
-    after = await get_state()
-    return ReinforceOut(kind=input.kind, cost=cost, requisition=after["requisition"])
+    """Spend requisition mid-battle to call in an AI-controlled 2nd Platoon team.
+
+    The max-3 cap is enforced here, server-side, under the save lock:
+    the old code only checked RP, so a direct API caller could buy
+    unlimited teams (the frontend's MAX_REINFORCEMENTS never reached
+    the server). The counter is per current mission attempt — a new
+    mission, or a filed battle, resets it.
+    """
+    async with save_lock():
+        state = await get_state()
+        mission = mission_by_index(state["mission_index"])
+        if state["campaign_complete"] or not mission or mission.id != input.mission_id:
+            raise HTTPException(status_code=409, detail="That mission is not the current operation")
+        cost = REINFORCEMENT_COST[input.kind]
+        used = state.get("reinforcements_used", 0) if state.get("reinforcements_mission") == input.mission_id else 0
+        if used >= MAX_REINFORCEMENTS:
+            raise HTTPException(status_code=409, detail="No reinforcements left for this operation (max 3)")
+        res = await S.game_state.update_one(
+            {"id": STATE_ID, "requisition": {"$gte": cost}},
+            {
+                "$inc": {"requisition": -cost},
+                "$set": {"reinforcements_used": used + 1, "reinforcements_mission": input.mission_id},
+            },
+        )
+        if res.modified_count == 0:
+            raise HTTPException(status_code=402, detail="Insufficient requisition points")
+        after = await get_state()
+        return ReinforceOut(kind=input.kind, cost=cost, requisition=after["requisition"])
 
 
 @router.post("/battle/complete", response_model=BattleResultOut)
@@ -99,19 +117,40 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
     # as a no-op, without touching RP, mission, wins/losses or the
     # memorial. This also stops a second filing overwriting last_battle
     # with an empty fallen list (the "No men lost" start-menu bug).
+    # Filings without a battle_id get the same protection from a
+    # content fingerprint (bug #14): two identical POSTs — same
+    # mission, result, duration and fallen/survivor lists — are a
+    # retry, not two battles. A genuinely different battle differs in
+    # at least one of those fields, and the frontend always sends a
+    # battle_id anyway, so the fingerprint only affects old / direct
+    # API callers.
     if input.battle_id:
-        filed = state.get("filed_battles") or []
-        if input.battle_id in filed:
-            return BattleResultOut(
-                requisition=state["requisition"],
-                mission_index=state["mission_index"],
-                campaign_complete=state["campaign_complete"],
-                memorial_names=[],
-                promotions=[],
-                medals_awarded=[],
-                commander_promoted=False,
-                commander_rank=COMMANDER_RANKS[commander_level(career_wins(state)) - 1],
-            )
+        filing_key = input.battle_id
+    else:
+        fingerprint = {
+            "mission_id": input.mission_id,
+            "victory": input.victory,
+            "duration_sec": round(input.duration_sec, 1),
+            "fallen": sorted(
+                (f.soldier_id, f.cause or "", f.kills) for f in input.fallen
+            ),
+            "survivors": sorted((s.soldier_id, s.kills) for s in input.survivors),
+        }
+        filing_key = "fp:" + hashlib.sha256(
+            json.dumps(fingerprint, sort_keys=True).encode()
+        ).hexdigest()[:16]
+    filed = state.get("filed_battles") or []
+    if filing_key in filed:
+        return BattleResultOut(
+            requisition=state["requisition"],
+            mission_index=state["mission_index"],
+            campaign_complete=state["campaign_complete"],
+            memorial_names=[],
+            promotions=[],
+            medals_awarded=[],
+            commander_promoted=False,
+            commander_rank=COMMANDER_RANKS[commander_level(career_wins(state)) - 1],
+        )
     if state["campaign_complete"]:
         raise HTTPException(status_code=409, detail="Campaign already complete")
     mission = mission_by_index(state["mission_index"])
@@ -195,6 +234,10 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             "mission_index": mission_index,
             "campaign_complete": campaign_complete,
             "career_wins": career_wins(state) + (1 if input.victory else 0),
+            # A filed battle ends the attempt: the reinforcement counter
+            # resets for the next mission / next attempt (bug #13).
+            "reinforcements_used": 0,
+            "reinforcements_mission": None,
             "last_battle": {
                 "mission_code": mission.code,
                 "victory": input.victory,
@@ -209,8 +252,8 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             "battles_lost": 0 if input.victory else 1,
         },
     }
-    if input.battle_id:
-        state_update["$addToSet"] = {"filed_battles": input.battle_id}
+    if filing_key:
+        state_update["$addToSet"] = {"filed_battles": filing_key}
     await S.game_state.update_one({"id": STATE_ID}, state_update)
     return BattleResultOut(
         requisition=state["requisition"] + (mission.reward if input.victory else 0),

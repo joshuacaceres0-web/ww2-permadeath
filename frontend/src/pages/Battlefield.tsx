@@ -85,10 +85,19 @@ export default function Battlefield() {
   }, [deployed, liveMission, activeSquad, state?.campaign_complete]);
   const mission = deployed?.mission ?? liveMission;
 
-  const mustRotate = touch && portrait && !!hud && !hud.briefing && hud.state === "active";
+  // The old rotate prompt was a fixed full-screen overlay (z-50) that
+  // covered every control the moment a battle started in portrait, and
+  // its GO FULLSCREEN button often did nothing — so on a phone the
+  // controls simply looked gone. It is now a dismissible banner at the
+  // top of the battlefield: the battle pauses while it is up, and
+  // PLAY PORTRAIT ANYWAY dismisses it and resumes with the touch
+  // controls visible.
+  const [rotateDismissed, setRotateDismissed] = useState(false);
+  const mustRotate = touch && portrait && !!hud && !hud.briefing && hud.state === "active" && !rotateDismissed;
   useEffect(() => {
     if (mustRotate) engineRef.current?.setPaused(true);
-  }, [mustRotate]);
+    else if (rotateDismissed) engineRef.current?.setPaused(false);
+  }, [mustRotate, rotateDismissed]);
 
   const reinforce = useMutation({
     mutationFn: (kind: ReinforcementKind) =>
@@ -272,6 +281,35 @@ export default function Battlefield() {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col short:h-svh">
+      {/* Rotate prompt: in-flow at the top, never absolute — the old
+          absolute banner had no positioned ancestor, so it overlaid
+          the status bar and covered RADIO / PAUSE / COVER / RETREAT
+          while mustRotate was up. In-flow it pushes the status bar
+          down instead of covering it, and PLAY PORTRAIT ANYWAY
+          dismisses it. */}
+      {mustRotate && (
+        <div
+          data-testid="rotate-prompt"
+          className="flex flex-wrap items-center justify-center gap-3 border-b border-[#E5A93C] bg-[#0D0F0C]/95 px-4 py-3 text-center"
+        >
+          <RotateCw size={20} className="animate-spin-slow shrink-0 text-[#E5A93C]" />
+          <p className="font-mono text-xs leading-relaxed text-[#E3E7DC]">
+            <span className="font-bold text-[#F0F5EB]">TURN YOUR PHONE SIDEWAYS</span> — the battle plays in
+            landscape and is paused until you rotate.
+          </p>
+          <Button data-testid="rotate-lock-btn" variant="outline" size="sm" onClick={goLandscape}>
+            GO FULLSCREEN SIDEWAYS
+          </Button>
+          <Button
+            data-testid="rotate-play-portrait-btn"
+            variant="outline"
+            size="sm"
+            onClick={() => setRotateDismissed(true)}
+          >
+            PLAY PORTRAIT ANYWAY
+          </Button>
+        </div>
+      )}
       {/* CRT status bar */}
       <div className="flex flex-wrap items-center gap-3 border-b border-[#2E3628] bg-[#0D0F0C] px-4 py-2 font-mono text-xs short:flex-nowrap short:gap-2 short:px-2 short:py-1">
         <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
@@ -384,8 +422,14 @@ export default function Battlefield() {
             LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-8: SOLDIER · Q: ABILITY · C: COVER · F: FORMATION · SPACE: PAUSE
           </div>
         )}
-        {touch && hud && !hud.briefing && hud.state === "active" && (
-          <TouchControls engineRef={engineRef} paused={hud.paused} disabled={false} formation={hud.formation} touchBox={hud.touchBox} />
+        {touch && (!hud || hud.state === "active") && (
+          <TouchControls
+            engineRef={engineRef}
+            paused={hud?.paused ?? false}
+            disabled={!!hud?.briefing || hud?.state !== "active"}
+            formation={hud?.formation ?? "wedge"}
+            touchBox={hud?.touchBox ?? false}
+          />
         )}
         <div
           data-testid="terrain-legend"
@@ -552,7 +596,25 @@ export default function Battlefield() {
               paused: false,
               briefing: true,
               state: "active",
-              units: [],
+              // Engine ids are assigned in squad order starting at 1,
+              // so index+1 matches the engine's id for each man.
+              units: (deployed?.squad ?? activeSquad).map((soldier, i) => ({
+                id: i + 1,
+                soldierId: soldier.id,
+                name: soldier.name,
+                rank: soldier.rank,
+                level: soldier.level,
+                type: soldier.type,
+                hp: UNIT_TYPES[soldier.type].hp,
+                maxHp: UNIT_TYPES[soldier.type].hp,
+                suppression: 0,
+                pinned: false,
+                abilityCd: 0,
+                abilityCdMax: UNIT_TYPES[soldier.type].ability.cd,
+                kills: soldier.kills,
+                alive: true,
+                orders: 0,
+              })),
               selectedIds: [],
               enemiesAlive: 0,
               wave: 1,
@@ -569,22 +631,6 @@ export default function Battlefield() {
         />
       </div>
       </div>
-
-      {mustRotate && (
-        <div
-          data-testid="rotate-prompt"
-          className="fixed inset-0 z-50 flex flex-col items-center justify-center gap-4 bg-[#0D0F0C]/95 p-8 text-center"
-        >
-          <RotateCw size={44} className="animate-spin-slow text-[#E5A93C]" />
-          <h2 className="font-heading text-2xl font-bold tracking-tight text-[#F0F5EB]">TURN YOUR PHONE SIDEWAYS</h2>
-          <p className="max-w-xs font-mono text-xs leading-relaxed text-[#A2B29A]">
-            The battle is played in landscape. The fight is paused until you rotate.
-          </p>
-          <Button data-testid="rotate-lock-btn" variant="outline" size="sm" onClick={goLandscape}>
-            GO FULLSCREEN SIDEWAYS
-          </Button>
-        </div>
-      )}
     </div>
   );
 }

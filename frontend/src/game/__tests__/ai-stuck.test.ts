@@ -105,12 +105,12 @@ describe("AI stuck / cover simulation — Silent Chateau", () => {
     expect(units().filter((u) => u.side === "allies" && u.npc).length).toBe(6); // 2nd Platoon
     expect(totalEnemies).toBe(16);
 
-    // Order the player squad east across the town, through buildings:
-    // the classic stuck case — right-click move across blocked ground.
-    const squad = units().filter((u) => u.side === "allies" && !u.npc);
-    for (const u of squad) {
-      (anyEngine as { selectUnit: (id: number) => void }).selectUnit(u.id as number);
-    }
+    // Order the whole player squad east across the town, through
+    // buildings: the classic stuck case — right-click move across
+    // blocked ground. selectAll() is the real path (the old loop
+    // called selectUnit() per man, which replaces the selection each
+    // time, so only Boyd ever got the order).
+    (anyEngine as { selectAll: () => void }).selectAll();
     // issueOrder is private; drive it through the public right-click path
     // by calling the private method via any-cast.
     (anyEngine as { issueOrder: (x: number, y: number, q: boolean) => void }).issueOrder(2100, 675, false);

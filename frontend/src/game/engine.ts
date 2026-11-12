@@ -117,6 +117,30 @@ interface Unit {
   lastY: number;
   stuckFails: number;
   coverSeekT: number;
+  // Cover-seek blacklist: after the stuck detector drops a wedged cover
+  // order, the destination it was heading for is banned for 10s so the
+  // unit does not immediately re-order to the same unreachable cover
+  // spot and wedge again. coverIdleT tracks how long an NPC/axis unit
+  // has sat in cover with no target in range/LOS.
+  coverBanT: number;
+  coverBanX: number;
+  coverBanY: number;
+  coverIdleT: number;
+  // Stuck-progress tracking: the destination the unit is trying to
+  // reach, and how far away it was when tracking started. The old
+  // detector only checked raw displacement in the last second, so a
+  // unit shoved sideways by separation, or sliding along a wall, could
+  // move a few units a second and reset the fail counter forever while
+  // never getting any closer to where it was going.
+  stuckDestX: number;
+  stuckDestY: number;
+  stuckDestD: number;
+  // Chase ban: after the stuck detector drops a wedged order, the unit
+  // may not chase again for 5s. Without it, an axis/NPC unit whose prey
+  // is behind a wall drops its chase, then re-chases the same prey in
+  // the next frame, wedges again, drops again — a loop the cover
+  // cooldown never saw, because chase has no cooldown of its own.
+  chaseBanT: number;
   // animation
   deathT?: number;
   shootT?: number;
@@ -519,6 +543,20 @@ export class GameEngine {
   private waves: Array<Array<{ type: EnemyTypeId; count: number }>> = [];
   private nextWaveT = 0;
   private elapsed = 0;
+  // Stalemate breaker (bug #2): when neither side has hurt the other
+  // for 60s — allies in cover vs a static MG42 out of its own range,
+  // a mortar out of range, nobody in range of anybody — the battle
+  // soft-locks forever (cover-hold sims ran the full 480s). After 60s
+  // of no combat every living mobile unit is ordered to hunt its
+  // nearest enemy, statics included as targets (they never move).
+  // This is a design choice, not a balance tweak: it overrides a
+  // player squad's hold position, and only fires after a full minute
+  // with no HP lost on either side, so a deliberate hold is safe for
+  // 60s. Josh can revert it; it changes no damage, health, or counts.
+  private stalemateT = 0;
+  private stalemateHp = -1;
+  private stalemateAlive = -1;
+  private stalemateActive = false;
   private phase: "briefing" | "battle" | "over" = "briefing";
   private paused = false;
   private battleState: "active" | "victory" | "defeat" = "active";
@@ -562,6 +600,10 @@ export class GameEngine {
     this.selected = [];
     this.aimUnitId = null;
     this.elapsed = 0;
+    this.stalemateT = 0;
+    this.stalemateHp = -1;
+    this.stalemateAlive = -1;
+    this.stalemateActive = false;
     this.phase = "briefing";
     this.paused = false;
     this.battleState = "active";
@@ -789,7 +831,7 @@ export class GameEngine {
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
-        stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2,
+        stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
       });
     }
   }
@@ -799,8 +841,10 @@ export class GameEngine {
     if (this.phase !== "battle") return;
     for (const u of this.units) {
       if (!u.alive || !this.selected.includes(u.id)) continue;
-      const c = this.bestCover(u, 340);
-      if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
+      // seekCover only orders to a cover spot the unit can actually
+      // reach; the old bestCover+findPath could order it to a stand
+      // point wedged against a wall, where it sat forever.
+      this.seekCover(u, 340);
     }
     this.pushLog("Get down! Squad moving to cover.", "info");
   }
@@ -874,10 +918,16 @@ export class GameEngine {
   // Scores by distance, with a bonus for cover that sits between the unit
   // and the threat — that is the cover that actually stops incoming fire
   // while the unit advances or holds, rather than cover behind it.
-  private bestCover(u: Unit, radius: number): { x: number; y: number } | null {
+  // Ranked cover stand-points, best first. A stand point is the spot
+  // on the threat side of a cover object, far enough out that the unit's
+  // whole body fits. Covers are skipped when that spot is body-blocked
+  // (the old check only looked at the single blocked cell under the
+  // point, so a unit could be ordered to a spot wedged against a ruin
+  // wall or crate and sit there forever) or when the spot was banned
+  // after the stuck detector dropped a wedged order to it.
+  private bestCovers(u: Unit, radius: number): Array<{ x: number; y: number }> {
     const threat = this.nearestAlly(u);
-    let best: { x: number; y: number } | null = null;
-    let bestScore = Infinity;
+    const out: Array<{ x: number; y: number; score: number }> = [];
     for (const c of this.covers) {
       const d0 = dist(u.x, u.y, c.x, c.y);
       if (d0 > radius + c.r) continue;
@@ -888,7 +938,11 @@ export class GameEngine {
         sx = c.x - Math.cos(a) * (c.r + UNIT_R + 3);
         sy = c.y - Math.sin(a) * (c.r + UNIT_R + 3);
       }
-      if (this.blocked[Math.floor(sy / CELL) * COLS + Math.floor(sx / CELL)]) continue;
+      // Full-body clearance, not just the cell under the point: ruin
+      // walls, crates and wrecks are blockers too, and their cover
+      // points sit right next to them.
+      if (this.pointBlocked(sx, sy)) continue;
+      if (this.elapsed < u.coverBanT && dist(sx, sy, u.coverBanX, u.coverBanY) < 100) continue;
       const d = dist(u.x, u.y, sx, sy);
       // Threat-side bonus: cover roughly in the direction of the enemy
       // (dot product of unit->cover and unit->threat above 0) counts as
@@ -899,24 +953,40 @@ export class GameEngine {
         const dot = (sx - u.x) * (threat.x - u.x) + (sy - u.y) * (threat.y - u.y);
         if (dot > 0) score -= 60;
       }
-      if (score < bestScore) {
-        bestScore = score;
-        best = { x: sx, y: sy };
-      }
+      out.push({ x: sx, y: sy, score });
     }
-    return best;
+    out.sort((a, b) => a.score - b.score);
+    return out.map(({ x, y }) => ({ x, y }));
+  }
+
+  private bestCover(u: Unit, radius: number): { x: number; y: number } | null {
+    return this.bestCovers(u, radius)[0] ?? null;
   }
 
   // Send a unit to the nearest cover spot and hold there. Returns false
-  // when there is no reachable cover in range. The caller sets the
-  // cooldown; the unit's orders are a normal path, so the stuck detector
-  // re-paths or sidesteps it if that path wedges.
+  // when there is no reachable cover in range. Reachable is checked for
+  // real: the path's final waypoint must land within 36 units of the
+  // stand point. The old version returned true for any cover whose
+  // centre was in range, even when findPath's fallback ended at the
+  // closest reachable cell far from the cover — the unit "arrived",
+  // was still not in cover, and re-ordered to the same spot every
+  // 5 seconds forever. Candidates are tried in ranked order, so a
+  // walled-off sandbag falls through to the next reachable one.
+  // A unit already in cover, or already standing on the spot, is not
+  // re-ordered at all.
   private seekCover(u: Unit, radius: number): boolean {
-    const c = this.bestCover(u, radius);
-    if (!c) return false;
-    u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
-    u.chase = [];
-    return true;
+    if (u.cover) return false;
+    for (const c of this.bestCovers(u, radius).slice(0, 6)) {
+      if (dist(u.x, u.y, c.x, c.y) < 12) return false;
+      const path = findPath(this.blocked, u.x, u.y, c.x, c.y);
+      if (!path.length) continue;
+      const end = path[path.length - 1];
+      if (dist(end.x, end.y, c.x, c.y) > 36) continue;
+      u.orders = path;
+      u.chase = [];
+      return true;
+    }
+    return false;
   }
 
   /** Dev/test probe: living allied positions + open-cell check. */
@@ -960,7 +1030,15 @@ export class GameEngine {
       this.togglePause();
       return;
     }
-    if (this.phase === "briefing") return;
+    // Selection works in the briefing too, so the squad can be picked
+    // before BEGIN THE ASSAULT: the old code returned here for the whole
+    // briefing, so 1-8, 0 and Esc did nothing until the battle started
+    // and the controls looked dead. Orders (right-click, Q, C, F) still
+    // need the battle to be running.
+    if (k === "0") {
+      this.selectAll();
+      return;
+    }
     if (k >= "1" && k <= "8") {
       const idx = parseInt(k, 10) - 1;
       const allies = this.units.filter((u) => u.side === "allies" && !u.npc);
@@ -972,6 +1050,13 @@ export class GameEngine {
       }
       return;
     }
+    if (k === "escape") {
+      if (this.aimUnitId) this.cancelAim();
+      else this.selected = [];
+      this.dirty = true;
+      return;
+    }
+    if (this.phase === "briefing") return;
     if (k === "c") {
       this.takeCover();
       return;
@@ -999,7 +1084,11 @@ export class GameEngine {
   };
 
   private onPointerDown = (e: PointerEvent) => {
-    if (this.phase !== "battle") return;
+    // Selection works in the briefing; move/attack orders do not.
+    // The old code returned for the whole briefing, so left-drag box
+    // select and tap-select did nothing until the battle started.
+    if (this.phase !== "battle" && this.phase !== "briefing") return;
+    if (this.phase === "briefing" && (e.button === 2 || this.aimUnitId !== null)) return;
     const p = this.toMap(e.clientX, e.clientY);
     this.mouse = { x: p.x, y: p.y, inside: true };
     if (e.pointerType === "touch" && this.aimUnitId === null) {
@@ -1068,7 +1157,7 @@ export class GameEngine {
       const p = this.toMap(e.clientX, e.clientY);
       const mine = this.units.find((u) => u.side === "allies" && u.alive && !u.npc && dist(p.x, p.y, u.x, u.y) < 26);
       if (mine) this.selected = this.selected.includes(mine.id) && this.selected.length === 1 ? [] : [mine.id];
-      else if (this.selected.length) this.issueOrder(p.x, p.y, false);
+      else if (this.selected.length && this.phase === "battle") this.issueOrder(p.x, p.y, false);
       this.dirty = true;
       return;
     }
@@ -1291,7 +1380,7 @@ export class GameEngine {
         npc: false,
         cover: null,
         coverT: 0,
-        stuckT: 0, lastX: sx, lastY: y, stuckFails: 0, coverSeekT: Math.random() * 2,
+        stuckT: 0, lastX: sx, lastY: y, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
       });
     });
   }
@@ -1363,7 +1452,7 @@ export class GameEngine {
           npc: false,
           cover: null,
           coverT: 0,
-          stuckT: 0, lastX: ecx * CELL + CELL / 2, lastY: ecy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2,
+          stuckT: 0, lastX: ecx * CELL + CELL / 2, lastY: ecy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
         });
       }
     }
@@ -1416,6 +1505,49 @@ export class GameEngine {
       this.dirty = true;
     }
 
+    // Stalemate breaker (bug #2): "combat" is any HP change or any
+    // death on either side. Healing also resets the clock, but only
+    // while it is actually happening — a medic cannot heal forever,
+    // and once HP stabilises the clock runs. After 60s with no combat,
+    // unit with no orders to hunt its nearest enemy (statics are
+    // targets, never movers). Re-issue every 5s while the stalemate
+    // lasts, so the hunt tracks a moving prey; any HP loss or death
+    // ends the episode and resets the clock.
+    const hpTotal = this.units.reduce((t, u) => t + (u.alive ? u.hp : 0), 0);
+    const aliveTotal = this.units.reduce((t, u) => t + (u.alive ? 1 : 0), 0);
+    if (hpTotal !== this.stalemateHp || aliveTotal !== this.stalemateAlive) {
+      this.stalemateHp = hpTotal;
+      this.stalemateAlive = aliveTotal;
+      this.stalemateT = 0;
+      this.stalemateActive = false;
+    } else {
+      this.stalemateT += dt;
+      if (this.stalemateT >= 60) {
+        if (!this.stalemateActive) {
+          this.pushLog("Stalemate — both sides advance on the last enemy.", "wave");
+          this.stalemateActive = true;
+        }
+        // Re-hunt every 5s: the first trigger sets the clock to 55,
+        // so this branch runs again 5s later while combat is still
+        // absent, and re-paths idle units to a prey that may have moved.
+        this.stalemateT = 55;
+        for (const u of this.units) {
+          // Hunt overrides cover-seek and chase orders: a unit busy
+          // walking to a sandbag at the trigger instant would
+          // otherwise miss the hunt entirely, and its squadmates
+          // dying one by one would keep resetting the clock while it
+          // sat in cover forever. A player's attack order (attackId)
+          // is deliberate focus fire and is never overridden.
+          if (!u.alive || u.isStatic || u.attackId !== null) continue;
+          const prey = this.nearestAlly(u);
+          if (!prey) continue;
+          u.orders = findPath(this.blocked, u.x, u.y, prey.x, prey.y);
+          u.chase = [];
+          u.coverSeekT = 8;
+        }
+      }
+    }
+
     // Units.
     for (const u of this.units) {
       if (!u.alive) continue;
@@ -1456,25 +1588,44 @@ export class GameEngine {
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           if (pd > u.range * 0.9 || !this.los(u, prey)) {
-            this.chaseTo(u, prey.x, prey.y, dt);
-            moving = true;
-          } else if (!u.cover) {
+            moving = this.chaseTo(u, prey.x, prey.y, dt);
+          } else {
+            // In range with line of sight: the unit stops to fire, so
+            // its chase path is stale — clear it. The old code left the
+            // leftover waypoints in u.chase, so the unit looked stuck
+            // with an order queued while it was just firing in place,
+            // and when the prey moved off again it followed a stale
+            // path back to where the enemy used to be.
+            u.chase = [];
+            if (!u.cover) {
             // In range: both sides look for nearby cover before trading fire.
+            // Only when the unit has no orders and the cover cooldown has
+            // expired: the old branch re-issued a cover order every 3s
+            // even while the unit was already walking to cover, resetting
+            // its orders to a (possibly different) nearest cover each
+            // time, so it ping-ponged between covers and never arrived.
             u.coverT -= dt;
-            if (u.coverT <= 0) {
+            if (u.coverT <= 0 && u.orders.length === 0 && u.coverSeekT <= 0) {
               u.coverT = 3;
-              const c = this.bestCover(u, 130);
-              if (c) u.orders = findPath(this.blocked, u.x, u.y, c.x, c.y);
+              if (this.seekCover(u, 130)) u.coverSeekT = 5;
+              else u.coverSeekT = 2;
+            }
             }
           }
+        } else {
+          // No prey: hold position, and drop any stale chase path.
+          u.chase = [];
         }
         // No prey: NPCs hold position instead of pushing east blind into
         // the next wave. The old push-east made 2nd Platoon meet Wave 1
         // in the middle and clear it alone while the player's squad
         // stood idle at the west edge.
       } else if (u.side === "allies" && attackOrder && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
-        this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
-        moving = true;
+        moving = this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
+      } else if (u.side === "allies" && attackOrder) {
+        // In range with line of sight: firing, not chasing — clear the
+        // stale chase path (same bug as the axis branch above).
+        u.chase = [];
       }
 
       if (!moving && focus) u.facing = Math.atan2(focus.y - u.y, focus.x - u.x);
@@ -1491,20 +1642,91 @@ export class GameEngine {
       if (moving && (u.orders.length > 0 || u.chase.length > 0)) {
         u.stuckT += dt;
         if (u.stuckT >= 1) {
-          const moved = dist(u.x, u.y, u.lastX, u.lastY);
+          // Orders first; otherwise the last chase waypoint — a unit
+          // chasing prey behind a wall wedges on the chase waypoint
+          // itself, which the old code only checked by displacement.
+          const finalDest = u.orders.length
+            ? u.orders[u.orders.length - 1]
+            : u.chase.length
+              ? u.chase[u.chase.length - 1]
+              : null;
+          u.stuckT = 0;
+          // No progress = not getting closer to the destination, not
+          // just standing still. A unit shoved sideways by separation
+          // or sliding along a wall can move a few units a second and
+          // never get closer; the old displacement-only check reset
+          // its fail counter on that sideways movement, so it wedged
+          // for 10+ seconds while the detector thought it was fine.
+          let noProgress: boolean;
+          let madeProgress = false;
+          if (finalDest) {
+            const fd = dist(u.x, u.y, finalDest.x, finalDest.y);
+            if (dist(finalDest.x, finalDest.y, u.stuckDestX, u.stuckDestY) > 24 || u.stuckDestD <= 0) {
+              // New destination (a sidestep re-path lands on a different
+              // closest-reachable cell): start tracking the distance,
+              // but do NOT reset stuckFails — a re-path is not progress,
+              // and resetting here let a wedged unit sidestep forever
+              // with its fail counter stuck at 0/1, never reaching the
+              // 3-fail drop. Only actually getting closer resets it.
+              u.stuckDestX = finalDest.x;
+              u.stuckDestY = finalDest.y;
+              u.stuckDestD = fd;
+              noProgress = false;
+            } else {
+              noProgress = fd >= u.stuckDestD - 5;
+              if (!noProgress) {
+                u.stuckDestD = fd;
+                madeProgress = true;
+              }
+            }
+          } else {
+            const moved = dist(u.x, u.y, u.lastX, u.lastY);
+            noProgress = moved < 4;
+            if (!noProgress) madeProgress = true;
+            u.stuckDestD = 0;
+          }
+          // Displacement this second, measured before lastX/lastY are
+          // overwritten: a unit that moved under 1 unit is literally
+          // stationary — moveToward could not take a single step.
+          const disp = dist(u.x, u.y, u.lastX, u.lastY);
           u.lastX = u.x;
           u.lastY = u.y;
-          u.stuckT = 0;
-          if (moved < 4) {
+          if (noProgress) {
             u.stuckFails++;
-            const finalDest = u.orders.length ? u.orders[u.orders.length - 1] : null;
+            // A literally stationary unit is wedged, not just slow:
+            // count it double, so a unit hugging a cover blocker drops
+            // its order in ~3s instead of ~6s (each sidestep re-path
+            // grants a grace second, and a wedged unit burned one per
+            // sidestep). A pinned unit still moves ~20 units/s and a
+            // unit sliding along a wall moves several, so neither is
+            // accelerated.
+            if (disp < 1) u.stuckFails++;
+            // A fail means no progress this second; keep the tracked
+            // distance so the next second is judged against the same
+            // baseline instead of the (unchanged) current distance.
+            u.stuckDestD = dist(u.x, u.y, finalDest ? finalDest.x : u.x, finalDest ? finalDest.y : u.y);
             if (u.orders.length) u.orders.shift();
             if (u.chase.length) u.chase.shift();
             if (u.stuckFails >= 3) {
+              // Dropping the order is not enough on its own: the cover
+              // block below runs in the same frame, and with no cooldown
+              // it would immediately re-order the unit to the same
+              // wedged cover spot, so the unit wedged, dropped, and
+              // re-wedged forever. Ban that destination for 10s and
+              // hold off cover-seeking for 8s so the unit can chase,
+              // fire, or be re-ordered instead.
+              if (finalDest) {
+                u.coverBanX = finalDest.x;
+                u.coverBanY = finalDest.y;
+                u.coverBanT = this.elapsed + 10;
+              }
+              u.coverSeekT = 12;
+              u.chaseBanT = this.elapsed + 5;
               u.orders = [];
               u.chase = [];
               u.attackId = null;
               u.stuckFails = 0;
+              u.stuckDestD = 0;
             } else {
               // Sidestep: a waypoint 70 units off to one side of the
               // direction the unit was heading, on open ground. The
@@ -1514,17 +1736,36 @@ export class GameEngine {
               const toY = finalDest ? finalDest.y : u.y + Math.sin(u.facing) * 70;
               const ang = Math.atan2(toY - u.y, toX - u.x);
               const side = u.stuckFails % 2 === 0 ? 1 : -1;
+              let sidestepped = false;
               for (const s of [side, -side]) {
                 const sx = u.x + Math.cos(ang + (Math.PI / 2) * s) * 70;
                 const sy = u.y + Math.sin(ang + (Math.PI / 2) * s) * 70;
-                if (!this.pointBlocked(sx, sy)) {
+                if (!this.pointBlocked(sx, sy) && this.canStepToward(u, sx, sy)) {
                   u.orders = [{ x: sx, y: sy }, ...(finalDest ? findPath(this.blocked, sx, sy, finalDest.x, finalDest.y) : [])];
+                  u.stuckDestD = 0;
+                  sidestepped = true;
                   break;
                 }
               }
-              if (finalDest && !u.orders.length) u.orders = findPath(this.blocked, u.x, u.y, finalDest.x, finalDest.y);
+              if (!sidestepped) {
+                // No way out sideways and no progress: drop the order
+                // now (with the cover ban + cooldown below) instead of
+                // sitting against the wall for two more seconds.
+                if (finalDest) {
+                  u.coverBanX = finalDest.x;
+                  u.coverBanY = finalDest.y;
+                  u.coverBanT = this.elapsed + 10;
+                }
+                u.coverSeekT = 12;
+                u.chaseBanT = this.elapsed + 5;
+                u.orders = [];
+                u.chase = [];
+                u.attackId = null;
+                u.stuckFails = 0;
+                u.stuckDestD = 0;
+              } else if (finalDest && !u.orders.length) u.orders = findPath(this.blocked, u.x, u.y, finalDest.x, finalDest.y);
             }
-          } else {
+          } else if (madeProgress) {
             u.stuckFails = 0;
           }
         }
@@ -1532,7 +1773,35 @@ export class GameEngine {
         u.stuckT = 0;
         u.lastX = u.x;
         u.lastY = u.y;
-        if (u.orders.length === 0 && u.chase.length === 0) u.stuckFails = 0;
+        if (u.orders.length === 0 && u.chase.length === 0) {
+          u.stuckFails = 0;
+          u.stuckDestD = 0;
+        }
+      }
+
+      // In cover, no target in range/LOS: an NPC ally or enemy that sits
+      // behind a wall with no line of sight for 4s repositions toward
+      // its nearest enemy instead of camping there forever. Player
+      // squad men are excluded on purpose — they hold where Josh put
+      // them until he orders them. The chase branch above already moves
+      // NPCs/axis when the prey is out of range or has no LOS, but it
+      // never runs for a unit whose orders just emptied while it was
+      // in cover with a target in range but behind its own cover.
+      if (!u.isStatic && u.cover && (u.npc || u.side === "axis") && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
+        const prey = this.nearestAlly(u);
+        const hasLosTarget = focus && d <= u.range && this.los(u, focus);
+        if (prey && !hasLosTarget) {
+          u.coverIdleT += dt;
+          if (u.coverIdleT > 4) {
+            u.coverIdleT = 0;
+            u.orders = findPath(this.blocked, u.x, u.y, prey.x, prey.y);
+            u.coverSeekT = 5;
+          }
+        } else {
+          u.coverIdleT = 0;
+        }
+      } else {
+        u.coverIdleT = 0;
       }
 
       // Cover: when a unit is pinned / under fire, or idle with no order
@@ -1594,7 +1863,7 @@ export class GameEngine {
           });
           // Always warn: the old 40% roll meant most shells arrived with
           // no radio line at all, and there was no visible marker. The
-          // 2.4s flight time is the warning window — drawObjectiveMarkers
+          // 2.4s flight time is the warning window — drawMortarWarnings
           // draws a pulsing red circle at the impact point for its whole flight.
           this.pushLog("Incoming mortar!", "wave");
         }
@@ -1736,15 +2005,24 @@ export class GameEngine {
   }
 
   // Follow an A* path toward a moving point, re-planning every ~1s.
-  private chaseTo(u: Unit, x: number, y: number, dt: number) {
+  // Returns false (and clears the chase) while the unit is banned from
+  // chasing after a stuck drop — otherwise it would re-chase the same
+  // prey behind the same wall in the very next frame.
+  private chaseTo(u: Unit, x: number, y: number, dt: number): boolean {
+    if (this.elapsed < u.chaseBanT) {
+      u.chase = [];
+      return false;
+    }
     u.repathT -= dt;
     if (u.repathT <= 0 || u.chase.length === 0) {
       u.chase = findPath(this.blocked, u.x, u.y, x, y);
       u.repathT = 1 + Math.random() * 0.4;
     }
     const wp = u.chase[0];
+    if (!wp) return false;
     if (dist(u.x, u.y, wp.x, wp.y) < 10) u.chase.shift();
     this.moveToward(u, wp.x, wp.y, dt);
+    return true;
   }
 
   private nearestAlly(u: Unit): Unit | null {
@@ -1780,6 +2058,30 @@ export class GameEngine {
     return false;
   }
 
+  // Can this unit take at least one step toward (x, y)? Same three
+  // attempts moveToward makes (full step, X-only, Y-only), at 1x, 2x
+  // and 4x step length. A unit standing exactly on a blocker's
+  // circle-push boundary needs a 2+ unit step just to get its body
+  // out of the blocked cell — a single 1.1-unit step in any direction
+  // still leaves a radius point inside it, so a 1x-only check says
+  // "no way out" for a unit that can walk away in a 4-unit step.
+  private canStepToward(u: Unit, x: number, y: number): boolean {
+    const d = dist(u.x, u.y, x, y);
+    if (d < 1) return true;
+    const base = u.speed * (u.pinned ? 0.35 : 1) * (1 / 60);
+    for (const mult of [1, 2, 4]) {
+      const step = base * mult;
+      const dx = ((x - u.x) / d) * step;
+      const dy = ((y - u.y) / d) * step;
+      if (
+        !this.pointBlocked(u.x + dx, u.y + dy) ||
+        !this.pointBlocked(u.x + dx, u.y) ||
+        !this.pointBlocked(u.x, u.y + dy)
+      ) return true;
+    }
+    return false;
+  }
+
   private moveToward(u: Unit, x: number, y: number, dt: number) {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
@@ -1801,7 +2103,46 @@ export class GameEngine {
     } else if (!this.pointBlocked(u.x, u.y + dy)) {
       u.y += dy;
     } else {
-      return;
+      // Pocket escape: every step toward the waypoint is blocked — the
+      // unit is wedged in a cover pocket (e.g. a sandbag stand-point
+      // against a wall, where the only exit is not toward the target).
+      // Probe the 8 compass directions and take the first steppable
+      // one, so the unit can back out the way it came in instead of
+      // freezing while the stuck detector drops and the stalemate
+      // breaker re-issues the same order forever. Distances run out
+      // to 24x the step (~28 units): a unit standing exactly on a
+      // blocker's circle-push boundary needs ~23 units just to get its
+      // body out of the blocked grid cell (the 5-point body check
+      // reaches 9 units out, the cell is 24 wide), so a 4x probe says
+      // "no way out" for a unit that can walk away — that is why
+      // Kowalski and Pruitt sat in cover at x~382-398 for 70s while
+      // the breaker re-ordered them every 5s and the stuck detector
+      // dropped the order each time. Directions are tried away from
+      // the waypoint first (back out the way it came in) so a long
+      // step prefers open ground behind the unit over pushing through
+      // the wall in front of it; only the destination is checked, not
+      // the segment, because the unit starts inside the blocked
+      // region and any segment check would reject the escape itself.
+      // Only runs when the direct path is fully blocked, so normal
+      // movement is untouched.
+      const away = Math.atan2(u.y - y, u.x - x);
+      let escaped = false;
+      for (const mult of [1, 2, 4, 8, 16, 24]) {
+        for (const off of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, -(3 * Math.PI) / 4, Math.PI]) {
+          const a = away + off;
+          const px = u.x + Math.cos(a) * step * mult;
+          const py = u.y + Math.sin(a) * step * mult;
+          if (!this.pointBlocked(px, py)) {
+            u.x = px;
+            u.y = py;
+            u.facing = a;
+            escaped = true;
+            break;
+          }
+        }
+        if (escaped) break;
+      }
+      if (!escaped) return;
     }
     u.facing = Math.atan2(y - u.y, x - u.x);
     u.walk += dt * 10;
@@ -2437,26 +2778,26 @@ export class GameEngine {
     ctx.restore();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Objective markers and mortar warnings are drawn last, in screen
-    // space, so the fog of war can never hide them — the MG42 and mortar
-    // used to sit in the dark east side with nothing pointing at them.
-    this.drawObjectiveMarkers(ctx);
+    // Mortar warnings are drawn last, in screen space, so the fog of
+    // war can never hide them. There are no objective tags any more:
+    // no red diamonds / labels / off-screen arrows for the SS officer,
+    // MG42, mortar or flak — only the mortar warning circle below,
+    // which is a dodge warning, not a tag.
+    this.drawMortarWarnings(ctx);
   }
 
-  /** Permanent objective markers for key enemies, plus a pulsing red
-   * warning circle under every incoming mortar shell for its whole
-   * 2.4s flight. Markers off-screen become edge arrows. */
-  private drawObjectiveMarkers(ctx: CanvasRenderingContext2D) {
+  /** Pulsing red warning circle under every incoming mortar shell for
+   * its whole 2.4s flight. This is the only on-screen marker left:
+   * no objective tags for any enemy — no red diamonds / labels /
+   * off-screen arrows for the SS officer, MG42, mortar or flak. */
+  private drawMortarWarnings(ctx: CanvasRenderingContext2D) {
     const rect = this.canvas.getBoundingClientRect();
     const dpr = this.canvas.width / Math.max(1, rect.width);
     const { s, ox, oy } = this.view;
-    const W = rect.width;
-    const H = rect.height;
     const toScreen = (x: number, y: number) => ({
       x: ox + (x - this.cam.x) * s,
       y: oy + (y - this.cam.y) * s,
     });
-    const onScreen = (p: { x: number; y: number }) => p.x >= 0 && p.x <= W && p.y >= 0 && p.y <= H;
 
     // Mortar warning: pulsing red circle at the shell's impact point.
     for (const p of this.projectiles) {
@@ -2477,52 +2818,6 @@ export class GameEngine {
       ctx.font = `bold ${Math.max(12, 13 * dpr)}px sans-serif`;
       ctx.textAlign = "center";
       ctx.fillText("!", sp.x * dpr, sp.y * dpr + 4 * dpr);
-    }
-
-    // Objective markers: SS officer, MG42 bunker, mortar team, flak gun.
-    const targets = this.units.filter(
-      (u) => u.alive && u.side === "axis" && u.enemyType && ["officer", "mg42", "mortar", "flak"].includes(u.enemyType)
-    );
-    for (const u of targets) {
-      const sp = toScreen(u.x, u.y);
-      const label = u.enemyType === "officer" ? "SS OFFICER" : u.enemyType === "mg42" ? "MG42" : u.enemyType === "mortar" ? "MORTAR" : "FLAK";
-      if (onScreen(sp)) {
-        const cx = sp.x * dpr;
-        const cy = sp.y * dpr;
-        const r = Math.max(8, 10 * dpr);
-        ctx.fillStyle = "rgba(226,74,74,0.95)";
-        ctx.beginPath();
-        ctx.moveTo(cx, cy - r);
-        ctx.lineTo(cx + r, cy);
-        ctx.lineTo(cx, cy + r);
-        ctx.lineTo(cx - r, cy);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = "#FFF0B0";
-        ctx.font = `bold ${Math.max(10, 11 * dpr)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.fillText(label, cx, cy - r - 4 * dpr);
-      } else {
-        // Off-screen: clamp to the edge and point at it.
-        const ex = Math.max(18, Math.min(W - 18, sp.x));
-        const ey = Math.max(18, Math.min(H - 18, sp.y));
-        const ang = Math.atan2(sp.y - ey, sp.x - ex);
-        ctx.save();
-        ctx.translate(ex * dpr, ey * dpr);
-        ctx.rotate(ang);
-        ctx.fillStyle = "rgba(226,74,74,0.95)";
-        ctx.beginPath();
-        ctx.moveTo(12 * dpr, 0);
-        ctx.lineTo(-8 * dpr, -8 * dpr);
-        ctx.lineTo(-8 * dpr, 8 * dpr);
-        ctx.closePath();
-        ctx.fill();
-        ctx.restore();
-        ctx.fillStyle = "rgba(255,240,176,0.95)";
-        ctx.font = `bold ${Math.max(10, 11 * dpr)}px sans-serif`;
-        ctx.textAlign = "center";
-        ctx.fillText(label, ex * dpr, (ey + 20) * dpr);
-      }
     }
   }
 

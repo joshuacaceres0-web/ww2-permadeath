@@ -62,12 +62,11 @@ def test_reinforce_422_bad_kind():
 
 def test_reinforce_402_insufficient_rp():
     with fresh_client("insufficient") as c:
-        # Drain requisition with heavy calls (25 RP each) until it can't cover one more.
-        for _ in range(20):
-            state = c.get("/state").json()
-            if state["requisition"] < 25:
-                break
-            r = c.post("/battle/reinforce", json={"mission_id": "op_01", "kind": "heavy"})
+        # Drain requisition by hiring riflemen (100 RP each) — the
+        # reinforce cap is 3 per mission, so RP can no longer be
+        # drained with 20 reinforce calls (bug #13).
+        for _ in range(3):
+            r = c.post("/squad/hire", json={"type": "rifleman"})
             assert r.status_code == 200, r.text
 
         state = c.get("/state").json()
@@ -75,3 +74,15 @@ def test_reinforce_402_insufficient_rp():
 
         resp = c.post("/battle/reinforce", json={"mission_id": "op_01", "kind": "heavy"})
         assert resp.status_code == 402, resp.text
+
+
+def test_reinforce_409_after_three_calls():
+    # Bug #13: the max-3 cap is enforced server-side, not just in the
+    # frontend — a 4th call for the same mission is refused even with
+    # RP to spare.
+    with fresh_client("cap") as c:
+        for i in range(3):
+            r = c.post("/battle/reinforce", json={"mission_id": "op_01", "kind": "rifle"})
+            assert r.status_code == 200, r.text
+        resp = c.post("/battle/reinforce", json={"mission_id": "op_01", "kind": "rifle"})
+        assert resp.status_code == 409, resp.text

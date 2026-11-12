@@ -178,7 +178,15 @@ def make_backstory(name: str, hometown: str, quirk: str, rng: random.Random) -> 
 
 
 def cause_phrase(cause: str) -> str:
-    """'Mortar bombardment' -> 'mortar bombardment', but keep 'MG42 fire' / 'K98 rifle fire'."""
+    """'Mortar bombardment' -> 'mortar bombardment', but keep 'MG42 fire' / 'K98 rifle fire'.
+
+    The fallback cause is 'Killed in action', which lowercasing turns
+    into 'killed in action' — and the epitaph template already says
+    "was killed by", so it read "was killed by killed in action"
+    (bug #15). A generic cause becomes 'enemy fire' instead.
+    """
+    if cause.strip().lower() == "killed in action":
+        return "enemy fire"
     if len(cause) > 1 and cause[1].islower():
         return cause[0].lower() + cause[1:]
     return cause

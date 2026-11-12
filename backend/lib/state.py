@@ -30,6 +30,12 @@ DEFAULT_STATE = {
     "battles_lost": 0,
     "campaign_complete": False,
     "commander_name": "Commander",
+    # Server-side reinforcement cap (bug #13): the max-3 was frontend
+    # only, so a direct API caller could buy unlimited teams. The
+    # counter is per current mission attempt and resets when a battle
+    # files (see _battle_complete_locked) or the mission changes.
+    "reinforcements_used": 0,
+    "reinforcements_mission": None,
 }
 
 # The founding squad — named, storied, and immediately deployable.

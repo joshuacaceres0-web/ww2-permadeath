@@ -12,18 +12,23 @@ function UnitCard({
   unit,
   index,
   selected,
+  briefing,
   onSelect,
   onAbility,
 }: {
   unit: HudUnit;
   index: number;
   selected: boolean;
+  briefing: boolean;
   onSelect: (id: number) => void;
   onAbility: (id: number) => void;
 }) {
   const spec = UNIT_TYPES[unit.type];
   const hpPct = Math.max(0, Math.round((unit.hp / unit.maxHp) * 100));
-  const abilityReady = unit.alive && unit.abilityCd <= 0;
+  // Abilities only work once the battle is running (engine.startAim
+  // returns unless phase == "battle"), so a live-looking button in
+  // the briefing was a no-op. Disable it there and say why.
+  const abilityReady = unit.alive && unit.abilityCd <= 0 && !briefing;
 
   return (
     <div
@@ -61,6 +66,7 @@ function UnitCard({
           variant="outline"
           size="xs"
           disabled={!unit.alive || !abilityReady}
+          title={briefing ? "Abilities open once the assault begins" : undefined}
           onClick={(e) => {
             e.stopPropagation();
             onAbility(unit.id);
@@ -70,9 +76,11 @@ function UnitCard({
           }`}
         >
           {unit.alive
-            ? unit.abilityCd > 0
-              ? `${spec.ability.name} ${Math.ceil(unit.abilityCd)}s`
-              : spec.ability.name
+            ? briefing
+              ? `${spec.ability.name} — AFTER BEGIN`
+              : unit.abilityCd > 0
+                ? `${spec.ability.name} ${Math.ceil(unit.abilityCd)}s`
+                : spec.ability.name
             : "OUT OF ACTION"}
         </Button>
         {unit.orders > 0 && (
@@ -92,6 +100,7 @@ export default function SquadDock({ hud, onSelect, onAbility }: Props) {
           unit={u}
           index={i}
           selected={hud.selectedIds.includes(u.id)}
+          briefing={hud.briefing}
           onSelect={onSelect}
           onAbility={onAbility}
         />
