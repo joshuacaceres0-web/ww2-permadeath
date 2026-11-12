@@ -696,13 +696,13 @@ export class GameEngine {
     this.replayT = 0;
     this.autoBattle = false;
     this.spawnAllies(squad, rng, commanderBonus);
-    // 2nd Platoon: 6 weak allies, so they support the fight but can
+    // 2nd Platoon: 12 weak allies, so they support the fight but can
     // never clear a wave on their own — in the Emergent play test
     // Wave 1 was cleared entirely by them while the player's squad stood
     // idle and fired nothing. The real count was 2 + min(3, mission.index),
-    // i.e. 2-5; the design decision here is a fixed 6, weak, spread down
+    // i.e. 2-5; Josh picked 12 on 2026-11-11. Still weak, spread down
     // the western edge so they do not spawn stacked on each other.
-    this.spawnNpcAllies(6, rng);
+    this.spawnNpcAllies(12, rng);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -955,17 +955,19 @@ export class GameEngine {
       const spec = UNIT_TYPES[type];
       const [cx, cy] = nearestOpen(this.blocked, Math.floor(Math.max(12, Math.min(MAP_W - 12, px)) / CELL), Math.floor(Math.max(12, Math.min(MAP_H - 12, py)) / CELL));
       const SURN = ["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs", "Delgado", "Novak", "Pruitt", "Lindqvist", "O'Hara", "Tasker", "Wexler"];
-      // Weak NPCs (2nd Platoon): half damage, 70% health, slower and
-      // shorter vision, so they support the fight instead of winning it
-      // alone. Paid reinforcements call addNpc without `weak` and keep
-      // full stats.
-      const hp = weak ? Math.round(spec.hp * 0.7) : spec.hp;
+      // 2nd Platoon NPCs: buffed 2026-11-11 at Josh's pick, after Wave 3
+      // made battles unwinnable — 75% damage (was 50%), 90% health
+      // (was 70%), near-full speed and vision, faster fire. Still
+      // weaker than a hired man, so they support the fight instead of
+      // winning it alone. Paid reinforcements call addNpc without
+      // `weak` and keep full stats.
+      const hp = weak ? Math.round(spec.hp * 0.9) : spec.hp;
       this.units.push({
         id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
         name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${SURN[i % SURN.length]}`,
         rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
-        hp, maxHp: hp, speed: spec.speed * (weak ? 0.85 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.8 : 1),
-        dmg: spec.dmg * (weak ? 0.5 : 1), fireInterval: spec.fireInterval * (weak ? 1.6 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
+        hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
+        dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,

@@ -73,6 +73,11 @@ const MISSION = {
     { type: "mg42", wave: 2, count: 1 },
     { type: "fallschirmjager", wave: 2, count: 3 },
     { type: "mortar", wave: 2, count: 1 },
+    { type: "volks", wave: 3, count: 3 },
+    { type: "grenadier", wave: 3, count: 3 },
+    { type: "officer", wave: 3, count: 1 },
+    { type: "fallschirmjager", wave: 3, count: 3 },
+    { type: "mortar", wave: 3, count: 1 },
   ],
 } as const;
 

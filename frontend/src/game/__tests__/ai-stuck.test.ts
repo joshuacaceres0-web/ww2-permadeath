@@ -79,6 +79,11 @@ const SILENT_CHATEAU = {
     { type: "mg42", wave: 2, count: 1 },
     { type: "fallschirmjager", wave: 2, count: 3 },
     { type: "mortar", wave: 2, count: 1 },
+    { type: "volks", wave: 3, count: 3 },
+    { type: "grenadier", wave: 3, count: 3 },
+    { type: "officer", wave: 3, count: 1 },
+    { type: "fallschirmjager", wave: 3, count: 3 },
+    { type: "mortar", wave: 3, count: 1 },
   ],
 } as const;
 
@@ -102,8 +107,8 @@ describe("AI stuck / cover simulation — Silent Chateau", () => {
     const units = () => (anyEngine.units as Array<Record<string, unknown>>).filter((u) => u.alive);
     const totalEnemies = SILENT_CHATEAU.enemies.reduce((t, e) => t + e.count, 0);
     expect(units().filter((u) => u.side === "axis").length).toBe(7); // wave 1 only at start
-    expect(units().filter((u) => u.side === "allies" && u.npc).length).toBe(6); // 2nd Platoon
-    expect(totalEnemies).toBe(16);
+    expect(units().filter((u) => u.side === "allies" && u.npc).length).toBe(12); // 2nd Platoon
+    expect(totalEnemies).toBe(27);
 
     // Order the whole player squad east across the town, through
     // buildings: the classic stuck case — right-click move across
