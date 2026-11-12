@@ -1,8 +1,11 @@
 """Mission compositions: more MGs and more troops in the beach defense.
 
-Wave 1 fields 3 MG42 nests on every mission (was 2), and every wave
-carries one more volks than before, so the beach defense is thicker
-and the reinforcements are bigger too. Totals: 31/33/38/46.
+Wave 1 fields 3 MG42 nests on every mission, and every wave carries
+extra volks. Overlord's beach defense is heavier still, at Josh's
+direction after a 5/5-alive AUTO win in 156s looked too easy: 9 MG42
+nests and 3 mortars in wave 1 (6 nests and 2 mortars at the
+shoreline, the rest scattered east), plus a thicker trench garrison.
+Totals: 43/33/38/46.
 
 Pure unit test — no live backend needed, no fixtures used.
 """
@@ -23,14 +26,22 @@ def wave_counts(mission_id):
     return waves
 
 
-def test_wave_1_fields_three_mg42_nests_on_every_mission():
+def test_wave_1_mg42_nests():
+    # Overlord's beach defense fields 9 nests in wave 1; the other
+    # missions field 3 each.
     for m in mission_list():
         nests = sum(e.count for e in m.enemies if e.type == "mg42" and e.wave == 1)
-        assert nests == 3, (m.id, nests)
+        assert nests == (9 if m.id == "op_01" else 3), (m.id, nests)
+
+
+def test_overlord_wave_1_mortars():
+    m = next(x for x in mission_list() if x.id == "op_01")
+    mortars = sum(e.count for e in m.enemies if e.type == "mortar" and e.wave == 1)
+    assert mortars == 3
 
 
 def test_mission_totals():
-    assert wave_counts("op_01") == {1: 11, 2: 9, 3: 11}   # 31
+    assert wave_counts("op_01") == {1: 23, 2: 9, 3: 11}   # 43
     assert wave_counts("op_02") == {1: 11, 2: 10, 3: 12}  # 33
     assert wave_counts("op_03") == {1: 13, 2: 13, 3: 12}  # 38
     assert wave_counts("op_04") == {1: 12, 2: 17, 3: 17}  # 46

@@ -77,11 +77,12 @@ MISSIONS: List[dict] = [
             "gone for good."
         ),
         "enemies": [
-            {"type": "volks", "wave": 1, "count": 4},
+            {"type": "volks", "wave": 1, "count": 6},
             {"type": "funk", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
-            {"type": "grenadier", "wave": 1, "count": 2},
-            {"type": "mg42", "wave": 1, "count": 3},
+            {"type": "grenadier", "wave": 1, "count": 3},
+            {"type": "mg42", "wave": 1, "count": 9},
+            {"type": "mortar", "wave": 1, "count": 3},
             {"type": "volks", "wave": 2, "count": 4},
             {"type": "funk", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 2},

@@ -147,18 +147,20 @@ describe("wave 1 garrisons at the beach", () => {
     expect(ys[1], `middle nest at y=${Math.round(ys[1])}`).toBeLessThan(850);
     expect(ys[2], `bottom nest at y=${Math.round(ys[2])}`).toBeGreaterThan(850);
     for (const mg of mgs) {
-      expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeGreaterThanOrEqual(700);
-      expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeLessThan(1100);
+      // On the sand right at the shoreline now, west of the old
+      // bluff line (spawn snapping can shift a nest a few units).
+      expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeGreaterThanOrEqual(320);
+      expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeLessThan(700);
       expect(mg.isStatic, "an MG42 nest must be a static gun").toBe(true);
     }
   });
 
-  it("a static gun garrisons on the bluffs, ahead of the infantry", async () => {
+  it("a static gun garrisons at the shoreline, ahead of the infantry", async () => {
     const e = await makeEngine("dday");
     const mg = e.units.find((u) => u.enemyType === "mg42");
     expect(mg).toBeDefined();
-    expect(mg!.x).toBeGreaterThanOrEqual(700);
-    expect(mg!.x).toBeLessThan(1100);
+    expect(mg!.x).toBeGreaterThanOrEqual(320);
+    expect(mg!.x).toBeLessThan(700);
     // The infantry is in the first trench line at x 1400 on the
     // beach, not on open ground ahead of the gun.
     const infantry = e.units.filter((u) => u.side === "axis" && u.alive && !u.isStatic);

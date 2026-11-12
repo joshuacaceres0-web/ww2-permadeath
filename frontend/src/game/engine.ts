@@ -2457,10 +2457,40 @@ export class GameEngine {
     // threat side and counts as his cover — a man standing exactly
     // on the spot gets nothing from it, because the directional
     // cover check needs the cover on the threat side. Static guns
-    // stay on the bluffs, as before. Waves 2 and 3 are AGGRESSIVE
+    // hold the west positions — and on the beach landing itself the
+    // defense sits in two lines: the first nests right on the sand
+    // at the shoreline, the overflow scattered east inland (see the
+    // shoreline branch below). Waves 2 and 3 are AGGRESSIVE
     // reinforcements from the east: they charge on spawn instead of
     // camping and defending, so the fight comes to the player.
     const beach = index === 0;
+    const shoreline = beach && this.mission.terrain === "dday" && this.variant !== "airborne";
+    // Josh's beach layout: the first 6 MG42 nests and the first 2
+    // mortars sit right at the shoreline; any more than that scatter
+    // east inland as a second line in depth.
+    const SHORE_MG42 = 6;
+    const SHORE_MORTAR = 2;
+    let shoreStaticTotal = 0;
+    if (shoreline) {
+      let mg = 0;
+      let mo = 0;
+      for (const s of this.waves[index]) {
+        if (!ENEMY_TYPES[s.type].static) continue;
+        for (let i = 0; i < s.count; i++) {
+          if (s.type === "mg42") {
+            mg++;
+            if (mg > SHORE_MG42) continue;
+          } else if (s.type === "mortar") {
+            mo++;
+            if (mo > SHORE_MORTAR) continue;
+          }
+          shoreStaticTotal++;
+        }
+      }
+    }
+    let mgSeen = 0;
+    let mortarSeen = 0;
+    let shoreCount = 0;
     const trenchSpots = beach ? this.firstTrenchSpots() : [];
     const mobileTotal = this.waves[index].reduce(
       (n, s) => n + (ENEMY_TYPES[s.type].static ? 0 : s.count),
@@ -2481,16 +2511,41 @@ export class GameEngine {
         let y: number;
         let trench = false;
         if (isStatic) {
-          x = beach ? 700 + rng() * 300 : MAP_W * (0.6 + rng() * 0.25);
-          // Wave 1 is the prepared beach defense: spread the static
-          // nests along the line in bands, one nest per band, so the
-          // MGs cover the whole beach instead of bunching at one y.
-          // Waves 2 and 3 are reinforcements, so they keep the old
-          // random y.
-          y =
-            beach && staticTotal > 1
-              ? 90 + ((staticCount + rng() * 0.7) * (MAP_H - 180)) / staticTotal
-              : MAP_H * (0.2 + rng() * 0.6);
+          let east = false;
+          if (shoreline && spec.type === "mg42") {
+            mgSeen++;
+            east = mgSeen > SHORE_MG42;
+          } else if (shoreline && spec.type === "mortar") {
+            mortarSeen++;
+            east = mortarSeen > SHORE_MORTAR;
+          }
+          if (east) {
+            // Scattered east inland: no line and no bands, just
+            // guns in depth behind the beach defense.
+            x = 1700 + rng() * 1500;
+            y = 120 + rng() * (MAP_H - 240);
+          } else if (shoreline) {
+            // Right at the shoreline, on the sand west of the
+            // bluffs, spread along the beach in bands so the nests
+            // cover the whole landing instead of bunching at one y.
+            x = 350 + rng() * 300;
+            y =
+              shoreStaticTotal > 1
+                ? 90 + ((shoreCount + rng() * 0.7) * (MAP_H - 180)) / shoreStaticTotal
+                : MAP_H * (0.2 + rng() * 0.6);
+            shoreCount++;
+          } else {
+            x = beach ? 700 + rng() * 300 : MAP_W * (0.6 + rng() * 0.25);
+            // Wave 1 is the prepared defense: spread the static
+            // nests along the line in bands, one nest per band, so
+            // the MGs cover the whole defense instead of bunching at
+            // one y. Waves 2 and 3 are reinforcements, so they keep
+            // the old random y.
+            y =
+              beach && staticTotal > 1
+                ? 90 + ((staticCount + rng() * 0.7) * (MAP_H - 180)) / staticTotal
+                : MAP_H * (0.2 + rng() * 0.6);
+          }
           staticCount++;
         } else if (beach && trenchSpots.length) {
           // Spread along the line: man i takes spot i * spots /

@@ -141,12 +141,19 @@ describe("wave 1 garrisons in the first trench line", () => {
       }
       // In the western trench, not the eastern lines at x 2600/3400.
       expect(Math.max(...mobile.map((u) => u.x)), `${terrain} wave 1 in the wrong trench line`).toBeLessThan(1600);
-      // Static guns stay on the bluffs, not in the trench.
+      // Static guns hold the west line, not the trench. On the
+      // beach landing they sit on the sand at the shoreline; on the
+      // other terrains they hold the old bluff positions.
       const statics = e.units.filter((u) => u.side === "axis" && u.alive && u.isStatic);
       expect(statics.length).toBeGreaterThan(0);
       for (const s of statics) {
-        expect(s.x).toBeGreaterThanOrEqual(700);
-        expect(s.x).toBeLessThan(1100);
+        if (terrain === "dday") {
+          expect(s.x).toBeGreaterThanOrEqual(320);
+          expect(s.x).toBeLessThan(700);
+        } else {
+          expect(s.x).toBeGreaterThanOrEqual(700);
+          expect(s.x).toBeLessThan(1100);
+        }
         expect(s.trenchHold).toBeFalsy();
       }
     },
