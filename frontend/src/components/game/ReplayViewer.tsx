@@ -114,6 +114,15 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           ctx.beginPath();
           ctx.arc(x, y, r, 0, 7);
           ctx.fill();
+        } else if (o.kind === "trench") {
+          // Dug trench: dark channel with a lighter parapet stripe
+          // down its middle. Merged clusters carry w/h, so a long
+          // trench draws as one long bar, not a row of dots.
+          ctx.fillStyle = "#2E2114";
+          ctx.fillRect(x - w, y - h, w * 2, h * 2);
+          ctx.fillStyle = "#6B5232";
+          if (w >= h) ctx.fillRect(x - w, y - h / 3, w * 2, (h * 2) / 3);
+          else ctx.fillRect(x - w / 3, y - h, (w * 2) / 3, h * 2);
         } else {
           ctx.fillStyle = "#3A3E30";
           ctx.beginPath();
@@ -304,7 +313,7 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
         <br />
         Obstacles: <span className="text-[#7CFC66]">● Tree</span> · <span className="text-[#B8B2A4]">■ Ruin</span> ·{" "}
         <span className="text-[#C08A5A]">■ Building</span> · <span className="text-[#5A8A3A]">● Hedgerow</span> ·{" "}
-        <span className="text-[#9A9A8A]">● Wreck / steel</span>
+        <span className="text-[#9A9A8A]">● Wreck / steel</span> · <span className="text-[#8A7A52]">▬ Trench — heavy cover, fight from inside</span>
       </p>
     </div>
   );

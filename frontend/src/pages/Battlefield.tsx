@@ -492,6 +492,7 @@ export default function Battlefield() {
           <span>✕ HEDGEHOG</span>
           <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — LIGHT cover, breaks under fire</span>
           <span>RUINS / WRECKS / BUILDINGS — HEAVY cover</span>
+          <span><span className="mr-1 inline-block h-2.5 w-4 bg-[#2E2114] align-middle ring-1 ring-[#6B5232]" />TRENCH — HEAVY cover, fight from inside</span>
           <span><span className="text-[#4ECDC4]">◆</span> IN COVER — teal light, <span className="text-[#E5A93C]">gold heavy</span></span>
           <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
         </div>

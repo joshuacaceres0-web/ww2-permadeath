@@ -167,7 +167,7 @@ interface Cover {
   // men instead of 1. No type on old saves means light.
   type?: "light" | "heavy";
   // Destructible cover (sandbags, crates): explosions wear it down until it's gone.
-  kind?: "sandbag" | "crate";
+  kind?: "sandbag" | "crate" | "trench";
   hp?: number;
   maxHp?: number;
   q0?: number;
@@ -219,7 +219,7 @@ interface Particle {
   kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom";
 }
 
-export type BlockerKind = "tree" | "ruin" | "building" | "hedgerow" | "wreck" | "crate" | "hedgehog" | "pillbox" | "bush" | "obstacle";
+export type BlockerKind = "tree" | "ruin" | "building" | "hedgerow" | "wreck" | "crate" | "hedgehog" | "pillbox" | "bush" | "trench" | "obstacle";
 interface Blocker {
   x: number;
   y: number;
@@ -393,6 +393,7 @@ export interface SquadInput {
 function buildBlockedGrid(blockers: Blocker[]): Uint8Array {
   const g = new Uint8Array(COLS * ROWS);
   for (const b of blockers) {
+    if (b.kind === "trench") continue; // dug in, not built up: men walk in and fight from inside
     const r = b.r + UNIT_R * 0.7;
     const c0 = Math.max(0, Math.floor((b.x - r) / CELL));
     const c1 = Math.min(COLS - 1, Math.floor((b.x + r) / CELL));
@@ -2599,6 +2600,7 @@ export class GameEngine {
     for (const u of this.units) {
       if (!u.alive || u.isStatic) continue;
       for (const b of this.blockers) {
+        if (b.kind === "trench") continue; // a trench is a hole, not a wall: men stand in it
         const d = dist(u.x, u.y, b.x, b.y);
         const min = b.r + UNIT_R;
         if (d < min && d > 0.001) {
@@ -3590,6 +3592,59 @@ function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () =
   }
 }
 
+function drawTrench(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: number, y1: number, gaps: number[], rng: () => number) {
+  const len = Math.hypot(x1 - x0, y1 - y0);
+  const dx = (x1 - x0) / len;
+  const dy = (y1 - y0) / len;
+  const px = -dy;
+  const py = dx;
+  const segs: Array<[number, number]> = [];
+  let cur = 0;
+  for (const g of [...gaps].sort((a, b) => a - b)) {
+    const a = g * len - 60;
+    const b = g * len + 60;
+    if (a > cur) segs.push([cur, a]);
+    cur = Math.max(cur, b);
+  }
+  if (cur < len) segs.push([cur, len]);
+  for (const [a, b] of segs) {
+    const ax = x0 + dx * a;
+    const ay = y0 + dy * a;
+    const bx = x0 + dx * b;
+    const by = y0 + dy * b;
+    ctx.strokeStyle = "#241A12";
+    ctx.lineWidth = 30;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    ctx.strokeStyle = "#171008";
+    ctx.lineWidth = 16;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    for (let t = a + 8; t < b; t += 36) {
+      for (const s of [-1, 1]) {
+        ctx.fillStyle = "#8A7A52";
+        ctx.beginPath();
+        ctx.arc(x0 + dx * t + px * 17 * s, y0 + dy * t + py * 17 * s, 6, 0, 7);
+        ctx.fill();
+      }
+    }
+    // Heavy cover along the trench floor, same numbers as a ruin
+    // wall (q 0.9, 400 hp), so sustained fire can wear it down.
+    // The blocker entries exist only so the replay can draw the
+    // trench; they never block movement (see buildBlockedGrid).
+    for (let t = a + 10; t < b; t += 22) {
+      const cx = x0 + dx * t;
+      const cy = y0 + dy * t;
+      blockers.push({ x: cx, y: cy, r: 14, kind: "trench" });
+      COVERS.push({ x: cx, y: cy, r: 14, q: 0.9, q0: 0.9, type: "heavy", hp: 400, maxHp: 400, kind: "trench" });
+    }
+  }
+}
+
 function drawCrates(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
   for (const [dx, dy] of [[0, 0], [16, 4], [6, 16]]) {
     ctx.fillStyle = "#6B5232";
@@ -3812,6 +3867,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     coverField(ctx, blockers, rng, 1100, 3100, 16);
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 2750, y, 0, 6); // second trench line, new eastern ground
+    // Dug trenches: one mid-field, one on the new eastern ground.
+    drawTrench(ctx, blockers, 1400, 80, 1400, MAP_H - 80, [0.5], rng);
+    drawTrench(ctx, blockers, 2600, 80, 2600, MAP_H - 80, [0.35, 0.7], rng);
     // Bluffs: dune-grass ridge with three draws (the real Omaha exits).
     hedgerow(ctx, blockers, 1000, 0, 1000, MAP_H, [0.2, 0.5, 0.82], rng);
     hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
@@ -3837,6 +3895,8 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     }
     for (let i = 0; i < 12; i++) drawTree(ctx, blockers, 700 + rng() * 2400, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
     drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
+    drawTrench(ctx, blockers, 1400, 60, 1400, MAP_H - 60, [0.5], rng);
+    drawTrench(ctx, blockers, 2400, 60, 2400, MAP_H - 60, [0.3, 0.65], rng);
     coverField(ctx, blockers, rng, 300, 3100, 20);
     if (kind === "airborne") {
       ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
@@ -3853,6 +3913,10 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawBuilding(ctx, blockers, bx, by, w, h);
     }
     hedgerow(ctx, blockers, 400, 40, 400, MAP_H - 40, gapPick(3), rng);
+    // Trenches in the gaps between building columns; the gap at 0.5
+    // lands on the main street, so the road stays open.
+    drawTrench(ctx, blockers, 900, 80, 900, MAP_H - 80, [0.5], rng);
+    drawTrench(ctx, blockers, 2700, 80, 2700, MAP_H - 80, [0.35, 0.7], rng);
     for (let i = 0; i < 9; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
     coverField(ctx, blockers, rng, 500, 3100, 10);
   } else if (kind === "causeway") {
@@ -3871,6 +3935,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     drawWreck(ctx, blockers, 1250, MAP_H * 0.47, 0.2);
     drawWreck(ctx, blockers, 1850, MAP_H * 0.55, -0.3);
     drawWreck(ctx, blockers, 2650, MAP_H * 0.5, 0.1);
+    // Trenches parallel to the causeway road, inside the dry strip.
+    drawTrench(ctx, blockers, 800, MAP_H / 2 - 180, 3000, MAP_H / 2 - 180, [0.5], rng);
+    drawTrench(ctx, blockers, 800, MAP_H / 2 + 180, 3000, MAP_H / 2 + 180, [0.5], rng);
   } else if (kind === "forest") {
     road(MAP_H / 2);
     for (let i = 0; i < 110; i++) {
@@ -3884,6 +3951,8 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     drawSandbags(ctx, 1900, MAP_H / 2 + 120, 0, 7);
     drawSandbags(ctx, 2700, MAP_H / 2 - 120, 0, 7); // second bunker line, new eastern ground
     drawSandbags(ctx, 2700, MAP_H / 2 + 120, 0, 7);
+    drawTrench(ctx, blockers, 1500, 60, 1500, MAP_H - 60, [0.5], rng);
+    drawTrench(ctx, blockers, 2600, 60, 2600, MAP_H - 60, [0.3, 0.65], rng);
   }
 
   // Craters (cosmetic, walkable).
