@@ -149,6 +149,58 @@ describe("medics on both sides", () => {
     expect(endDist).toBeLessThan(200);
   });
 
+  it("2nd Platoon has 12 NPCs and exactly one medic", async () => {
+    const e = await makeEngine();
+    const npcs = e.units.filter((u) => u.side === "allies" && u.npc);
+    expect(npcs).toHaveLength(12);
+    const medics = npcs.filter((u) => u.type === "medic");
+    expect(medics).toHaveLength(1);
+    expect(npcs.filter((u) => u.type === "rifleman")).toHaveLength(11);
+  });
+
+  it("a 2nd Platoon medic's aura mends a wounded NPC nearby", async () => {
+    const e = await makeEngine();
+    const medic = e.units.find((u) => u.side === "allies" && u.npc && u.type === "medic")!;
+    const hurt = e.units.find((u) => u.side === "allies" && u.npc && u.type === "rifleman")!;
+    medic.x = 300; medic.y = 600;
+    hurt.x = 340; hurt.y = 600;
+    hurt.hp = 20;
+    (medic as Record<string, unknown>).abilityCd = 10; // triage on cooldown: aura only
+    step(e, 5);
+    expect(hurt.hp).toBeGreaterThan(20);
+  });
+
+  it("a 2nd Platoon medic triages a wounded NPC for +50 HP", async () => {
+    const e = await makeEngine();
+    const medic = e.units.find((u) => u.side === "allies" && u.npc && u.type === "medic")!;
+    const hurt = e.units.find((u) => u.side === "allies" && u.npc && u.type === "rifleman")!;
+    medic.x = 300; medic.y = 600;
+    hurt.x = 340; hurt.y = 600;
+    hurt.hp = 20;
+    (medic as Record<string, unknown>).abilityCd = 0;
+    step(e, 1);
+    expect(hurt.hp).toBeGreaterThanOrEqual(70);
+    expect((medic as Record<string, unknown>).abilityCd as number).toBeGreaterThan(0);
+  });
+
+  it("a 2nd Platoon medic moves toward a wounded NPC out of aura range", async () => {
+    const e = await makeEngine();
+    const medic = e.units.find((u) => u.side === "allies" && u.npc && u.type === "medic")!;
+    const hurt = e.units.find((u) => u.side === "allies" && u.npc && u.type === "rifleman")!;
+    medic.x = 200; medic.y = 600;
+    hurt.x = 500; hurt.y = 600;
+    hurt.hp = 20; // worst hurt in the platoon
+    (hurt as Record<string, unknown>).speed = 0; // hold the patient still so the test measures the medic, not a footrace
+    // Keep the other NPCs healthy so the medic aims at this man.
+    for (const u of e.units) {
+      if (u.side === "allies" && u.npc && u !== hurt && u !== medic) u.hp = u.maxHp;
+    }
+    const startDist = Math.hypot(medic.x - hurt.x, medic.y - hurt.y);
+    step(e, 8);
+    const endDist = Math.hypot(medic.x - hurt.x, medic.y - hurt.y);
+    expect(endDist).toBeLessThan(startDist - 50);
+  });
+
   it("the player's medic aura mends a wounded squad man", async () => {
     const e = await makeEngine();
     const medic = e.units.find((u) => u.side === "allies" && !u.npc && u.type === "medic")!;

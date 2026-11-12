@@ -1017,9 +1017,12 @@ export class GameEngine {
     // gun at full damage, so they could win a wave on their own.
     // Spread down the western edge instead of clustering at one y, so
     // they do not spawn stacked and deadlock on each other.
+    // The first man is 2nd Platoon's medic: one rifleman becomes the
+    // medic, so the platoon is still 12 men and heals its own wounded
+    // with the same aura and triage as every other medic.
     for (let i = 0; i < n; i++) {
       const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
-      this.addNpc("rifleman", 90 + rng() * 80, py, i, rng(), true);
+      this.addNpc(i === 0 ? "medic" : "rifleman", 90 + rng() * 80, py, i, rng(), true);
     }
   }
 
@@ -1906,14 +1909,14 @@ export class GameEngine {
         // same way as an NPC ally — chase the nearest enemy when out of
         // range or without line of sight, else hold and fire, seeking
         // cover in range. Manual squad men still hold until ordered.
-        // An Axis medic goes to his wounded first: chase the
-        // worst-hurt own man within 400 instead of the prey, so he
-        // gets in aura range and patches men up instead of standing
-        // in the open trading fire he cannot win.
-        const prey =
-          u.side === "axis" && u.enemyType === "medic"
-            ? (this.worstHurtAlly(u, 400) ?? this.nearestAlly(u))
-            : this.nearestAlly(u);
+        // A medic goes to his wounded first: chase the worst-hurt
+        // own man within 400 instead of the prey, so he gets in aura
+        // range and patches men up instead of standing in the open
+        // trading fire he cannot win. Covers the Axis Sanitaeter, the
+        // 2nd Platoon NPC medic, and the player's medic in AUTO.
+        const prey = this.isMedic(u)
+          ? (this.worstHurtAlly(u, 400) ?? this.nearestAlly(u))
+          : this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           if (pd > u.range * 0.9 || !this.los(u, prey)) {
@@ -2208,9 +2211,10 @@ export class GameEngine {
             a.suppression = Math.max(0, a.suppression - 5 * dt);
           }
         }
-        // Axis medics triage on their own; the player's medic is
-        // driven by Q or by AUTO (autoUseAbilities -> castAuto).
-        if (u.side === "axis") this.medicTriage(u);
+        // Axis medics and 2nd Platoon NPC medics triage on their
+        // own; the player's medic is driven by Q or by AUTO
+        // (autoUseAbilities -> castAuto).
+        if (u.side === "axis" || u.npc) this.medicTriage(u);
       }
     }
 
