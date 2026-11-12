@@ -485,9 +485,9 @@ export default function Battlefield() {
           <span><span className="mr-1 inline-block h-2.5 w-3 rounded-full bg-[#5C4A30] align-middle" />GAP — walk through</span>
           <span><span className="mr-1 inline-block h-2.5 w-2.5 bg-[#5A3A2A] align-middle" />BUILDING</span>
           <span>✕ HEDGEHOG</span>
-          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — cover, blown apart by explosions</span>
-          <span>RUINS / WRECKS — solid cover</span>
-          <span className="text-[#4ECDC4]">◆ IN COVER</span>
+          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — LIGHT cover, breaks under fire</span>
+          <span>RUINS / WRECKS / BUILDINGS — HEAVY cover</span>
+          <span><span className="text-[#4ECDC4]">◆</span> IN COVER — teal light, <span className="text-[#E5A93C]">gold heavy</span></span>
           <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
         </div>
         )}

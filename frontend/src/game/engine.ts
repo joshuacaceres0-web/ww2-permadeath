@@ -152,6 +152,12 @@ interface Cover {
   y: number;
   r: number;
   q: number; // chance a bullet from the far side is stopped
+  // Tactical cover (2026-11-11): light cover (sandbags, crates,
+  // hedgerows, trees, bushes) stops some rounds and breaks under
+  // fire; heavy cover (ruin walls, wrecks, buildings, pillboxes)
+  // stops most rounds, takes far more punishment, and shelters 2
+  // men instead of 1. No type on old saves means light.
+  type?: "light" | "heavy";
   // Destructible cover (sandbags, crates): explosions wear it down until it's gone.
   kind?: "sandbag" | "crate";
   hp?: number;
@@ -1873,20 +1879,12 @@ export class GameEngine {
             // and when the prey moved off again it followed a stale
             // path back to where the enemy used to be.
             u.chase = [];
-            if (!u.cover) {
-            // In range: both sides look for nearby cover before trading fire.
-            // Only when the unit has no orders and the cover cooldown has
-            // expired: the old branch re-issued a cover order every 3s
-            // even while the unit was already walking to cover, resetting
-            // its orders to a (possibly different) nearest cover each
-            // time, so it ping-ponged between covers and never arrived.
-            u.coverT -= dt;
-            if (u.coverT <= 0 && u.orders.length === 0 && u.coverSeekT <= 0) {
-              u.coverT = 3;
-              if (this.seekCover(u, 130)) u.coverSeekT = 5;
-              else u.coverSeekT = 2;
-            }
-            }
+            // In range with line of sight the unit holds and fires
+            // from where it stands — it does NOT go looking for
+            // cover mid-firefight. The old branch re-issued a cover
+            // order every 3s here and ping-ponged units between
+            // covers so they never arrived. Cover-seeking now has
+            // exactly one trigger, the pinned/idle branch below.
           }
         } else {
           // No prey: hold position, and drop any stale chase path.
@@ -2080,9 +2078,10 @@ export class GameEngine {
         u.coverIdleT = 0;
       }
 
-      // Cover: when a unit is pinned / under fire, or idle with no order
-      // and no target in range, it looks for the nearest cover on the
-      // threat side and moves there instead of standing in open ground.
+      // Cover — the ONE auto cover-seek rule: when a unit is pinned /
+      // under fire, or idle with no order and no target in range, it
+      // looks for the nearest cover on the threat side and moves there
+      // instead of standing in open ground.
       // Player-controlled men are only pulled out of a live order when
       // pinned — an idle player squad, NPC allies and enemies seek cover
       // freely. Enemies only seek cover when pinned or idle with no prey
@@ -2191,11 +2190,18 @@ export class GameEngine {
         for (const u of this.units) {
           if (!u.alive || u.side === b.side) continue;
           if (dist(b.x, b.y, u.x, u.y) < UNIT_R + 2) {
-            // Cover between shooter and target soaks the round.
-            const c = u.cover;
-            if (c && (c.x - u.x) * (b.ox - u.x) + (c.y - u.y) * (b.oy - u.y) > 0 && Math.random() < c.q) {
+            // Cover between shooter and target soaks the round — but
+            // only cover on the shooter's side of the target, so a
+            // flanking shot finds the open side. A stopped round
+            // wears the cover down, and suppression still lands
+            // (0.7x: sustained fire pins a man behind cover, but a
+            // single stopped round does not — full strength pinned
+            // whole squads in testing and AUTO lost 3 in a row).
+            const c = this.coverBetween(b.ox, b.oy, u.x, u.y);
+            if (c && Math.random() < c.q) {
               this.puff(b.x, b.y);
-              u.suppression = Math.min(100, u.suppression + b.suppress * 0.4);
+              this.damageCover(c, b.dmg);
+              u.suppression = Math.min(100, u.suppression + b.suppress * 0.7);
               dead = true;
               break;
             }
@@ -2241,17 +2247,36 @@ export class GameEngine {
       p.y += p.vy * dt;
     }
 
-    // Fog of war recompute.
+    // Fog of war recompute, and the cover a unit is actually
+    // behind. Directional: the cover must sit on the threat side of
+    // the unit, so a man hugging a wall with the enemy behind him
+    // gets nothing from it. One man per spot: light cover shelters
+    // 1, heavy cover shelters 2 — a second man crowding the same
+    // sandbag is out in the open. Units are processed in order, so
+    // the closest man claims the spot first.
     this.fogT += dt;
     if (this.fogT >= 0.12) {
       this.fogT = 0;
+      const taken = new Map<Cover, number>();
       for (const u of this.units) {
-        if (!u.alive) continue;
+        if (!u.alive) {
+          u.cover = null;
+          continue;
+        }
         u.cover = null;
+        const threat = this.nearestAlly(u);
+        if (!threat) continue;
+        let best: Cover | null = null;
         for (const c of this.covers) {
-          if (dist(u.x, u.y, c.x, c.y) <= c.r + UNIT_R + 12) {
-            if (!u.cover || c.q > u.cover.q) u.cover = c;
-          }
+          if (dist(u.x, u.y, c.x, c.y) > c.r + UNIT_R + 12) continue;
+          if ((c.x - u.x) * (threat.x - u.x) + (c.y - u.y) * (threat.y - u.y) <= 0) continue;
+          const cap = c.type === "heavy" ? 2 : 1;
+          if ((taken.get(c) ?? 0) >= cap) continue;
+          if (!best || c.q > best.q) best = c;
+        }
+        if (best) {
+          u.cover = best;
+          taken.set(best, (taken.get(best) ?? 0) + 1);
         }
       }
       this.recomputeFog();
@@ -2605,6 +2630,67 @@ export class GameEngine {
   }
 
   // Sandbags and crates soak blast damage, get less protective, then come apart.
+  // Directional cover: the cover that actually stands between a
+  // shooter and a target. The target must be hugging it, the cover
+  // must sit on the target's side (not the shooter's), and the shot's
+  // line must pass through the cover's circle. A flanking shooter on
+  // the open side gets no cover at all — that is the flank.
+  // Returns the best (highest q) cover on the line, or null.
+  coverBetween(ox: number, oy: number, tx: number, ty: number): Cover | null {
+    let best: Cover | null = null;
+    for (const c of this.covers) {
+      if (dist(tx, ty, c.x, c.y) > c.r + UNIT_R + 18) continue;
+      if (dist(c.x, c.y, tx, ty) >= dist(c.x, c.y, ox, oy)) continue;
+      const dx = tx - ox;
+      const dy = ty - oy;
+      const len2 = dx * dx + dy * dy;
+      if (len2 === 0) continue;
+      let t = ((c.x - ox) * dx + (c.y - oy) * dy) / len2;
+      t = Math.max(0, Math.min(1, t));
+      if (dist(ox + dx * t, oy + dy * t, c.x, c.y) > c.r) continue;
+      if (!best || c.q > best.q) best = c;
+    }
+    return best;
+  }
+
+  // A round stopped by cover wears the cover down. Light cover
+  // breaks after a few stopped rounds; heavy cover takes far more.
+  // Indestructible cover (no hp: buildings, pillboxes) never wears.
+  // q falls with hp, so a chewed-up sandbag stops fewer rounds.
+  private damageCover(c: Cover, dmg: number) {
+    if (c.hp === undefined || c.maxHp === undefined) return;
+    c.hp -= dmg;
+    if (c.hp <= 0) {
+      this.destroyCover(c, "Shot to pieces — the cover is gone.");
+      return;
+    }
+    c.q = (c.q0 ?? c.q) * (0.35 + 0.65 * (c.hp / c.maxHp));
+    const t = this.tctx;
+    if (t) paintWear(t, c);
+  }
+
+  private destroyCover(c: Cover, msg: string) {
+    const i = this.covers.indexOf(c);
+    if (i < 0) return;
+    this.covers.splice(i, 1);
+    for (const u of this.units) if (u.cover === c) u.cover = null;
+    if (c.blocker) {
+      const bi = this.blockers.indexOf(c.blocker);
+      if (bi >= 0) this.blockers.splice(bi, 1);
+      this.blocked = buildBlockedGrid(this.blockers);
+    }
+    const t = this.tctx;
+    if (t) paintDebris(t, c);
+    for (let k = 0; k < 6; k++) {
+      const a = Math.random() * Math.PI * 2;
+      this.particles.push({ x: c.x, y: c.y, vx: Math.cos(a) * 90, vy: Math.sin(a) * 90, life: 0.5, max: 0.5, size: 2.5, kind: "dust" });
+    }
+    if (this.elapsed - this.coverLogT > 4) {
+      this.coverLogT = this.elapsed;
+      this.pushLog(msg, "info");
+    }
+  }
+
   private blastCover(x: number, y: number, aoe: number, dmg: number) {
     let regrid = false;
     let destroyed = 0;
@@ -3204,7 +3290,7 @@ export class GameEngine {
       const sy = headY + PX;
       ctx.fillStyle = "#0D0F0C";
       ctx.fillRect(sx - PX, sy - PX, PX * 5, PX * 5);
-      ctx.fillStyle = u.cover.q >= 0.6 ? "#4ECDC4" : "#2E8A84";
+      ctx.fillStyle = u.cover.type === "heavy" ? "#E5A93C" : "#4ECDC4"; // gold = heavy cover, teal = light cover
       ctx.fillRect(sx, sy, PX * 3, PX * 2);
       ctx.fillRect(sx + PX, sy + PX * 2, PX, PX);
     }
@@ -3284,7 +3370,7 @@ function drawSandbags(ctx: Ctx, x: number, y: number, _ang: number, n = 5) {
     ctx.fillStyle = "#5E5236";
     ctx.fillRect(bx - 7, by + 3, 14, 2);
     ctx.fillRect(bx - 1, by - 5, 2, 10); // tied seam
-    COVERS.push({ x: bx, y: by, r: 7, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110 });
+    COVERS.push({ x: bx, y: by, r: 7, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110, type: "light" });
   }
 }
 
@@ -3310,7 +3396,7 @@ function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () =
       const bx = ww > wh ? wx + t : wx + ww / 2;
       const by = ww > wh ? wy + wh / 2 : wy + t;
       blockers.push({ x: bx, y: by, r: 7, kind: "ruin" });
-      COVERS.push({ x: bx, y: by, r: 7, q: 0.8 });
+      COVERS.push({ x: bx, y: by, r: 7, q: 0.8, q0: 0.8, type: "heavy", hp: 400, maxHp: 400 });
     }
   }
   for (let i = 0; i < 9; i++) {
@@ -3332,7 +3418,7 @@ function drawCrates(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
     ctx.stroke();
     const b = { x: x + dx, y: y + dy, r: 8, kind: "crate" as const };
     blockers.push(b);
-    COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55, q0: 0.55, kind: "crate", hp: 70, maxHp: 70, blocker: b });
+    COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55, q0: 0.55, kind: "crate", hp: 70, maxHp: 70, blocker: b, type: "light" });
   }
 }
 
@@ -3369,7 +3455,7 @@ function drawWreck(ctx: Ctx, blockers: Blocker[], x: number, y: number, ang: num
     const bx = x + Math.cos(ang) * t;
     const by = y + Math.sin(ang) * t;
     blockers.push({ x: bx, y: by, r: 22, kind: "wreck" });
-    COVERS.push({ x: bx, y: by, r: 22, q: 0.85 });
+    COVERS.push({ x: bx, y: by, r: 22, q: 0.85, q0: 0.85, type: "heavy", hp: 500, maxHp: 500 });
   }
 }
 
@@ -3416,7 +3502,7 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
     const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
     drawBush(ctx, x, y, 17, rng);
     blockers.push({ x, y, r: 16, kind: "hedgerow" });
-    COVERS.push({ x, y, r: 16, q: 0.45 });
+    COVERS.push({ x, y, r: 16, q: 0.45, q0: 0.45, type: "light", hp: 120, maxHp: 120 });
   }
   // Worn dirt marks the gaps so the player sees where to go.
   for (const g of gaps) {
@@ -3443,7 +3529,7 @@ function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number
     ctx.fillStyle = snow ? "#C9D2CC" : "#2D5222";
   }
   blockers.push({ x, y, r: r * 0.75, kind: "tree" });
-  COVERS.push({ x, y, r: r * 0.75, q: 0.6 });
+  COVERS.push({ x, y, r: r * 0.75, q: 0.6, q0: 0.6, type: "light", hp: 150, maxHp: 150 });
 }
 
 function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: number, h: number) {
@@ -3463,7 +3549,10 @@ function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: nu
   ctx.stroke();
   // Cover the footprint with blocker circles.
   const r = Math.min(w, h) / 2;
-  for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) blockers.push({ x: bx, y: by, r: r * 1.05, kind: "building" });
+  for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) {
+    blockers.push({ x: bx, y: by, r: r * 1.05, kind: "building" });
+    COVERS.push({ x: bx, y: by, r: r * 1.05, q: 0.9, q0: 0.9, type: "heavy" }); // stone walls: no hp, indestructible
+  }
 }
 
 function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
@@ -3528,12 +3617,12 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.fillStyle = "#6E6450";
     ctx.fillRect(800, 0, 40, MAP_H); // shingle
     // The shingle bank: a long low wall of stones to hide behind.
-    for (let y = 30; y < MAP_H; y += 26) COVERS.push({ x: 820, y, r: 14, q: 0.6 });
+    for (let y = 30; y < MAP_H; y += 26) COVERS.push({ x: 820, y, r: 14, q: 0.6, q0: 0.6, type: "light", hp: 150, maxHp: 150 });
     for (let i = 0; i < 34; i++) {
       const hx = 380 + rng() * 380;
       const hy = 40 + rng() * (MAP_H - 80);
       drawHedgehog(ctx, blockers, hx, hy);
-      COVERS.push({ x: hx, y: hy, r: 11, q: 0.35 });
+      COVERS.push({ x: hx, y: hy, r: 11, q: 0.35, q0: 0.35, type: "light", hp: 80, maxHp: 80 });
     }
     coverField(ctx, blockers, rng, 1100, 2300, 12);
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
@@ -3551,6 +3640,7 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       ctx.fillStyle = "#1A1A18";
       ctx.fillRect(1080, py - 4, 8, 8);
       blockers.push({ x: 1105, y: py, r: 26, kind: "pillbox" });
+      COVERS.push({ x: 1105, y: py, r: 26, q: 0.9, q0: 0.9, type: "heavy" }); // concrete: no hp, indestructible
     }
   } else if (kind === "airborne" || kind === "bocage") {
     road(MAP_H / 2);
