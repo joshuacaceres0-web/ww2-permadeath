@@ -6,6 +6,9 @@ interface Props {
   hud: HudSnapshot;
   onSelect: (id: number) => void;
   onAbility: (id: number) => void;
+  onSplit: () => void;
+  onSelectTeam: (i: 0 | 1) => void;
+  onMerge: () => void;
 }
 
 function UnitCard({
@@ -91,9 +94,51 @@ function UnitCard({
   );
 }
 
-export default function SquadDock({ hud, onSelect, onAbility }: Props) {
+export default function SquadDock({ hud, onSelect, onAbility, onSplit, onSelectTeam, onMerge }: Props) {
+  const split = hud.teamA.length > 0 || hud.teamB.length > 0;
+  const teamSelected = (ids: number[]) => ids.length > 0 && ids.every((id) => hud.selectedIds.includes(id)) && hud.selectedIds.length === ids.length;
   return (
-    <div className="flex gap-2 overflow-x-auto px-3 py-2 short:h-full short:flex-col short:gap-1 short:overflow-y-auto short:px-1.5 short:py-1.5" data-testid="squad-dock">
+    <div className="flex flex-col gap-1.5 px-3 py-2 short:px-1.5 short:py-1.5">
+      <div className="flex items-center gap-1.5" data-testid="fireteam-bar">
+        {!split ? (
+          <Button
+            data-testid="split-squad-btn"
+            variant="outline"
+            size="xs"
+            onClick={onSplit}
+            disabled={hud.briefing || hud.units.filter((u) => u.alive).length < 2}
+            title="Split the squad into Alpha and Bravo so each team can be ordered on its own and flank"
+          >
+            ✂ SPLIT SQUAD — FLANK
+          </Button>
+        ) : (
+          <>
+            <Button
+              data-testid="select-team-a-btn"
+              variant="outline"
+              size="xs"
+              onClick={() => onSelectTeam(0)}
+              className={teamSelected(hud.teamA) ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
+            >
+              ALPHA ({hud.teamA.length})
+            </Button>
+            <Button
+              data-testid="select-team-b-btn"
+              variant="outline"
+              size="xs"
+              onClick={() => onSelectTeam(1)}
+              className={teamSelected(hud.teamB) ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
+            >
+              BRAVO ({hud.teamB.length})
+            </Button>
+            <Button data-testid="merge-squads-btn" variant="outline" size="xs" onClick={onMerge} title="Merge Alpha and Bravo back into one squad">
+              MERGE
+            </Button>
+            <span className="font-mono text-[10px] text-[#8D9A83]">6: ALPHA · 7: BRAVO · 0: ALL</span>
+          </>
+        )}
+      </div>
+    <div className="flex gap-2 overflow-x-auto short:h-full short:flex-col short:gap-1 short:overflow-y-auto" data-testid="squad-dock">
       {hud.units.map((u, i) => (
         <UnitCard
           key={u.id}
@@ -110,6 +155,7 @@ export default function SquadDock({ hud, onSelect, onAbility }: Props) {
           No men in the deployment squad — hire in the barracks.
         </div>
       )}
+    </div>
     </div>
   );
 }

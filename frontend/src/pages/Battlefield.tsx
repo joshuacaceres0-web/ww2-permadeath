@@ -40,6 +40,16 @@ export default function Battlefield() {
   const [report, setReport] = useState<BattleReport | null>(null);
   const [replay, setReplay] = useState<BattleReplay | null>(null);
   const [showReplay, setShowReplay] = useState(false);
+  // Full-map view: hides every control sitting on top of the map and
+  // zooms the engine out to the whole 2400x1350 map, so the full
+  // battlefield is visible at once. The top bar stays, with a
+  // SHOW CONTROLS button to get back.
+  const [fullMap, setFullMap] = useState(false);
+  const toggleFullMap = () => {
+    const next = !fullMap;
+    setFullMap(next);
+    engineRef.current?.setFitMap(next);
+  };
   const [variant, setVariant] = useState<Variant>("");
   const [touch] = useState(
     () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
@@ -326,6 +336,17 @@ export default function Battlefield() {
         >
           {hud?.autoBattle ? "AUTO ON" : "AUTO"}
         </Button>
+        <Button
+          data-testid="full-map-btn"
+          variant="outline"
+          size="xs"
+          onClick={toggleFullMap}
+          disabled={hud?.briefing || hud?.state !== "active"}
+          className={fullMap ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
+          title="Full map: hide the controls on the map and zoom out to the whole battlefield"
+        >
+          {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
+        </Button>
         <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
           {mission.code}
         </span>
@@ -428,23 +449,25 @@ export default function Battlefield() {
           engineRef={engineRef}
         />
 
-        <div className="absolute right-3 top-3 z-10 hidden md:block short:hidden">
-          <CombatLog log={hud?.log ?? []} />
-        </div>
+        {!fullMap && (
+          <div className="absolute right-3 top-3 z-10 hidden md:block short:hidden">
+            <CombatLog log={hud?.log ?? []} />
+          </div>
+        )}
 
         {/* Order hints */}
-        {touch ? (
+        {!fullMap && touch ? (
           <div className="pointer-events-none absolute left-2 top-2 z-10 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px] text-[#A2B29A]" data-testid="touch-hint">
             {hud?.touchBox
               ? "DRAG A BOX AROUND YOUR MEN"
               : "TAP SOLDIER: SELECT · TAP GROUND/ENEMY: ORDER · DRAG: SCROLL · HOLD+DRAG: BOX"}
           </div>
-        ) : (
+        ) : !fullMap ? (
           <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
-            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-8: SOLDIER · Q: ABILITY · C: COVER · F: FORMATION · SPACE: PAUSE
+            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-5: SOLDIER · 6: ALPHA · 7: BRAVO · Q: ABILITY · C: COVER · F: FORMATION · SPACE: PAUSE
           </div>
-        )}
-        {touch && (!hud || hud.state === "active") && (
+        ) : null}
+        {touch && !fullMap && (!hud || hud.state === "active") && (
           <TouchControls
             engineRef={engineRef}
             paused={hud?.paused ?? false}
@@ -453,6 +476,7 @@ export default function Battlefield() {
             touchBox={hud?.touchBox ?? false}
           />
         )}
+        {!fullMap && (
         <div
           data-testid="terrain-legend"
           className="pointer-events-none absolute bottom-7 left-3 z-10 hidden gap-3 lg:flex border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-1.5 font-mono text-[10px] text-[#A2B29A]"
@@ -466,6 +490,17 @@ export default function Battlefield() {
           <span className="text-[#4ECDC4]">◆ IN COVER</span>
           <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
         </div>
+        )}
+
+        {fullMap && (
+          <button
+            data-testid="show-controls-btn"
+            onClick={toggleFullMap}
+            className="absolute bottom-3 right-3 z-20 border border-[#4ECDC4] bg-[#0D0F0C]/90 px-3 py-2 font-mono text-[11px] tracking-wider text-[#4ECDC4]"
+          >
+            SHOW CONTROLS
+          </button>
+        )}
 
         {/* Briefing overlay */}
         {hud?.briefing && hud.state === "active" && (
@@ -662,10 +697,16 @@ export default function Battlefield() {
               formation: "wedge",
               touchBox: false,
               reinforcementsLeft: 3,
+              autoBattle: false,
+              teamA: [],
+              teamB: [],
             }
           }
           onSelect={(id) => engineRef.current?.selectUnit(id)}
           onAbility={(id) => engineRef.current?.startAim(id)}
+          onSplit={() => engineRef.current?.splitSquad()}
+          onSelectTeam={(i) => engineRef.current?.selectTeam(i)}
+          onMerge={() => engineRef.current?.mergeSquads()}
         />
       </div>
       </div>

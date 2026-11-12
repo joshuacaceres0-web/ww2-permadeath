@@ -253,6 +253,11 @@ export interface HudSnapshot {
   touchBox: boolean;
   reinforcementsLeft: number;
   autoBattle: boolean;
+  // Fireteams: living player-squad ids in Alpha / Bravo, empty when
+  // the squad has not been split. The UI shows SPLIT / ALPHA / BRAVO
+  // / MERGE from these.
+  teamA: number[];
+  teamB: number[];
 }
 
 export interface FallenReport {
@@ -616,6 +621,17 @@ export class GameEngine {
   private shake = 0;
 
   private selected: number[] = [];
+  // Fireteams for flanking: splitSquad() divides the living player
+  // squad into Alpha (first half) and Bravo (rest). They are just
+  // id lists — orders still go to whatever is selected, so Alpha can
+  // go left while Bravo goes right. Dead men drop out of the lists
+  // when they are read, never by editing the lists mid-battle.
+  private teamA: number[] = [];
+  private teamB: number[] = [];
+  // Full-map view: when on, resize() zooms out to fit the whole
+  // 2400x1350 map in the canvas instead of the normal 1600x900
+  // camera window, so no scrolling is needed to see it all.
+  private fitWholeMap = false;
   private aimUnitId: number | null = null;
   private mouse = { x: 0, y: 0, inside: false };
   private marquee: { x0: number; y0: number; x1: number; y1: number } | null = null;
@@ -651,6 +667,9 @@ export class GameEngine {
     this.corpses = [];
     this.log = [];
     this.selected = [];
+    this.teamA = [];
+    this.teamB = [];
+    this.fitWholeMap = false;
     this.aimUnitId = null;
     this.elapsed = 0;
     this.stalemateT = 0;
@@ -748,6 +767,17 @@ export class GameEngine {
   resize() {
     const rect = this.canvas.getBoundingClientRect();
     if (rect.width === 0 || rect.height === 0) return;
+    if (this.fitWholeMap) {
+      const s = Math.min(rect.width / MAP_W, rect.height / MAP_H);
+      this.canvas.width = Math.max(1, Math.round(rect.width / (PX * s)));
+      this.canvas.height = Math.max(1, Math.round(rect.height / (PX * s)));
+      this.viewW = MAP_W;
+      this.viewH = MAP_H;
+      this.view = { s, ox: 0, oy: 0 };
+      this.cam.x = 0;
+      this.cam.y = 0;
+      return;
+    }
     const s = Math.max(MIN_SCALE, Math.min(rect.width / VIEW_W, rect.height / VIEW_H));
     // Low-res backing store, upscaled with `image-rendering: pixelated`: true chunky pixels.
     this.canvas.width = Math.max(1, Math.round(rect.width / (PX * s)));
@@ -891,6 +921,61 @@ export class GameEngine {
     this.takeManualControl();
     this.selected = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc).map((u) => u.id);
     this.dirty = true;
+  }
+
+  /** Split the living player squad into two fireteams for flanking:
+   * Alpha gets the first half, Bravo the rest. Alpha is selected
+   * right away so it can be ordered first. A 1-man squad cannot
+   * split. Splitting again re-splits the current living squad. */
+  splitSquad() {
+    const squad = this.units.filter((u) => u.side === "allies" && u.alive && !u.npc);
+    if (squad.length < 2) return;
+    const half = Math.ceil(squad.length / 2);
+    this.teamA = squad.slice(0, half).map((u) => u.id);
+    this.teamB = squad.slice(half).map((u) => u.id);
+    this.selectTeam(0);
+    this.pushLog(`Squad split — Alpha (${this.teamA.length}) and Bravo (${this.teamB.length}). Order each team on its own.`, "info");
+  }
+
+  /** Living ids of one fireteam, in squad order. */
+  private teamIds(i: 0 | 1): number[] {
+    const ids = i === 0 ? this.teamA : this.teamB;
+    return ids.filter((id) => {
+      const u = this.unitById(id);
+      return u?.alive && u.side === "allies" && !u.npc;
+    });
+  }
+
+  /** Select one fireteam (0 = Alpha, 1 = Bravo). No-op when not split. */
+  selectTeam(i: 0 | 1) {
+    const ids = this.teamIds(i);
+    if (!ids.length) return;
+    this.takeManualControl();
+    this.selected = ids;
+    this.aimUnitId = null;
+    this.dirty = true;
+  }
+
+  /** Merge the fireteams back into one squad and select everyone. */
+  mergeSquads() {
+    if (!this.teamA.length && !this.teamB.length) return;
+    this.teamA = [];
+    this.teamB = [];
+    this.selectAll();
+    this.pushLog("Squads merged — one squad again.", "info");
+  }
+
+  /** Full-map view on/off: zoom out to the whole map, or back to the
+   * normal camera window. Re-runs resize so it takes effect at once. */
+  setFitMap(on: boolean) {
+    if (this.fitWholeMap === on) return;
+    this.fitWholeMap = on;
+    this.resize();
+    this.dirty = true;
+  }
+
+  isFitMap() {
+    return this.fitWholeMap;
   }
 
   retreat() {
@@ -1184,6 +1269,13 @@ export class GameEngine {
       return;
     }
     if (k >= "1" && k <= "8") {
+      // With the squad split, 6 = Alpha and 7 = Bravo, so a team can
+      // be picked without tapping the dock. Without a split, 6-8
+      // still pick an individual man as before.
+      if ((k === "6" || k === "7") && (this.teamA.length || this.teamB.length)) {
+        this.selectTeam(k === "6" ? 0 : 1);
+        return;
+      }
       const idx = parseInt(k, 10) - 1;
       const allies = this.units.filter((u) => u.side === "allies" && !u.npc);
       if (allies[idx]) {
@@ -2737,6 +2829,8 @@ export class GameEngine {
       state: this.battleState === "active" && this.phase === "over" ? "defeat" : this.battleState,
       units,
       selectedIds: [...this.selected],
+      teamA: this.teamIds(0),
+      teamB: this.teamIds(1),
       enemiesAlive: this.enemiesAlive(),
       wave: this.waveIndex + 1,
       waves: this.waves.length,
