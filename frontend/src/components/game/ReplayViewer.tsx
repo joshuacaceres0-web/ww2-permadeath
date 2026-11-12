@@ -170,7 +170,7 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           if (coverType) {
             ctx.fillStyle = "#0D0F0C";
             ctx.fillRect(x - 17, y - 2, 6, 6);
-            ctx.fillStyle = coverType === "heavy" ? "#E5A93C" : "#4ECDC4";
+            ctx.fillStyle = (u as unknown as { coverKind?: string | null }).coverKind === "trench" ? "#7A5A2E" : coverType === "heavy" ? "#E5A93C" : "#4ECDC4";
             ctx.fillRect(x - 16, y - 1, 4, 4);
           }
           // Medic cross above the bars, both sides.
@@ -309,11 +309,12 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
         <br />
         Bars above each man: health on top, morale below it (green holds, amber wavers, red about to break, BROKEN = fell back).{" "}
         <span className="text-[#F0F5EB]">✚ Medic</span> · <span className="text-[#4ECDC4]">■ Light cover</span> ·{" "}
-        <span className="text-[#E5A93C]">■ Heavy cover</span> · <span className="text-[#7CFC66]">○ Healed this frame</span>
+        <span className="text-[#E5A93C]">■ Heavy cover</span> · <span className="text-[#7A5A2E]">■ Trench, best cover</span> ·{" "}
+        <span className="text-[#7CFC66]">○ Healed this frame</span>
         <br />
         Obstacles: <span className="text-[#7CFC66]">● Tree</span> · <span className="text-[#B8B2A4]">■ Ruin</span> ·{" "}
         <span className="text-[#C08A5A]">■ Building</span> · <span className="text-[#5A8A3A]">● Hedgerow</span> ·{" "}
-        <span className="text-[#9A9A8A]">● Wreck / steel</span> · <span className="text-[#8A7A52]">▬ Trench — heavy cover, fight from inside</span>
+        <span className="text-[#9A9A8A]">● Wreck / steel</span> · <span className="text-[#8A7A52]">▬ Trench — BEST cover in the game</span>
       </p>
     </div>
   );

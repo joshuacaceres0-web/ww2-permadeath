@@ -143,6 +143,7 @@ describe("replay records morale, cover and medics", () => {
       expect(typeof u.broken).toBe("boolean");
       expect(typeof u.medic).toBe("boolean");
       expect(u.coverType === null || u.coverType === "light" || u.coverType === "heavy").toBe(true);
+      expect(u.coverKind === null || u.coverKind === "trench").toBe(true);
       if (u.cover === true) expect(u.coverType === "light" || u.coverType === "heavy").toBe(true);
     }
     const hurtNow = last.units.find((u) => u.id === (hurt as unknown as { id: number }).id)!;

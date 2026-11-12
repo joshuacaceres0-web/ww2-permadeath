@@ -319,6 +319,8 @@ export interface ReplayUnit {
   cover: boolean;
   /** Directional cover the man is actually using, or null. */
   coverType: "light" | "heavy" | null;
+  /** "trench" when the man is in a trench, so the replay shield matches the live game. */
+  coverKind: "trench" | null;
   /** Morale 0-100 at this frame, and whether he is broken. */
   morale: number;
   broken: boolean;
@@ -848,6 +850,7 @@ export class GameEngine {
         kills: u.kills,
         cover: !!u.cover,
         coverType: u.cover ? (u.cover.type ?? "light") : null,
+        coverKind: u.cover?.kind === "trench" ? "trench" : null,
         morale: Math.round(u.morale),
         broken: u.broken,
         medic: this.isMedic(u),
@@ -3471,7 +3474,7 @@ export class GameEngine {
       const sy = headY + PX;
       ctx.fillStyle = "#0D0F0C";
       ctx.fillRect(sx - PX, sy - PX, PX * 5, PX * 5);
-      ctx.fillStyle = u.cover.type === "heavy" ? "#E5A93C" : "#4ECDC4"; // gold = heavy cover, teal = light cover
+      ctx.fillStyle = u.cover.kind === "trench" ? "#7A5A2E" : u.cover.type === "heavy" ? "#E5A93C" : "#4ECDC4"; // brown = trench, gold = heavy cover, teal = light cover
       ctx.fillRect(sx, sy, PX * 3, PX * 2);
       ctx.fillRect(sx + PX, sy + PX * 2, PX, PX);
     }
@@ -3632,15 +3635,16 @@ function drawTrench(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: n
         ctx.fill();
       }
     }
-    // Heavy cover along the trench floor, same numbers as a ruin
-    // wall (q 0.9, 400 hp), so sustained fire can wear it down.
-    // The blocker entries exist only so the replay can draw the
-    // trench; they never block movement (see buildBlockedGrid).
+    // Heavy cover along the trench floor, now the BEST cover in the
+    // game: q 0.95 beats buildings and pillboxes (0.9), and with no
+    // hp it never wears down under bullets or blasts. The blocker
+    // entries exist only so the replay can draw the trench; they
+    // never block movement (see buildBlockedGrid).
     for (let t = a + 10; t < b; t += 22) {
       const cx = x0 + dx * t;
       const cy = y0 + dy * t;
       blockers.push({ x: cx, y: cy, r: 14, kind: "trench" });
-      COVERS.push({ x: cx, y: cy, r: 14, q: 0.9, q0: 0.9, type: "heavy", hp: 400, maxHp: 400, kind: "trench" });
+      COVERS.push({ x: cx, y: cy, r: 14, q: 0.95, q0: 0.95, type: "heavy", kind: "trench" });
     }
   }
 }

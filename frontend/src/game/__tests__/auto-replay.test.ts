@@ -125,6 +125,7 @@ describe("AUTO replay recorder", () => {
         // Same fields the in-game replay records, so the standalone
         // viewer shows morale, cover type and medics too.
         coverType: u.cover ? ((u.cover as { type?: string }).type ?? "light") : null,
+        coverKind: (u.cover as { kind?: string } | null)?.kind === "trench" ? "trench" : null,
         morale: Math.round(u.morale as number),
         broken: !!u.broken,
         medic: u.type === "medic" || u.enemyType === "medic",

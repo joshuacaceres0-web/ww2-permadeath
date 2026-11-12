@@ -104,16 +104,20 @@ function step(e: AnyEngine, seconds: number) {
 }
 
 describe("trenches", () => {
-  it("every terrain kind builds trench cover: heavy, q 0.9, 400 hp", async () => {
+  it("every terrain kind builds trench cover: heavy, q 0.95, never wears down", async () => {
     for (const terrain of ["beach", "bocage", "town", "causeway", "forest"]) {
       const e = await makeEngine(terrain);
       const trenches = e.covers.filter((c) => c.kind === "trench");
       expect(trenches.length).toBeGreaterThan(20);
       for (const t of trenches) {
         expect(t.type).toBe("heavy");
-        expect(t.q).toBe(0.9);
-        expect(t.hp).toBe(400);
+        expect(t.q).toBe(0.95);
+        expect(t.hp).toBeUndefined(); // no hp: indestructible, like a building
       }
+      // Best cover in the game: a trench stops more than any other
+      // cover on the map, including buildings and pillboxes at 0.9.
+      const bestOther = Math.max(...e.covers.filter((c) => c.kind !== "trench").map((c) => c.q as number));
+      expect(bestOther).toBeLessThanOrEqual(0.9);
     }
   });
 
@@ -146,14 +150,13 @@ describe("trenches", () => {
     expect(man.x).toBeGreaterThan(900); // crossed the trench line at x=900
   });
 
-  it("a trench wears down under sustained fire like a ruin wall", async () => {
+  it("a trench cannot be shot to pieces, even by a huge hit", async () => {
     const e = await makeEngine("town");
     const trench = e.covers.find((c) => c.kind === "trench")!;
     const damage = e as unknown as { damageCover: (c: unknown, dmg: number) => void };
-    damage.damageCover(trench, 100);
-    expect(trench.hp).toBe(300);
-    expect(trench.q as number).toBeLessThan(0.9);
+    damage.damageCover(trench, 1000);
     expect(e.covers).toContain(trench);
+    expect(trench.q).toBe(0.95); // still the best cover in the game
   });
 
   it("replays show trenches, merged into one long bar per segment", async () => {
