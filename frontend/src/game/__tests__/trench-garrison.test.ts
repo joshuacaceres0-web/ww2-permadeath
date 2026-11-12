@@ -69,7 +69,7 @@ const baseMission = {
     { type: "grenadier", wave: 1, count: 3 },
     { type: "volks", wave: 1, count: 3 },
     { type: "medic", wave: 1, count: 1 },
-    { type: "mg42", wave: 1, count: 2 },
+    { type: "mg42", wave: 1, count: 3 },
     { type: "volks", wave: 2, count: 2 },
     { type: "grenadier", wave: 2, count: 1 },
   ],

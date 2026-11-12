@@ -71,7 +71,7 @@ const baseMission = {
     { type: "grenadier", wave: 1, count: 3 },
     { type: "volks", wave: 1, count: 3 },
     { type: "medic", wave: 1, count: 1 },
-    { type: "mg42", wave: 1, count: 2 },
+    { type: "mg42", wave: 1, count: 3 },
     { type: "volks", wave: 2, count: 2 },
     { type: "grenadier", wave: 2, count: 1 },
   ],
@@ -135,15 +135,17 @@ describe("wave 1 garrisons at the beach", () => {
     },
   );
 
-  it("wave 1 fields two MG42 nests spread along the beach defense", async () => {
+  it("wave 1 fields three MG42 nests spread along the beach defense", async () => {
     const e = await makeEngine("dday");
     const mgs = e.units.filter((u) => u.enemyType === "mg42");
-    expect(mgs.length).toBe(2);
-    // One nest in each half of the beach: top and bottom, a line of
-    // nests covering the whole defense instead of bunching at one y.
+    expect(mgs.length).toBe(3);
+    // One nest in each third of the beach: top, middle and bottom, a
+    // line of nests covering the whole defense instead of bunching.
     const ys = mgs.map((u) => u.y).sort((a, b) => a - b);
-    expect(ys[0], `top nest at y=${Math.round(ys[0])}`).toBeLessThan(600);
-    expect(ys[1], `bottom nest at y=${Math.round(ys[1])}`).toBeGreaterThan(600);
+    expect(ys[0], `top nest at y=${Math.round(ys[0])}`).toBeLessThan(400);
+    expect(ys[1], `middle nest at y=${Math.round(ys[1])}`).toBeGreaterThan(400);
+    expect(ys[1], `middle nest at y=${Math.round(ys[1])}`).toBeLessThan(850);
+    expect(ys[2], `bottom nest at y=${Math.round(ys[2])}`).toBeGreaterThan(850);
     for (const mg of mgs) {
       expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeGreaterThanOrEqual(700);
       expect(mg.x, `MG42 at x=${Math.round(mg.x)}`).toBeLessThan(1100);

@@ -174,4 +174,28 @@ describe("tactical cover", () => {
     expect(heavy.length).toBeGreaterThan(0);
     expect(heavy.some((c) => (c.q as number) >= 0.85)).toBe(true);
   });
+
+  it("trenches are priority cover — a farther trench beats a nearer sandbag", async () => {
+    const e = await makeEngine();
+    const man = e.units.find((u) => u.side === "allies" && !u.npc && u.alive)!;
+    // Isolate the ranking: only two covers, a sandbag 50 units away
+    // and a trench 130 away (80 farther), both on open ground by the
+    // west edge. By distance the sandbag wins; the trench's quality
+    // (0.95 vs 0.65) is worth a 90-unit budget, so the trench must win.
+    // A trench much farther away would not win — quality earns a
+    // distance budget, it does not override distance entirely.
+    const sandbag = { x: 250, y: 675, r: 7, q: 0.65, q0: 0.65, kind: "sandbag", type: "light", hp: 110, maxHp: 110 };
+    const trench = { x: 330, y: 675, r: 14, q: 0.95, q0: 0.95, kind: "trench", type: "heavy" };
+    (e as unknown as { covers: Array<Record<string, unknown>> }).covers = [sandbag, trench];
+    (man as Record<string, unknown>).x = 200;
+    (man as Record<string, unknown>).y = 675;
+    const best = (e as unknown as { bestCovers: (u: unknown, r: number) => Array<{ x: number; y: number }> }).bestCovers(man, 280);
+    expect(best.length).toBeGreaterThan(0);
+    const top = best[0];
+    // The top pick must be the trench's stand point, not the sandbag's.
+    const dTrench = Math.hypot(top.x - (trench.x as number), top.y - (trench.y as number));
+    const dSandbag = Math.hypot(top.x - (sandbag.x as number), top.y - (sandbag.y as number));
+    expect(dTrench, `top cover pick at (${Math.round(top.x)}, ${Math.round(top.y)}) must be the trench`).toBeLessThan(dSandbag);
+    expect(dTrench, "the top pick must stand at the trench").toBeLessThan(40);
+  });
 });

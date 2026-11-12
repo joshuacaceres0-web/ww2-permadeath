@@ -171,6 +171,10 @@ interface Unit {
   /** A counter-attacker: spawned by a random counter-attack, he charges
    * the player's squad and ignores the camp-and-defend rule. */
   counterAttack: boolean;
+  /** Aggressive: a Wave 2 or Wave 3 man. He charges on spawn instead
+   * of camping and defending — the reinforcements come at the player,
+   * they do not wait to be found. Same charge as a counter-attacker. */
+  aggressive?: boolean;
   /** Garrison home (where the man spawned) and his current patrol
    * target. A camping enemy patrols around his home instead of
    * standing frozen: he walks slowly to a point near home, then picks
@@ -1651,7 +1655,7 @@ export class GameEngine {
         rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0, homeX: cx * CELL + CELL / 2, homeY: cy * CELL + CELL / 2, patrolX: cx * CELL + CELL / 2, patrolY: cy * CELL + CELL / 2,
         hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
-        isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
+        isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
@@ -1754,7 +1758,7 @@ export class GameEngine {
   // after the stuck detector dropped a wedged order to it.
   private bestCovers(u: Unit, radius: number): Array<{ x: number; y: number }> {
     const threat = this.nearestAlly(u);
-    const out: Array<{ x: number; y: number; score: number }> = [];
+    const out: Array<{ x: number; y: number; q: number; score: number }> = [];
     for (const c of this.covers) {
       const d0 = dist(u.x, u.y, c.x, c.y);
       if (d0 > radius + c.r) continue;
@@ -1771,16 +1775,24 @@ export class GameEngine {
       if (this.pointBlocked(sx, sy)) continue;
       if (this.elapsed < u.coverBanT && dist(sx, sy, u.coverBanX, u.coverBanY) < 100) continue;
       const d = dist(u.x, u.y, sx, sy);
+      // Quality earns a distance budget, it does not override distance:
+      // a trench (q 0.95) beats a sandbag (q 0.65) up to 90 units
+      // farther away, and a ruin wall (q 0.8) up to 45 farther — but
+      // a unit does not hike across the map for a trench when good
+      // cover sits next to it. (A hard quality-first sort did exactly
+      // that: an idle man who had just reached his ordered spot walked
+      // all the way back to a trench 160 units away, past a ruin wall
+      // 99 away.)
+      let score = d - c.q * 300;
       // Threat-side bonus: cover roughly in the direction of the enemy
       // (dot product of unit->cover and unit->threat above 0) counts as
       // 60 units closer, so a slightly farther sandbag facing the enemy
       // beats a nearer one behind the unit.
-      let score = d;
       if (threat) {
         const dot = (sx - u.x) * (threat.x - u.x) + (sy - u.y) * (threat.y - u.y);
         if (dot > 0) score -= 60;
       }
-      out.push({ x: sx, y: sy, score });
+      out.push({ x: sx, y: sy, q: c.q, score });
     }
     out.sort((a, b) => a.score - b.score);
     return out.map(({ x, y }) => ({ x, y }));
@@ -2303,7 +2315,7 @@ export class GameEngine {
         healMult: mb.healMult,
         bulletSpeed: spec.bulletSpeed,
         isStatic: false,
-        vehicle: false, counterAttack: false,
+        vehicle: false, counterAttack: false, aggressive: false,
         orders: [],
         attackId: null,
         targetId: null,
@@ -2382,6 +2394,7 @@ export class GameEngine {
           isStatic,
           vehicle: !!def.vehicle,
           counterAttack: false,
+          aggressive: false,
           orders: [],
           attackId: null,
           targetId: null,
@@ -2444,8 +2457,9 @@ export class GameEngine {
     // threat side and counts as his cover — a man standing exactly
     // on the spot gets nothing from it, because the directional
     // cover check needs the cover on the threat side. Static guns
-    // stay on the bluffs, as before. Waves 2 and 3 are
-    // reinforcements from the east, as before.
+    // stay on the bluffs, as before. Waves 2 and 3 are AGGRESSIVE
+    // reinforcements from the east: they charge on spawn instead of
+    // camping and defending, so the fight comes to the player.
     const beach = index === 0;
     const trenchSpots = beach ? this.firstTrenchSpots() : [];
     const mobileTotal = this.waves[index].reduce(
@@ -2497,6 +2511,10 @@ export class GameEngine {
         mobileCount++;
         const u = this.spawnEnemyUnit(spec.type, x, y, rng, trench);
         if (trench) u.trenchHold = true;
+        // Waves 2 and 3 are aggressive: the mobile men charge on
+        // spawn instead of camping. Statics stay put (they cannot
+        // move), and the wave 1 garrison keeps holding its trench.
+        if (index > 0 && !isStatic) u.aggressive = true;
       }
     }
     if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
@@ -2799,12 +2817,13 @@ export class GameEngine {
           // spots a player unit — within vision and with line of
           // sight. Until then it does not advance, so the defense
           // waits for the player instead of charging across the map.
-          // A counter-attacker ignores the rule and charges. Allies
-          // and AUTO squad men are unaffected and still chase. A
-          // medic is exempt too: its prey is a wounded man on its own
-          // side, not the player, so it moves to heal regardless.
+          // A counter-attacker ignores the rule and charges, and so
+          // does an aggressive Wave 2 or 3 man. Allies and AUTO squad
+          // men are unaffected and still chase. A medic is exempt too:
+          // its prey is a wounded man on its own side, not the player,
+          // so it moves to heal regardless.
           const isEnemyPrey = prey.side !== u.side;
-          const spotted = u.side !== "axis" || u.counterAttack || !isEnemyPrey || (pd <= u.vision && this.los(u, prey));
+          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision && this.los(u, prey));
           if (!spotted) {
             // Camping, but not frozen: patrol slowly around the
             // garrison home. A static gun or a vehicle never patrols.
