@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -16,7 +16,6 @@ import { RibbonRack } from "@/components/Medals";
 import CampaignMap from "@/components/map/CampaignMap";
 import { useMusic } from "@/game/music";
 
-const VIEW_KEY = "vanguard-warroom-view";
 
 const THREAT_TEXT: Record<string, string> = {
   LOW: "text-[#8D9A83] border-[#3A4433]",
@@ -37,22 +36,6 @@ export default function Home() {
   const { data: memorial } = useQuery({ queryKey: ["memorial"], queryFn: () => apiGet<MemorialEntry[]>("/memorial"), retry: false });
   const loading = stateLoading || missionsLoading;
   const loadFailed = stateError || missionsError;
-
-  const [view, setView] = useState<"list" | "map">(() => {
-    try {
-      return localStorage.getItem(VIEW_KEY) === "map" ? "map" : "list";
-    } catch {
-      return "list";
-    }
-  });
-  const pickView = (v: "list" | "map") => {
-    setView(v);
-    try {
-      localStorage.setItem(VIEW_KEY, v);
-    } catch {
-      /* private mode: choice lasts for this visit */
-    }
-  };
 
   const mission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
   const activeSquad = (squad ?? []).filter((s) => s.status === "active");
@@ -89,22 +72,6 @@ export default function Home() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-end gap-2" data-testid="warroom-view-switch">
-        <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">Campaign view</span>
-        {(["list", "map"] as const).map((v) => (
-          <button
-            key={v}
-            data-testid={`warroom-view-${v}`}
-            aria-pressed={view === v}
-            onClick={() => pickView(v)}
-            className={`border-2 px-3 py-1 font-[Silkscreen] text-[11px] shadow-[2px_2px_0_0_#050605] transition-colors duration-100 ${
-              view === v ? "border-[#E5A93C] bg-[#E5A93C] text-[#141108]" : "border-[#2E3628] bg-[#1A1D17] text-[#A2B29A] hover:text-[#E3E7DC]"
-            }`}
-          >
-            {v.toUpperCase()}
-          </button>
-        ))}
-      </div>
     <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
       {/* War theater */}
       <section className="space-y-4">
@@ -241,7 +208,7 @@ export default function Home() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {view === "map" && missions ? (
+            {missions ? (
               <CampaignMap
                 missions={missions}
                 state={state}
@@ -249,31 +216,7 @@ export default function Home() {
                 canDeploy={activeSquad.length > 0 && !state?.campaign_complete}
                 onDeploy={deploy}
               />
-            ) : (missions ?? []).map((m) => {
-              const done = state ? m.index < state.mission_index : false;
-              const current = state ? m.index === state.mission_index : false;
-              return (
-                <div
-                  key={m.id}
-                  data-testid={`campaign-mission-${m.id}`}
-                  className={`flex items-center justify-between border px-3 py-2 font-mono text-xs ${
-                    current
-                      ? "border-[#E5A93C] bg-[#22271E] text-[#F0F5EB]"
-                      : done
-                        ? "border-[#2E3628] text-[#8D9A83]"
-                        : "border-[#2E3628] text-[#5A664F]"
-                  }`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className={current ? "text-[#E5A93C]" : done ? "text-[#5EB872]" : ""}>
-                      {done ? "■ SECURED" : current ? "▸ ACTIVE" : "□ LOCKED"}
-                    </span>
-                    <span className="tracking-wide">{m.code}</span>
-                  </span>
-                  <span>{m.location.split(",").slice(-1)[0].trim()}</span>
-                </div>
-              );
-            })}
+            ) : null}
             {!missions && (
               <p className="font-mono text-xs text-[#5A664F]">Raising division on the wire…</p>
             )}
