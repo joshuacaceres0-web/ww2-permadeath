@@ -7,7 +7,7 @@ import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
 import { setSfxMuted, setSfxVolume, sfx } from "./sfx";
 import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
-export const MAP_W = 2400;
+export const MAP_W = 3200;
 export const MAP_H = 1350;
 const VIEW_W = 1600; // world units visible at once — the camera scrolls over the rest
 const VIEW_H = 900;
@@ -652,7 +652,7 @@ export class GameEngine {
   private teamA: number[] = [];
   private teamB: number[] = [];
   // Full-map view: when on, resize() zooms out to fit the whole
-  // 2400x1350 map in the canvas instead of the normal 1600x900
+  // 3200x1350 map in the canvas instead of the normal 1600x900
   // camera window, so no scrolling is needed to see it all.
   private fitWholeMap = false;
   private aimUnitId: number | null = null;
@@ -3809,11 +3809,13 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawHedgehog(ctx, blockers, hx, hy);
       COVERS.push({ x: hx, y: hy, r: 11, q: 0.35, q0: 0.35, type: "light", hp: 80, maxHp: 80 });
     }
-    coverField(ctx, blockers, rng, 1100, 2300, 12);
+    coverField(ctx, blockers, rng, 1100, 3100, 16);
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
+    for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 2750, y, 0, 6); // second trench line, new eastern ground
     // Bluffs: dune-grass ridge with three draws (the real Omaha exits).
     hedgerow(ctx, blockers, 1000, 0, 1000, MAP_H, [0.2, 0.5, 0.82], rng);
     hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
+    hedgerow(ctx, blockers, 2500, 0, 2500, MAP_H, gapPick(2), rng);
     road(MAP_H / 2);
     // Concrete pillbox ruins on the bluff.
     for (const py of [MAP_H * 0.32, MAP_H * 0.68]) {
@@ -3829,13 +3831,13 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     }
   } else if (kind === "airborne" || kind === "bocage") {
     road(MAP_H / 2);
-    for (const x of [620, 1120, 1620, 2050]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
+    for (const x of [620, 1120, 1620, 2050, 2600]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
     for (const y of [430, 920]) {
-      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
+      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030], [2140, 2580]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
     }
-    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 700 + rng() * 1600, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
+    for (let i = 0; i < 12; i++) drawTree(ctx, blockers, 700 + rng() * 2400, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
     drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
-    coverField(ctx, blockers, rng, 300, 2300, 16);
+    coverField(ctx, blockers, rng, 300, 3100, 20);
     if (kind === "airborne") {
       ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
       ctx.fillRect(0, 0, MAP_W, MAP_H);
@@ -3845,14 +3847,14 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     for (let i = 0; i < 12; i++) {
       const w = 110 + rng() * 90;
       const h = 90 + rng() * 60;
-      const bx = 520 + (i % 4) * 460 + rng() * 80;
+      const bx = 520 + (i % 4) * 620 + rng() * 80;
       const by = 80 + Math.floor(i / 4) * 430 + rng() * 60;
       if (Math.abs(by + h / 2 - MAP_H / 2) < 110) continue; // keep the main street open
       drawBuilding(ctx, blockers, bx, by, w, h);
     }
     hedgerow(ctx, blockers, 400, 40, 400, MAP_H - 40, gapPick(3), rng);
-    for (let i = 0; i < 6; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
-    coverField(ctx, blockers, rng, 500, 2300, 8);
+    for (let i = 0; i < 9; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
+    coverField(ctx, blockers, rng, 500, 3100, 10);
   } else if (kind === "causeway") {
     ctx.fillStyle = "#16252A";
     ctx.fillRect(0, 0, MAP_W, MAP_H * 0.3);
@@ -3864,10 +3866,11 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawBush(ctx, x + 22, MAP_H * 0.7, 15, rng);
       blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15, kind: "bush" });
     }
-    for (let i = 0; i < 8; i++) drawTree(ctx, blockers, 600 + rng() * 1700, MAP_H * (0.38 + rng() * 0.24), 16, false);
-    for (let i = 0; i < 7; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
+    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 600 + rng() * 2500, MAP_H * (0.38 + rng() * 0.24), 16, false);
+    for (let i = 0; i < 11; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
     drawWreck(ctx, blockers, 1250, MAP_H * 0.47, 0.2);
     drawWreck(ctx, blockers, 1850, MAP_H * 0.55, -0.3);
+    drawWreck(ctx, blockers, 2650, MAP_H * 0.5, 0.1);
   } else if (kind === "forest") {
     road(MAP_H / 2);
     for (let i = 0; i < 110; i++) {
@@ -3876,9 +3879,11 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       if (Math.abs(ty - MAP_H / 2) < 60) continue;
       drawTree(ctx, blockers, tx, ty, 16 + rng() * 12, snow);
     }
-    coverField(ctx, blockers, rng, 400, 2300, 10);
+    coverField(ctx, blockers, rng, 400, 3100, 12);
     drawSandbags(ctx, 1900, MAP_H / 2 - 120, 0, 7); // bunker line
     drawSandbags(ctx, 1900, MAP_H / 2 + 120, 0, 7);
+    drawSandbags(ctx, 2700, MAP_H / 2 - 120, 0, 7); // second bunker line, new eastern ground
+    drawSandbags(ctx, 2700, MAP_H / 2 + 120, 0, 7);
   }
 
   // Craters (cosmetic, walkable).

@@ -116,7 +116,7 @@ describe("fireteam split", () => {
     expect(lastHud!.selectedIds).toHaveLength(5);
   });
 
-  it("full map fits the whole 2400x1350 map and restores the normal window", async () => {
+  it("full map fits the whole 3200x1350 map and restores the normal window", async () => {
     const { GameEngine } = await loadEngine();
     const canvas = (document as unknown as { createElement: (t: string) => HTMLCanvasElement }).createElement("canvas");
     const engine = new GameEngine(canvas, () => {});
@@ -127,7 +127,7 @@ describe("fireteam split", () => {
     expect((engine as unknown as { isFitMap: () => boolean }).isFitMap()).toBe(false);
     (engine as unknown as { setFitMap: (on: boolean) => void }).setFitMap(true);
     expect((engine as unknown as { isFitMap: () => boolean }).isFitMap()).toBe(true);
-    expect(anyEngine.viewW).toBe(2400);
+    expect(anyEngine.viewW).toBe(3200);
     expect(anyEngine.viewH).toBe(1350);
     expect((anyEngine.cam as { x: number; y: number }).x).toBe(0);
     expect((anyEngine.cam as { x: number; y: number }).y).toBe(0);

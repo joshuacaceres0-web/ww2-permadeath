@@ -41,7 +41,7 @@ export default function Battlefield() {
   const [replay, setReplay] = useState<BattleReplay | null>(null);
   const [showReplay, setShowReplay] = useState(false);
   // Full-map view: hides every control sitting on top of the map and
-  // zooms the engine out to the whole 2400x1350 map, so the full
+  // zooms the engine out to the whole 3200x1350 map, so the full
   // battlefield is visible at once. The top bar stays, with a
   // SHOW CONTROLS button to get back.
   const [fullMap, setFullMap] = useState(false);

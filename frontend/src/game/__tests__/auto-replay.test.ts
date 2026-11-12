@@ -3,6 +3,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import * as fs from "node:fs";
+import { MAP_W, MAP_H } from "../engine";
 
 function stubBrowser() {
   const ctx = new Proxy(
@@ -147,8 +148,8 @@ describe("AUTO replay recorder", () => {
     ).getReplay();
     const result = {
       mission: "OPERATION SILENT CHATEAU",
-      mapW: 2400,
-      mapH: 1350,
+      mapW: MAP_W,
+      mapH: MAP_H,
       durationSec: Math.round(t),
       result: engine.battleState,
       squadAlive: squad.filter((u) => u.alive).length,
