@@ -178,6 +178,22 @@ describe("Auto Battle — core", () => {
     expect((hurt.hp as number)).toBeLessThan(30);
   }, 120000);
 
+  it("replay: the engine records a frame every 0.5s for the debrief screen", async () => {
+    const { engine } = await makeBattle();
+    const getReplay = () =>
+      (engine as unknown as { getReplay: () => { frames: Array<{ t: number; units: unknown[] }>; result: string; durationSec: number } }).getReplay();
+    let replay = getReplay();
+    expect(replay.frames.length).toBeGreaterThanOrEqual(1);
+    expect(replay.frames[0].t).toBe(0);
+    engine.setAutoBattle(true);
+    step(engine, 10);
+    replay = getReplay();
+    console.log(`replay frames=${replay.frames.length} duration=${replay.durationSec}s result=${replay.result}`);
+    expect(replay.frames.length).toBeGreaterThanOrEqual(20);
+    expect(replay.frames[replay.frames.length - 1].t).toBeGreaterThanOrEqual(10);
+    expect(replay.frames[0].units.length).toBeGreaterThan(5);
+  }, 120000);
+
   it("add-on 4: AUTO never spends RP on reinforcements — that stays manual", async () => {
     const { engine } = await makeBattle();
     engine.setAutoBattle(true);

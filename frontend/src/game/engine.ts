@@ -280,6 +280,39 @@ export interface BattleReport {
   survivors: SurvivorReport[];
 }
 
+export interface ReplayUnit {
+  id: number;
+  side: "allies" | "axis";
+  npc: boolean;
+  type: string;
+  enemyType: string | null;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  alive: boolean;
+  kills: number;
+  cover: boolean;
+}
+
+export interface ReplayFrame {
+  t: number;
+  phase: string;
+  battleState: string;
+  wave: number;
+  units: ReplayUnit[];
+}
+
+export interface BattleReplay {
+  mission: string;
+  mapW: number;
+  mapH: number;
+  durationSec: number;
+  result: "active" | "victory" | "defeat";
+  frames: ReplayFrame[];
+}
+
 // Deterministic PRNG so a mission always generates the same battlefield.
 function mulberry32(seed: number): () => number {
   let s = seed;
@@ -565,6 +598,10 @@ export class GameEngine {
   // orders are off. Any manual order takes command back instantly.
   private autoBattle = false;
   private autoAbilityT = 0;
+  // Battle replay: one snapshot every 0.5s, kept in memory only, so
+  // the debrief screen can play the battle back after it ends.
+  private replayFrames: ReplayFrame[] = [];
+  private replayT = 0;
   private battleState: "active" | "victory" | "defeat" = "active";
   private shake = 0;
 
@@ -645,6 +682,9 @@ export class GameEngine {
     this.visible = new Uint8Array(COLS * ROWS);
     this.explored = new Uint8Array(COLS * ROWS);
 
+    this.replayFrames = [];
+    this.replayT = 0;
+    this.autoBattle = false;
     this.spawnAllies(squad, rng, commanderBonus);
     // 2nd Platoon: 6 weak allies, so they support the fight but can
     // never clear a wave on their own — in the Emergent play test
@@ -660,6 +700,7 @@ export class GameEngine {
     const allies = this.units.filter((u) => u.side === "allies");
     if (allies.length) this.centerOn(allies.reduce((t, u) => t + u.x, 0) / allies.length, allies.reduce((t, u) => t + u.y, 0) / allies.length);
     this.pushLog(`${mission.code} — assets in position. Awaiting your order.`, "info");
+    this.recordReplayFrame();
   }
 
   begin() {
@@ -720,6 +761,45 @@ export class GameEngine {
     this.cam.x = x - this.viewW / 2;
     this.cam.y = y - this.viewH / 2;
     this.clampCam();
+  }
+
+  private recordReplayFrame() {
+    this.replayFrames.push({
+      t: Math.round(this.elapsed * 10) / 10,
+      phase: this.phase,
+      battleState: this.battleState,
+      wave: this.waveIndex + 1,
+      units: this.units.map((u) => ({
+        id: u.id,
+        side: u.side,
+        npc: u.npc,
+        type: u.type,
+        enemyType: u.enemyType,
+        name: u.name,
+        x: Math.round(u.x),
+        y: Math.round(u.y),
+        hp: Math.round(u.hp),
+        maxHp: u.maxHp,
+        alive: u.alive,
+        kills: u.kills,
+        cover: !!u.cover,
+      })),
+    });
+  }
+
+  /** The battle just played, as a replay: one frame every 0.5s. */
+  getReplay(): BattleReplay | null {
+    if (!this.mission) return null;
+    const last = this.replayFrames[this.replayFrames.length - 1];
+    if (!last || last.t < Math.round(this.elapsed * 10) / 10) this.recordReplayFrame();
+    return {
+      mission: this.mission.code,
+      mapW: MAP_W,
+      mapH: MAP_H,
+      durationSec: Math.round(this.elapsed),
+      result: this.battleState,
+      frames: this.replayFrames,
+    };
   }
 
   getReport(): BattleReport | null {
@@ -1548,6 +1628,11 @@ export class GameEngine {
   private update(dt: number) {
     if (this.phase !== "battle" || this.paused) return;
     this.elapsed += dt;
+    this.replayT += dt;
+    if (this.replayT >= 0.5) {
+      this.replayT = 0;
+      this.recordReplayFrame();
+    }
 
     // Wave / win logic.
     if (this.enemiesAlive() === 0) {

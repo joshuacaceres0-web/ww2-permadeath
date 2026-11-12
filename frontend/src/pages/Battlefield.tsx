@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Pause, Play, Flag, Skull } from "lucide-react";
 import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
+import ReplayViewer from "@/components/game/ReplayViewer";
 import SquadDock from "@/components/game/SquadDock";
 import CombatLog from "@/components/game/CombatLog";
 import TouchControls, { FORMATIONS } from "@/components/game/TouchControls";
@@ -13,7 +14,7 @@ import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
 import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
-import { GameEngine, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
+import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
 import { UNIT_TYPES } from "@/game/data";
 import { useMusic } from "@/game/music";
 
@@ -37,6 +38,8 @@ export default function Battlefield() {
       : `battle-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const [hud, setHud] = useState<HudSnapshot | null>(null);
   const [report, setReport] = useState<BattleReport | null>(null);
+  const [replay, setReplay] = useState<BattleReplay | null>(null);
+  const [showReplay, setShowReplay] = useState(false);
   const [variant, setVariant] = useState<Variant>("");
   const [touch] = useState(
     () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
@@ -589,6 +592,19 @@ export default function Battlefield() {
               </div>
 
               <Button
+                data-testid="debrief-replay-btn"
+                variant="outline"
+                size="lg"
+                className="mt-3 w-full"
+                onClick={() => {
+                  setReplay(engineRef.current?.getReplay() ?? null);
+                  setShowReplay(true);
+                }}
+              >
+                WATCH REPLAY
+              </Button>
+
+              <Button
                 data-testid="debrief-return-btn"
                 size="lg"
                 className="mt-5 w-full"
@@ -604,6 +620,9 @@ export default function Battlefield() {
             </div>
           </div>
         )}
+
+        {/* Battle replay, recorded live during the battle */}
+        {showReplay && replay && <ReplayViewer replay={replay} onClose={() => setShowReplay(false)} />}
       </div>
 
       {/* Squad command dock */}
