@@ -170,6 +170,10 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     type: "fallschirmjager", label: "Fallschirmjäger Paratrooper", weapon: "FG42 automatic rifle", hp: 120, speed: 66, range: 220,
     vision: 260, dmg: 11, fireInterval: 0.3, spread: 0.07, bulletSpeed: 620, threat: "HIGH",
   },
+  medic: {
+    type: "medic", label: "Sanitäter Medic", weapon: "P08 pistol + field dressings", hp: 80, speed: 55, range: 170,
+    vision: 240, dmg: 8, fireInterval: 1.0, spread: 0.1, bulletSpeed: 480, threat: "LOW",
+  },
 };
 
 // Death causes by killer type — mirrors the debrief filing.

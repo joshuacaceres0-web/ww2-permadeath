@@ -8,7 +8,7 @@ import uuid
 
 UnitType = Literal["rifleman", "medic", "mg", "sniper", "at"]
 SoldierStatus = Literal["active", "reserve"]
-EnemyType = Literal["volks", "grenadier", "mg42", "officer", "panzerfaust", "flak", "scharfschutze", "mortar", "fallschirmjager"]
+EnemyType = Literal["volks", "grenadier", "mg42", "officer", "panzerfaust", "flak", "scharfschutze", "mortar", "fallschirmjager", "medic"]
 DecorKind = Literal["poppies", "roses", "lilies", "wreath", "candle", "flag"]
 
 

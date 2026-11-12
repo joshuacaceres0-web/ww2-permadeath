@@ -44,6 +44,7 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
     case "scharfschutze": return { pal: "sniperDe", head: "stahl", weapon: "sniper" };
     case "mortar": return { pal: "wehr", head: "stahl", weapon: "mortar" };
     case "fallschirmjager": return { pal: "para", head: "para", weapon: "rifle" };
+    case "medic": return { pal: "wehr", head: "stahl", weapon: "pistol" };
     default: return { pal: "wehr", head: "stahl", weapon: "rifle" };
   }
 }
@@ -1497,6 +1498,45 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  /** A medic on either side: the player's medic (type "medic") or an
+   * Axis Sanitaeter (enemyType "medic"). Both heal only their own side. */
+  private isMedic(u: Unit): boolean {
+    return (u.side === "allies" && u.type === "medic") || (u.side === "axis" && u.enemyType === "medic");
+  }
+
+  /** Worst-wounded living man of the unit's own side within maxD, or null. */
+  private worstHurtAlly(u: Unit, maxD: number): Unit | null {
+    let best: Unit | null = null;
+    let worst = 1;
+    for (const a of this.units) {
+      if (a.side !== u.side || !a.alive || a.id === u.id) continue;
+      const pct = a.hp / a.maxHp;
+      if (pct < 1 && dist(u.x, u.y, a.x, a.y) <= maxD && pct < worst) {
+        best = a;
+        worst = pct;
+      }
+    }
+    return best;
+  }
+
+  /** Triage patch-up, +50 HP to the worst-wounded man of the medic's
+   * own side within 130, on a 10s cooldown. Axis medics use this on
+   * their own every update; the player's medic uses castAuto (same
+   * numbers, with the radio line) through Q or AUTO. */
+  private medicTriage(u: Unit) {
+    if (u.abilityCd > 0) return;
+    const best = this.worstHurtAlly(u, 130);
+    if (!best) return;
+    const before = best.hp;
+    best.hp = Math.min(best.maxHp, best.hp + 50 * u.healMult);
+    u.healed += best.hp - before;
+    this.healFx(best.x, best.y);
+    u.abilityCd = 10;
+    if (u.side === "allies") this.pushLog(`${u.name} patches up ${best.name}.`, "info");
+    else this.pushLog("Enemy medic patches up a wounded man.", "info");
+    this.dirty = true;
+  }
+
   private castAuto(u: Unit) {
     const spec = UNIT_TYPES[u.type].ability;
     if (u.type === "medic") {
@@ -1866,7 +1906,14 @@ export class GameEngine {
         // same way as an NPC ally — chase the nearest enemy when out of
         // range or without line of sight, else hold and fire, seeking
         // cover in range. Manual squad men still hold until ordered.
-        const prey = this.nearestAlly(u);
+        // An Axis medic goes to his wounded first: chase the
+        // worst-hurt own man within 400 instead of the prey, so he
+        // gets in aura range and patches men up instead of standing
+        // in the open trading fire he cannot win.
+        const prey =
+          u.side === "axis" && u.enemyType === "medic"
+            ? (this.worstHurtAlly(u, 400) ?? this.nearestAlly(u))
+            : this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           if (pd > u.range * 0.9 || !this.los(u, prey)) {
@@ -2148,10 +2195,12 @@ export class GameEngine {
         this.fireAt(u, focus, moving);
       }
 
-      // Medic passive aura.
-      if (u.side === "allies" && u.type === "medic") {
+      // Medic passive aura — both sides. A medic mends his own
+      // wounded men nearby (+3 HP/s) and steadies them (suppression
+      // falls). Axis medics get the same aura as the player's medic.
+      if (this.isMedic(u)) {
         for (const a of this.units) {
-          if (a.side !== "allies" || !a.alive || a.id === u.id) continue;
+          if (a.side !== u.side || !a.alive || a.id === u.id) continue;
           if (dist(u.x, u.y, a.x, a.y) <= 90) {
             const before = a.hp;
             a.hp = Math.min(a.maxHp, a.hp + 3 * u.healMult * dt);
@@ -2159,6 +2208,9 @@ export class GameEngine {
             a.suppression = Math.max(0, a.suppression - 5 * dt);
           }
         }
+        // Axis medics triage on their own; the player's medic is
+        // driven by Q or by AUTO (autoUseAbilities -> castAuto).
+        if (u.side === "axis") this.medicTriage(u);
       }
     }
 
