@@ -7,15 +7,14 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
 import ReplayViewer from "@/components/game/ReplayViewer";
 import SquadDock from "@/components/game/SquadDock";
-import CombatLog from "@/components/game/CombatLog";
 import TouchControls, { FORMATIONS } from "@/components/game/TouchControls";
 import ReinforceMenu, { REINFORCEMENTS } from "@/components/game/ReinforceMenu";
 import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
 import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
-import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type Variant } from "@/game/engine";
-import { UNIT_TYPES } from "@/game/data";
+import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type RadioSupportKind, type Variant } from "@/game/engine";
+import { UNIT_TYPES, KILL_RP, battleReward, isCowardQuirk } from "@/game/data";
 import { useMusic } from "@/game/music";
 
 const mmss = (t: number) =>
@@ -41,7 +40,7 @@ export default function Battlefield() {
   const [replay, setReplay] = useState<BattleReplay | null>(null);
   const [showReplay, setShowReplay] = useState(false);
   // Full-map view: hides every control sitting on top of the map and
-  // zooms the engine out to the whole 3200x1350 map, so the full
+  // zooms the engine out to the whole 4000x1350 map, so the full
   // battlefield is visible at once. The top bar stays, with a
   // SHOW CONTROLS button to get back.
   const [fullMap, setFullMap] = useState(false);
@@ -127,6 +126,35 @@ export default function Battlefield() {
   const callIn = (kind: ReinforcementKind) => {
     if (!engineRef.current?.canReinforce()) return;
     reinforce.mutate(kind);
+  };
+
+  // Radio support: check the engine gates first, then charge the
+  // discounted RP on the backend, then fire the call. The backend is
+  // the money — it checks the radio is up and deducts the RP — and
+  // the engine is the rules (level, cooldown, once-per-battle).
+  const radioSupport = useMutation({
+    mutationFn: (kind: RadioSupportKind) =>
+      apiPost<{ kind: string; cost: number; requisition: number }>("/battle/radio-support", { mission_id: mission?.id, kind }),
+    onSuccess: (res) => {
+      const e = engineRef.current;
+      if (!e) return;
+      if (res.kind === "artillery") e.callArtillery();
+      else if (res.kind === "supply") e.callSupplyDrop();
+      else if (res.kind === "recon") e.callRecon();
+      else if (res.kind === "mortar") e.callMortarStrike();
+      else if (res.kind === "smoke") e.callSmokeScreen();
+      else e.callTank();
+      qc.setQueryData<GameState>(["state"], (old) => (old ? { ...old, requisition: res.requisition } : old));
+      toast.success(`${res.kind} called in — ${res.cost} RP spent (${res.requisition} RP left)`);
+    },
+    onError: (e) =>
+      toast.error(e instanceof ApiError && e.status === 402 ? "Not enough requisition for that call" : "Radio is dead — try again"),
+  });
+  const callSupport = (kind: RadioSupportKind) => {
+    const e = engineRef.current;
+    if (!e || !e.canSupport(kind)) return;
+    if ((state?.requisition ?? 0) < (hud?.supportCost?.[kind] ?? 0)) return;
+    radioSupport.mutate(kind);
   };
 
   const onHud = useCallback((h: HudSnapshot) => setHud(h), []);
@@ -342,6 +370,20 @@ export default function Battlefield() {
         <span className="text-[#E24A4A]" data-testid="battle-hostiles">
           HOSTILES {hud?.enemiesAlive ?? "—"}
         </span>
+        <span
+          className={hud?.radioLive ? "text-[#5EB872]" : "text-[#E24A4A]"}
+          data-testid="radio-status"
+          title={hud?.radioLive ? "Radioman alive — radio support is up" : "No radioman — radio support is down"}
+        >
+          RADIO {hud?.radioLive ? "● LIVE" : "✕ DOWN"}
+        </span>
+        <span
+          className={hud?.enemyRadioLive ? "text-[#E24A4A]" : "text-[#5EB872]"}
+          data-testid="enemy-radio-status"
+          title={hud?.enemyRadioLive ? "An enemy Funker is alive — he can call in more men" : "Enemy radio is down — no more enemy call-ins"}
+        >
+          FOE RADIO {hud?.enemyRadioLive ? "● LIVE" : "✕ DOWN"}
+        </span>
         {hud?.paused && !hud.briefing && (
           <span
             className="animate-amber-pulse border border-[#E5A93C] bg-[#3A2B0E] px-2 py-0.5 font-bold tracking-[0.2em] text-[#FFD97D]"
@@ -406,7 +448,14 @@ export default function Battlefield() {
             left={hud?.reinforcementsLeft ?? 3}
             disabled={!!hud?.briefing || hud?.state !== "active"}
             pending={reinforce.isPending}
+            radioLive={hud?.radioLive ?? false}
+            commanderLevel={state?.commander_level ?? 1}
+            supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 }}
+            tankUsed={hud?.tankUsed ?? false}
+            supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 50 }}
+            reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
             onCall={callIn}
+            onSupport={callSupport}
           />
           <Button
             data-testid="tactical-pause-btn"
@@ -450,15 +499,10 @@ export default function Battlefield() {
           variant={variant}
           squad={deployed?.squad ?? activeSquad}
           commanderBonus={state?.combat_bonus ?? 0}
+          commanderLevel={state?.commander_level ?? 1}
           onHud={onHud}
           engineRef={engineRef}
         />
-
-        {!fullMap && (
-          <div className="absolute right-3 top-3 z-10 hidden md:block short:hidden">
-            <CombatLog log={hud?.log ?? []} />
-          </div>
-        )}
 
         {/* Order hints */}
         {!fullMap && touch ? (
@@ -583,11 +627,21 @@ export default function Battlefield() {
                 {report.victory ? "VICTORY SECURED" : "MISSION FAILED"}
               </h2>
 
-              {report.victory && (
-                <p className="mt-2 font-mono text-sm text-[#E5A93C]" data-testid="debrief-reward">
-                  +{mission.reward} requisition points wired to the division account
-                </p>
-              )}
+              {(() => {
+                const kills =
+                  report.fallen.reduce((n, f) => n + f.kills, 0) +
+                  report.deserted.reduce((n, f) => n + f.kills, 0) +
+                  report.survivors.reduce((n, v) => n + v.kills, 0);
+                const earned = battleReward(mission.reward, report.victory, kills, report.lootRp);
+                const lootPart = report.lootRp > 0 ? ` + ${report.lootRp} from supply crates` : "";
+                return (
+                  <p className="mt-2 font-mono text-sm text-[#E5A93C]" data-testid="debrief-reward">
+                    {report.victory
+                      ? `+${earned} requisition points (${mission.reward} mission reward + ${kills * KILL_RP} for ${kills} kills${lootPart})`
+                      : `+${earned} requisition points for ${kills} kills, win or lose${lootPart}`}
+                  </p>
+                );
+              })()}
 
               <div className="mt-4 space-y-2">
                 <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">
@@ -617,6 +671,31 @@ export default function Battlefield() {
                   })
                 )}
               </div>
+
+              {report.deserted.length > 0 && (
+                <div className="mt-4 space-y-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">
+                    Deserted — broke and ran, gone from the roster
+                  </p>
+                  {report.deserted.map((f, i) => {
+                    const gone = (deployed?.squad ?? []).find((s) => s.id === f.soldierId);
+                    return (
+                      <div
+                        key={i}
+                        data-testid={`debrief-deserted-${i}`}
+                        className="flex items-center justify-between border border-[#5C4A26] bg-[#221A12] px-3 py-2 font-mono text-xs"
+                      >
+                        <span className="flex items-center gap-2 text-[#E5C98A]">
+                          <Flag size={13} /> {gone ? `${gone.name}` : "Unknown soldier"}
+                        </span>
+                        <span className="text-[#B8A078]">
+                          {f.cause} · {f.kills} kills
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
 
               <div className="mt-3 space-y-1">
                 <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">
@@ -690,6 +769,7 @@ export default function Battlefield() {
                 pinned: false,
                 morale: 100,
                 broken: false,
+                coward: isCowardQuirk(soldier.quirk),
                 abilityCd: 0,
                 abilityCdMax: UNIT_TYPES[soldier.type].ability.cd,
                 kills: soldier.kills,
@@ -705,6 +785,12 @@ export default function Battlefield() {
               formation: "wedge",
               touchBox: false,
               reinforcementsLeft: 3,
+              radioLive: false,
+              supportCd: { artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 },
+              tankUsed: false,
+              supportCost: { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 50 },
+              reinforceCost: { rifle: 15, heavy: 25 },
+              enemyRadioLive: false,
               autoBattle: false,
               teamA: [],
               teamB: [],
@@ -743,6 +829,8 @@ function reportBody(r: BattleReport, battleId: string | null) {
     duration_sec: r.durationSec,
     battle_id: battleId ?? undefined,
     fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
+    deserted: r.deserted.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
+    loot_rp: r.lootRp,
     survivors: r.survivors.map((v) => ({ soldier_id: v.soldierId, kills: v.kills, ...stats(v) })),
   };
 }

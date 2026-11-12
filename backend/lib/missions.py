@@ -4,6 +4,52 @@ from typing import List
 
 from models.models import MissionOut
 
+# Kill RP: every kill by one of your squad men pays 10 RP, win or
+# lose, so progress never feels wasted and a loss with a lot of
+# kills still pays well. A win adds the mission reward on top.
+# 10 RP a kill: 10 kills buy a rifleman (100), 15 buy a medic or a
+# radioman (150). The mission does not advance on a loss, so farming
+# RP by losing still costs the time to fight the battle.
+# Mirrored in frontend/src/game/data.ts.
+KILL_RP = 10
+
+
+# Supply crates: 2 per map, 25 RP each, looted by a squad man who
+# walks up to one. The engine counts the RP and files it in the
+# battle report; the backend just adds it. Mirrored in
+# frontend/src/game/data.ts CRATE_RP — keep in sync.
+CRATE_RP = 25
+
+
+def battle_reward(reward: int, victory: bool, kills: int, loot_rp: int = 0) -> int:
+    """RP earned for a battle: the mission reward on a win, plus
+    10 RP per squad kill, win or lose, plus whatever was looted
+    from supply crates."""
+    return (reward if victory else 0) + kills * KILL_RP + loot_rp
+
+
+# Radio call costs, in requisition points. A rookie radioman (level 0)
+# pays the full base cost; a veteran pays less — 5% off per radioman
+# level (max 30% off at level 6). Rally Call is free (his own ability,
+# cooldown only). Mirrored in frontend/src/game/engine.ts.
+RADIO_SUPPORT_COST = {
+    "supply": 10,
+    "recon": 10,
+    "mortar": 20,
+    "smoke": 15,
+    "artillery": 30,
+    "tank": 50,
+}
+RADIO_DISCOUNT_PER_LEVEL = 0.05
+
+
+def radio_cost(base: int, radioman_level: int) -> int:
+    """What a radio call costs at a given radioman level (0-6). Rounds
+    half up (int(x + 0.5)), matching the frontend's Math.round — Python's
+    round() would banker's-round 28.5 to 28 while JS gives 29."""
+    return max(0, int(base * (1 - RADIO_DISCOUNT_PER_LEVEL * radioman_level) + 0.5))
+
+
 # Hire costs, in requisition points. Mirrored in frontend/src/game/data.ts.
 UNIT_COSTS = {
     "rifleman": 100,
@@ -11,6 +57,7 @@ UNIT_COSTS = {
     "mg": 220,
     "sniper": 260,
     "at": 300,
+    "radioman": 150,
 }
 
 MISSIONS: List[dict] = [
@@ -30,15 +77,19 @@ MISSIONS: List[dict] = [
             "gone for good."
         ),
         "enemies": [
-            {"type": "volks", "wave": 1, "count": 4},
+            {"type": "volks", "wave": 1, "count": 3},
+            {"type": "funk", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
             {"type": "grenadier", "wave": 1, "count": 2},
             {"type": "mg42", "wave": 1, "count": 1},
-            {"type": "volks", "wave": 2, "count": 4},
+            {"type": "volks", "wave": 2, "count": 3},
+            {"type": "funk", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 2},
             {"type": "medic", "wave": 2, "count": 1},
             {"type": "scharfschutze", "wave": 2, "count": 1},
-            {"type": "volks", "wave": 3, "count": 4},
+            {"type": "volks", "wave": 3, "count": 2},
+            {"type": "panzer", "wave": 3, "count": 1},
+            {"type": "funk", "wave": 3, "count": 1},
             {"type": "medic", "wave": 3, "count": 1},
             {"type": "grenadier", "wave": 3, "count": 3},
             {"type": "mg42", "wave": 3, "count": 1},
@@ -61,15 +112,18 @@ MISSIONS: List[dict] = [
         ),
         "enemies": [
             {"type": "grenadier", "wave": 1, "count": 3},
-            {"type": "volks", "wave": 1, "count": 3},
+            {"type": "volks", "wave": 1, "count": 2},
+            {"type": "funk", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
             {"type": "officer", "wave": 2, "count": 1},
-            {"type": "grenadier", "wave": 2, "count": 2},
+            {"type": "grenadier", "wave": 2, "count": 1},
+            {"type": "funk", "wave": 2, "count": 1},
             {"type": "medic", "wave": 2, "count": 1},
             {"type": "mg42", "wave": 2, "count": 1},
             {"type": "fallschirmjager", "wave": 2, "count": 3},
             {"type": "mortar", "wave": 2, "count": 1},
-            {"type": "volks", "wave": 3, "count": 2},
+            {"type": "panzer", "wave": 3, "count": 1},
+            {"type": "funk", "wave": 3, "count": 1},
             {"type": "medic", "wave": 3, "count": 1},
             {"type": "grenadier", "wave": 3, "count": 3},
             {"type": "officer", "wave": 3, "count": 1},
@@ -92,19 +146,24 @@ MISSIONS: List[dict] = [
             "counter-attack across the flats."
         ),
         "enemies": [
-            {"type": "grenadier", "wave": 1, "count": 3},
+            {"type": "grenadier", "wave": 1, "count": 2},
+            {"type": "funk", "wave": 1, "count": 1},
             {"type": "panzerfaust", "wave": 1, "count": 2},
             {"type": "mg42", "wave": 1, "count": 1},
             {"type": "volks", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
-            {"type": "volks", "wave": 2, "count": 4},
+            {"type": "volks", "wave": 2, "count": 2},
+            {"type": "panzer", "wave": 2, "count": 1},
+            {"type": "funk", "wave": 2, "count": 1},
             {"type": "medic", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 3},
             {"type": "officer", "wave": 2, "count": 1},
             {"type": "mortar", "wave": 1, "count": 1},
             {"type": "scharfschutze", "wave": 1, "count": 1},
             {"type": "fallschirmjager", "wave": 2, "count": 3},
-            {"type": "volks", "wave": 3, "count": 4},
+            {"type": "volks", "wave": 3, "count": 2},
+            {"type": "panzer", "wave": 3, "count": 1},
+            {"type": "funk", "wave": 3, "count": 1},
             {"type": "medic", "wave": 3, "count": 1},
             {"type": "grenadier", "wave": 3, "count": 3},
             {"type": "panzerfaust", "wave": 3, "count": 2},
@@ -126,20 +185,25 @@ MISSIONS: List[dict] = [
             "and bring everyone home you can."
         ),
         "enemies": [
-            {"type": "grenadier", "wave": 1, "count": 3},
+            {"type": "grenadier", "wave": 1, "count": 2},
+            {"type": "funk", "wave": 1, "count": 1},
             {"type": "officer", "wave": 1, "count": 1},
             {"type": "mg42", "wave": 1, "count": 1},
             {"type": "flak", "wave": 1, "count": 1},
             {"type": "volks", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
-            {"type": "volks", "wave": 2, "count": 3},
+            {"type": "volks", "wave": 2, "count": 1},
+            {"type": "panzer", "wave": 2, "count": 1},
+            {"type": "funk", "wave": 2, "count": 1},
             {"type": "medic", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 3},
             {"type": "panzerfaust", "wave": 2, "count": 3},
             {"type": "mortar", "wave": 1, "count": 1},
             {"type": "scharfschutze", "wave": 2, "count": 3},
             {"type": "fallschirmjager", "wave": 2, "count": 3},
-            {"type": "volks", "wave": 3, "count": 4},
+            {"type": "volks", "wave": 3, "count": 2},
+            {"type": "panzer", "wave": 3, "count": 1},
+            {"type": "funk", "wave": 3, "count": 1},
             {"type": "medic", "wave": 3, "count": 1},
             {"type": "grenadier", "wave": 3, "count": 4},
             {"type": "fallschirmjager", "wave": 3, "count": 3},

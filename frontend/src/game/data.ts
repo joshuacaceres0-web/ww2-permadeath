@@ -25,9 +25,29 @@ export interface UnitTypeSpec {
   bulletSpeed: number;
   ability: AbilitySpec;
   blurb: string;
+  /** A vehicle: no morale, it never breaks or flees. */
+  vehicle?: boolean;
 }
 
 export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
+  tank: {
+    type: "tank",
+    label: "M4 Sherman",
+    role: "Armor Support",
+    weapon: "75mm Cannon",
+    cost: 0,
+    hp: 500,
+    speed: 35,
+    range: 320,
+    vision: 260,
+    dmg: 35,
+    fireInterval: 2.0,
+    spread: 0.05,
+    bulletSpeed: 800,
+    ability: { key: "Q", name: "Main Gun", desc: "75mm cannon", cd: 0, aim: "auto" },
+    blurb: "Armor on call. Not for hire — the radio brings it in.",
+    vehicle: true,
+  },
   rifleman: {
     type: "rifleman",
     label: "Rifleman",
@@ -96,6 +116,23 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     ability: { key: "Q", name: "Deadeye Shot", desc: "Instant 120 dmg to the highest-value target in range", cd: 16, aim: "auto" },
     blurb: "Sees far, hits once, never misses twice. Fragile up close.",
   },
+  radioman: {
+    type: "radioman",
+    label: "Radioman",
+    role: "Field Radio",
+    weapon: "SCR-300 Radio + M1 Carbine",
+    cost: 150,
+    hp: 100,
+    speed: 60,
+    range: 200,
+    vision: 260,
+    dmg: 8,
+    fireInterval: 0.6,
+    spread: 0.07,
+    bulletSpeed: 560,
+    ability: { key: "Q", name: "Rally Call", desc: "Radio the squad — nearby men recover 15 morale", cd: 20, aim: "auto" },
+    blurb: "Carries the radio. No radioman, no reinforcements — if he dies, the radio dies with him.",
+  },
   at: {
     type: "at",
     label: "AT Specialist",
@@ -130,6 +167,8 @@ export interface EnemyTypeSpec {
   spread: number;
   bulletSpeed: number;
   static?: boolean;
+  /** A vehicle (the Panzer): no morale, it never breaks or flees. */
+  vehicle?: boolean;
   threat: Threat;
 }
 
@@ -137,6 +176,10 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
   volks: {
     type: "volks", label: "Volkssturm Conscript", weapon: "Kar98k", hp: 60, speed: 55, range: 200,
     vision: 240, dmg: 14, fireInterval: 1.35, spread: 0.07, bulletSpeed: 520, threat: "LOW",
+  },
+  funk: {
+    type: "funk", label: "Funker Radioman", weapon: "Radio + P08 Pistol", hp: 70, speed: 55, range: 170,
+    vision: 240, dmg: 6, fireInterval: 1.0, spread: 0.09, bulletSpeed: 480, threat: "LOW",
   },
   grenadier: {
     type: "grenadier", label: "Wehrmacht Grenadier", weapon: "MP40 SMG", hp: 95, speed: 60, range: 170,
@@ -174,6 +217,10 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     type: "medic", label: "Sanitäter Medic", weapon: "P08 pistol + field dressings", hp: 80, speed: 55, range: 170,
     vision: 240, dmg: 8, fireInterval: 1.0, spread: 0.1, bulletSpeed: 480, threat: "LOW",
   },
+  panzer: {
+    type: "panzer", label: "Panzer IV Medium Tank", weapon: "75mm KwK 40 cannon", hp: 400, speed: 30, range: 300,
+    vision: 240, dmg: 30, fireInterval: 2.0, spread: 0.05, bulletSpeed: 800, vehicle: true, threat: "HIGH",
+  },
 };
 
 // Death causes by killer type — mirrors the debrief filing.
@@ -187,6 +234,7 @@ export const CAUSES: Record<string, string> = {
   grenade: "Fragmentation",
   rocket: "Rocket blast",
   scharfschutze: "Sniper fire",
+  panzer: "75mm cannon fire",
   mortar: "Mortar bombardment",
   fallschirmjager: "FG42 fire",
 };
@@ -212,6 +260,41 @@ export const MEDALS: Record<string, MedalSpec> = {
 };
 
 export const MEDAL_ORDER = ["moh", "dsc", "silver_star", "bronze_star", "purple_heart", "cmb", "cib"];
+
+/** Kill RP: every kill by one of your squad men pays 10 RP, win or
+ * lose, so progress never feels wasted and a loss with a lot of
+ * kills still pays well. A win adds the mission reward on top.
+ * Mirrors backend/lib/missions.py KILL_RP — keep in sync. */
+export const KILL_RP = 10;
+
+/** Supply crates: rare. Each battle flips a coin — half the
+ * battles have one crate, half have none, never more than one.
+ * 25 RP each, looted by a squad man who walks up to one. A crate is
+ * worth two and a half kills — a real bonus, not a second income.
+ * Mirrors backend/lib/missions.py CRATE_RP — keep in sync. */
+export const CRATE_RP = 25;
+/** Chance a battle has a supply crate at all. */
+export const CRATE_CHANCE = 0.5;
+/** Never more than one crate in a battle. */
+export const MAX_CRATES_PER_MISSION = 1;
+/** How close a squad man has to get to loot a crate. */
+export const LOOT_RADIUS = 60;
+
+/** RP earned for a battle: the mission reward on a win, plus 10 RP
+ * per squad kill, win or lose, plus whatever was looted from crates. */
+export function battleReward(reward: number, victory: boolean, kills: number, lootRp = 0): number {
+  return (victory ? reward : 0) + kills * KILL_RP + lootRp;
+}
+
+/** Quirks that make a man a coward: when his morale breaks he
+ * rolls a low chance to run for the edge of the battlefield instead
+ * of falling back, and if he reaches it he deserts. On the player
+ * side that ends the round. */
+export const COWARD_QUIRKS = ["Skittish", "Jumpy"] as const;
+
+export function isCowardQuirk(quirk: string | null | undefined): boolean {
+  return !!quirk && (COWARD_QUIRKS as readonly string[]).includes(quirk);
+}
 
 export function medalCounts(medals: string[]): Array<[string, number]> {
   const c = new Map<string, number>();

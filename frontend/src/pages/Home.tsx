@@ -8,7 +8,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiGet, apiPost } from "@/lib/api";
 import type { GameState, MemorialEntry, Mission, Soldier } from "@/lib/types";
-import { ENEMY_TYPES, UNIT_TYPES } from "@/game/data";
+import { CRATE_RP, ENEMY_TYPES, KILL_RP, UNIT_TYPES } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import CommanderCard from "@/components/CommanderCard";
 import ResetEverything from "@/components/ResetEverything";
@@ -137,7 +137,7 @@ export default function Home() {
                   {mission.difficulty}
                 </Badge>
                 <span className="flex items-center gap-1.5 font-mono text-xs text-[#E3E7DC]">
-                  <Medal size={13} className="text-[#E5A93C]" /> {mission.reward} RP on victory
+                  <Medal size={13} className="text-[#E5A93C]" /> {mission.reward} RP on victory · {KILL_RP} RP per kill, win or lose · {CRATE_RP} RP per supply crate
                 </span>
               </div>
               <div className="border border-[#2E3628] bg-[#121411] p-4">

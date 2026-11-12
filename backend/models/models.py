@@ -6,9 +6,9 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 import uuid
 
-UnitType = Literal["rifleman", "medic", "mg", "sniper", "at"]
+UnitType = Literal["rifleman", "medic", "mg", "sniper", "at", "radioman"]
 SoldierStatus = Literal["active", "reserve"]
-EnemyType = Literal["volks", "grenadier", "mg42", "officer", "panzerfaust", "flak", "scharfschutze", "mortar", "fallschirmjager", "medic"]
+EnemyType = Literal["volks", "grenadier", "mg42", "officer", "panzerfaust", "flak", "scharfschutze", "mortar", "fallschirmjager", "medic", "funk", "panzer"]
 DecorKind = Literal["poppies", "roses", "lilies", "wreath", "candle", "flag"]
 
 
@@ -109,7 +109,11 @@ class BattleCompleteIn(BaseModel):
     victory: bool
     duration_sec: float = 0
     fallen: List[FallenIn] = []
+    # Men who broke and ran off the field. Deleted from the roster
+    # like the fallen, but never etched on the Memorial — they did not die.
+    deserted: List[FallenIn] = []
     survivors: List[SurvivorIn] = []
+    loot_rp: int = 0  # RP looted from supply crates this battle.
     # Idempotency key, one per deployment (frontend generates it when a
     # battle is deployed). The same battle filed twice — retry after a
     # failed request, a pagehide retreat beacon racing the hud effect,
@@ -181,6 +185,17 @@ class ReinforceIn(BaseModel):
 
 class ReinforceOut(BaseModel):
     kind: ReinforcementKind
+    cost: int
+    requisition: int
+
+
+class RadioSupportIn(BaseModel):
+    mission_id: str
+    kind: str  # one of RADIO_SUPPORT_COST (supply, recon, mortar, smoke, artillery, tank)
+
+
+class RadioSupportOut(BaseModel):
+    kind: str
     cost: int
     requisition: int
 

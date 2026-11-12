@@ -9,12 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
-import { RANKS, UNIT_TYPES, levelBonus } from "@/game/data";
+import { RANKS, UNIT_TYPES, isCowardQuirk, levelBonus } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
 import { useMusic } from "@/game/music";
 
-const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at"];
+const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at", "radioman"];
 
 const errDetail = (e: unknown, fallback: string) =>
   e instanceof ApiError && e.body && typeof e.body === "object" && "detail" in e.body
@@ -229,6 +229,11 @@ function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) 
             <p className="mt-1 font-mono text-[11px] text-[#8D9A83]">
               "{s.quirk}" · {s.hometown} · {s.kills} kills · {s.missions} ops
             </p>
+            {isCowardQuirk(s.quirk) && (
+              <p className="mt-1 font-mono text-[11px] text-[#E5A93C]" data-testid="dossier-coward-warning">
+                Coward: when his morale goes he may run for the edge. If he flees, the round ends — bench him if you cannot afford that.
+              </p>
+            )}
           </div>
         </div>
       </DialogHeader>

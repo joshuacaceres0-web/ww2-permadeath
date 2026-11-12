@@ -1,14 +1,39 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
 // fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
 
-import { CAUSES, ENEMY_TYPES, UNIT_TYPES, levelBonus, medalBonus } from "./data";
+import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
 import { setSfxMuted, setSfxVolume, sfx } from "./sfx";
 import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
-export const MAP_W = 3200;
+export const MAP_W = 4000;
 export const MAP_H = 1350;
+/** Half the road's width (the road is drawn 46 wide). */
+export const ROAD_HALF = 23;
+/** The tank road's centerline y at a given x. The road is the cubic
+ * bezier from (0, MAP_H/2) to (MAP_W, MAP_H/2) with control points at
+ * (0.3W, y0-90) and (0.7W, y0+90) — the same curve buildTerrain draws.
+ * Inverts the bezier's x by binary search (x is monotonic in t), so
+ * the tank and the road-clearance filter agree on where the road is. */
+export function roadYAt(x: number): number {
+  const y0 = MAP_H / 2;
+  const cx = Math.max(0, Math.min(MAP_W, x));
+  const bx = (t: number) => {
+    const u = 1 - t;
+    return 3 * u * u * t * (MAP_W * 0.3) + 3 * u * t * t * (MAP_W * 0.7) + t * t * t * MAP_W;
+  };
+  let lo = 0;
+  let hi = 1;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (bx(mid) < cx) lo = mid;
+    else hi = mid;
+  }
+  const t = (lo + hi) / 2;
+  const u = 1 - t;
+  return u * u * u * y0 + 3 * u * u * t * (y0 - 90) + 3 * u * t * t * (y0 + 90) + t * t * t * y0;
+}
 const VIEW_W = 1600; // world units visible at once — the camera scrolls over the rest
 const VIEW_H = 900;
 const CELL = 24;
@@ -31,7 +56,7 @@ interface Corpse {
 // Sprite look for each unit: palette, headgear, weapon.
 function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean }): { pal: string; head: Head; weapon: Weapon } {
   if (u.side === "allies") {
-    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka" } as const)[u.type];
+    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", tank: "none" } as const)[u.type];
     return { pal: u.npc ? "usNpc" : "us", head: u.type === "medic" ? "us-medic" : "us", weapon };
   }
   switch (u.enemyType) {
@@ -45,6 +70,7 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
     case "mortar": return { pal: "wehr", head: "stahl", weapon: "mortar" };
     case "fallschirmjager": return { pal: "para", head: "para", weapon: "rifle" };
     case "medic": return { pal: "wehr", head: "stahl", weapon: "pistol" };
+    case "funk": return { pal: "wehr", head: "stahl", weapon: "pistol" };
     default: return { pal: "wehr", head: "stahl", weapon: "rifle" };
   }
 }
@@ -53,6 +79,64 @@ export type Variant = "beach" | "airborne" | "";
 export type Formation = "wedge" | "line" | "column" | "spread";
 export type Reinforcement = "rifle" | "heavy";
 export const MAX_REINFORCEMENTS = 3;
+
+/** Radio support: what a living radioman can call in from the RADIO
+ * menu, on top of his Rally Call (Q) and the reinforcements. All three
+ * are player-called (AUTO never calls them, same as reinforcements)
+ * and all three need the radio up — kill the radioman and they stop
+ * until another is hired. Cooldowns are per battle. */
+export type RadioSupportKind = "artillery" | "supply" | "recon" | "mortar" | "smoke" | "tank";
+export const ARTILLERY_CD = 60;
+export const SUPPLY_CD = 45;
+export const RECON_CD = 30;
+export const MORTAR_CD = 25;
+export const SMOKE_CD = 45;
+export const ARTY_SHELLS = 3;
+export const ARTY_AOE = 70;
+export const ARTY_DMG = 70;
+export const MORTAR_AOE = 50;
+export const MORTAR_DMG = 60;
+export const SUPPLY_HEAL = 50;
+export const RECON_RADIUS = 300;
+export const SMOKE_RADIUS = 150;
+export const SMOKE_DURATION = 20;
+
+/** Radio calls, one per commander level, in unlock order. The
+ * commander has 8 ranks (2nd Lt. to Maj. Gen.), so 8 calls get one
+ * level each. Rally Call is level 1 (every commander has it); the
+ * tank is level 8 (Maj. Gen. only). */
+export type RadioCallKind = "rally" | "reinforce" | "supply" | "recon" | "mortar" | "smoke" | "artillery" | "tank";
+
+/** Base RP cost of each radio support call at radioman level 0 (a
+ * rookie pays full cost). Rally Call is free (his own ability,
+ * cooldown only). Mirrors backend/lib/missions.py. */
+export const RADIO_SUPPORT_COST: Record<RadioSupportKind, number> = {
+  supply: 10,
+  recon: 10,
+  mortar: 20,
+  smoke: 15,
+  artillery: 30,
+  tank: 50,
+};
+/** 5% off per radioman level (max 30% off at level 6). */
+export const RADIO_DISCOUNT_PER_LEVEL = 0.05;
+/** What a radio call costs at a given radioman level (0-6). Rounds
+ * half up, matching the backend's int(x + 0.5). */
+export function radioCost(base: number, radiomanLevel: number): number {
+  return Math.max(0, Math.round(base * (1 - RADIO_DISCOUNT_PER_LEVEL * radiomanLevel)));
+}
+/** Cooldowns (seconds left, 0 = ready) for the six menu call-ins. */
+export type SupportCd = { artillery: number; supply: number; recon: number; mortar: number; smoke: number; tank: number };
+export const RADIO_CALL_LEVEL: Record<RadioCallKind, number> = {
+  rally: 1,
+  reinforce: 2,
+  supply: 3,
+  recon: 4,
+  mortar: 5,
+  smoke: 6,
+  artillery: 7,
+  tank: 8,
+};
 
 interface Order {
   x: number;
@@ -82,6 +166,11 @@ interface Unit {
   spread: number;
   bulletSpeed: number;
   isStatic: boolean;
+  /** A vehicle (the Sherman): no morale, it never breaks or flees. */
+  vehicle: boolean;
+  /** A counter-attacker: spawned by a random counter-attack, he charges
+   * the player's squad and ignores the camp-and-defend rule. */
+  counterAttack: boolean;
   orders: Order[];
   attackId: number | null;
   targetId: number | null;
@@ -91,10 +180,29 @@ interface Unit {
   // Morale: 0-100, starts at 100. Falls under fire, casualties and
   // suppression; recovers out of fire, faster near a medic or a
   // leader. At 20 or below the man breaks and falls back; at 45 he
-  // rallies and fights again.
+  // rallies and fights again. A coward is different: he has less
+  // nerve, so he breaks at 50, and when he breaks he ROLLS — a low
+  // chance (fleeChance) he runs for the edge instead of falling back.
+  // Fleeing is RNG, not a guarantee. A fleeing man's nerve does not
+  // come back on its own while broken, and he rallies at 65 — so one
+  // rally call from a radioman (or a Funker) steadies him, and a few
+  // seconds near a medic does too.
   morale: number;
   broken: boolean;
   lastHitT: number;
+  /** Coward: when his morale breaks he runs for the nearest edge of
+   * the map instead of falling back, and deserts if he reaches it.
+   * Coward is the trait (who CAN flee); willFlee is this break's
+   * roll (whether he DOES). */
+  coward: boolean;
+  /** This break's flee roll landed: he is running for the edge. */
+  willFlee: boolean;
+  /** Seconds this coward has spent fleeing while broken. Desertion
+   * needs 2s of flight, so a man who breaks on the deployment line
+   * does not vanish before a rally call can reach him. */
+  fleeT: number;
+  /** True once he has deserted: off the field, not dead, not in the Memorial. */
+  fled: boolean;
   abilityCd: number;
   burst: number;
   burstTimer: number;
@@ -240,6 +348,8 @@ export interface HudUnit {
   pinned: boolean;
   morale: number;
   broken: boolean;
+  /** A coward: breaks and runs for the edge, deserts if he reaches it. */
+  coward: boolean;
   abilityCd: number;
   abilityCdMax: number;
   kills: number;
@@ -268,6 +378,19 @@ export interface HudSnapshot {
   formation: Formation;
   touchBox: boolean;
   reinforcementsLeft: number;
+  /** True while a squad radioman is alive: radio support is up. */
+  radioLive: boolean;
+  /** Seconds left on each radio support call-in (0 = ready). */
+  supportCd: SupportCd;
+  /** True once the tank has been called this battle (once per battle). */
+  tankUsed: boolean;
+  /** What each radio support call costs right now, at the living
+   * radioman's level (a rookie pays full cost, a veteran pays less). */
+  supportCost: Record<RadioSupportKind, number>;
+  /** What the two reinforcement teams cost right now, same discount. */
+  reinforceCost: { rifle: number; heavy: number };
+  /** True while an enemy Funker is alive: enemy call-ins are armed. */
+  enemyRadioLive: boolean;
   autoBattle: boolean;
   // Fireteams: living player-squad ids in Alpha / Bravo, empty when
   // the squad has not been split. The UI shows SPLIT / ALPHA / BRAVO
@@ -295,12 +418,25 @@ export interface SurvivorReport {
   officerKills: number;
 }
 
+/** A supply crate on the map: a squad man who walks up to it
+ * loots it for CRATE_RP. Not a cover crate (those are Blocker kind
+ * "crate") — this one holds RP. */
+export interface SupplyCrate {
+  x: number;
+  y: number;
+  looted: boolean;
+}
+
 export interface BattleReport {
   missionId: string;
   victory: boolean;
   durationSec: number;
   fallen: FallenReport[];
+  /** Men who broke and ran off the field. Same shape as fallen. */
+  deserted: FallenReport[];
   survivors: SurvivorReport[];
+  /** RP looted from supply crates this battle. */
+  lootRp: number;
 }
 
 export interface ReplayUnit {
@@ -326,6 +462,10 @@ export interface ReplayUnit {
   broken: boolean;
   /** True for the player's medic, the 2nd Platoon medic and the Axis Sanitaeter. */
   medic: boolean;
+  /** True once the man has deserted and left the field. */
+  fled: boolean;
+  /** True for either side's radio man (squad radioman or enemy Funker). */
+  radio: boolean;
 }
 
 export interface ReplayFrame {
@@ -334,6 +474,9 @@ export interface ReplayFrame {
   battleState: string;
   wave: number;
   units: ReplayUnit[];
+  /** Supply crates on the map, with their looted state, so replays
+   * show them the same way the live game does. */
+  crates: Array<{ x: number; y: number; looted: boolean }>;
 }
 
 export interface ReplayObstacle {
@@ -388,6 +531,8 @@ export interface SquadInput {
   rank: string;
   level: number;
   medals: string[];
+  /** The man's quirk ("Skittish", "Jumpy", ...). A cowardly quirk makes him a coward. */
+  quirk?: string;
 }
 
 // ---------------- pathfinding (A* on the CELL grid, 8-way, LOS-smoothed) ----------------
@@ -617,6 +762,54 @@ export class GameEngine {
   private waveIndex = 0;
   private waves: Array<Array<{ type: EnemyTypeId; count: number }>> = [];
   private nextWaveT = 0;
+  /** Coward chance: the share of Volkssturm conscripts who are
+   * cowards. A coward is only a man who CAN flee — the flee itself
+   * is a separate roll (fleeChance) each time he breaks. */
+  private cowardChance = 0.25;
+  /** Flee chance: when a coward's morale breaks, this is the roll
+   * for running for the edge instead of falling back. A roll, not a
+   * guarantee — most coward-breaks still fall back — but high enough
+   * to actually see: at 25% the mechanic fired zero times in eight
+   * AUTO battles, because breaks themselves are only about three a
+   * battle. The knob for rarer is this number; the other knobs are
+   * cowardChance, the break line (50) and the doubled nerve loss
+   * (moraleLoss). */
+  private fleeChance = 0.4;
+  /** Flee chance for a man who is NOT a coward: any man whose morale
+   * breaks rolls this small chance to run. Cowards roll the bigger
+   * number above, and break more often besides (doubled nerve loss),
+   * so they are still the ones who usually run. */
+  private fleeChanceNormal = 0.1;
+  /** Enemy radio: seconds until this wave's Funker calls in 2 more men,
+   * and whether this wave's one call-in has already happened. */
+  private enemyRadioT = 0;
+  /** Random counter-attacks: seconds until the next one, and how many
+   * have already happened this battle (at most COUNTER_ATTACK_MAX).
+   * A counter-attack is 2 men who charge the player's squad, ignoring
+   * the camp-and-defend rule — a surprise push, not a wave. */
+  private counterAttackT = 0;
+  private counterAttacks = 0;
+  private readonly COUNTER_ATTACK_MAX = 2;
+  // Radio support cooldowns (seconds left). Tick down in update().
+  private artyCd = 0;
+  private supplyCd = 0;
+  private reconCd = 0;
+  private mortarCd = 0;
+  private smokeCd = 0;
+  /** True once the tank has been called this battle (once per battle). */
+  private tankCalled = false;
+  /** Smoke zones on the map: {x, y, r, t} — t is seconds left. */
+  private smokeZones: Array<{ x: number; y: number; r: number; t: number }> = [];
+  /** Commander level (1-8) — gates the radio calls, one per level. */
+  private commanderLevel = 1;
+  private enemyRadioCalled = false;
+  /** Supply crates on this map, and the RP looted from them. Crates
+   * are public so the replay recorder and tests can read them. */
+  crates: SupplyCrate[] = [];
+  private lootRp = 0;
+  /** Crate chance: the roll for whether this battle has a supply
+   * crate at all. A field, like fleeChance, so tests can force it. */
+  private crateChance = CRATE_CHANCE;
   private elapsed = 0;
   // Stalemate breaker (bug #2): when neither side has hurt the other
   // for 60s — allies in cover vs a static MG42 out of its own range,
@@ -664,6 +857,9 @@ export class GameEngine {
   private dragging = false;
 
   private fallen: FallenReport[] = [];
+  /** Men who broke and ran off the field. Deleted from the roster on
+   * filing, like the fallen — but never etched on the Memorial. */
+  private deserted: FallenReport[] = [];
   private log: LogLine[] = [];
   private hudT = 0;
   private dirty = false;
@@ -680,9 +876,42 @@ export class GameEngine {
     setSfxMuted(st.muted);
   }
 
+  /** Supply crates are rare: a coin flip decides whether this
+   * battle has one at all, and never more than one. When the flip
+   * lands, the crate goes on a random open spot from the fixed
+   * candidates, so it can sit anywhere in the mid-field. A candidate
+   * inside a building, a wall or a trench line is never picked, so
+   * every terrain kind gets a reachable crate when one spawns. */
+  private placeCrates() {
+    if (Math.random() >= this.crateChance) {
+      this.crates = [];
+      return;
+    }
+    const spots: Array<[number, number]> = [
+      [1300, 450], [1300, 900], [1600, 675],
+      [2000, 450], [2000, 900], [2300, 675], [2600, 450], [2600, 900],
+      [3400, 450], [3400, 900], [3700, 675],
+    ];
+    const open = (x: number, y: number) => {
+      const cx = Math.floor(x / CELL);
+      const cy = Math.floor(y / CELL);
+      return cx >= 0 && cy >= 0 && cx < COLS && cy < ROWS && !this.blocked[cy * COLS + cx];
+    };
+    const openSpots = spots.filter(([x, y]) => open(x, y));
+    if (openSpots.length === 0) {
+      this.crates = [];
+      return;
+    }
+    // Random open spot, not always the first one, so the crate is not
+    // in the same place every battle that has one. Never more than
+    // one crate in a battle.
+    const spot = openSpots[Math.floor(Math.random() * openSpots.length)];
+    this.crates = [{ x: spot[0], y: spot[1], looted: false }];
+  }
+
   // ---------------- lifecycle ----------------
 
-  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0, variant: Variant = "") {
+  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0, variant: Variant = "", commanderLevel = 1) {
     this.variant = variant;
     this.mission = mission;
     this.units = [];
@@ -690,6 +919,9 @@ export class GameEngine {
     this.projectiles = [];
     this.particles = [];
     this.fallen = [];
+    this.deserted = [];
+    this.crates = [];
+    this.lootRp = 0;
     this.corpses = [];
     this.log = [];
     this.selected = [];
@@ -707,6 +939,18 @@ export class GameEngine {
     this.battleState = "active";
     this.waveIndex = 0;
     this.nextWaveT = 0;
+    this.enemyRadioT = 0;
+    this.enemyRadioCalled = false;
+    this.counterAttackT = 45 + Math.random() * 45;
+    this.counterAttacks = 0;
+    this.artyCd = 0;
+    this.supplyCd = 0;
+    this.reconCd = 0;
+    this.mortarCd = 0;
+    this.smokeCd = 0;
+    this.tankCalled = false;
+    this.smokeZones = [];
+    this.commanderLevel = commanderLevel;
     this.reinforcements = 0;
     this.touchBox = false;
 
@@ -727,6 +971,7 @@ export class GameEngine {
     this.blockers = built.blockers;
     this.blocked = buildBlockedGrid(built.blockers);
     this.covers = built.covers;
+    this.placeCrates();
     this.tctx = this.terrain.getContext("2d");
     this.tctx?.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
 
@@ -763,6 +1008,11 @@ export class GameEngine {
     this.phase = "battle";
     this.dirty = true;
     this.pushLog("Contact! Weapons free — good hunting.", "info");
+    if (this.radioLive()) {
+      this.pushLog("Radioman on the net — reinforcements available.", "info");
+    } else {
+      this.pushLog("No radioman — radio support is down. Hire one in the Barracks.", "info");
+    }
   }
 
   attach() {
@@ -835,6 +1085,7 @@ export class GameEngine {
       phase: this.phase,
       battleState: this.battleState,
       wave: this.waveIndex + 1,
+      crates: this.crates.map((c) => ({ x: c.x, y: c.y, looted: c.looted })),
       units: this.units.map((u) => ({
         id: u.id,
         side: u.side,
@@ -854,6 +1105,8 @@ export class GameEngine {
         morale: Math.round(u.morale),
         broken: u.broken,
         medic: this.isMedic(u),
+        radio: this.isRadioman(u),
+        fled: !!u.fled,
       })),
     });
   }
@@ -881,6 +1134,8 @@ export class GameEngine {
       victory: this.battleState === "victory",
       durationSec: Math.round(this.elapsed),
       fallen: this.fallen,
+      deserted: this.deserted,
+      lootRp: this.lootRp,
       survivors: this.units
         .filter((u) => u.side === "allies" && u.alive && u.soldierId)
         .map((u) => ({
@@ -1050,8 +1305,306 @@ export class GameEngine {
     }
   }
 
+  /** The radioman's level (0-6): the highest level among the living
+   * deployed radiomen. A rookie is 0, a veteran is 6. The backend uses
+   * the same rule (highest-level active radioman), so the two agree
+   * on the price. */
+  radiomanLevel(): number {
+    let best = 0;
+    for (const u of this.units) {
+      if (u.side === "allies" && u.alive && !u.npc && u.type === "radioman") {
+        best = Math.max(best, u.level);
+      }
+    }
+    return best;
+  }
+
+  /** What a radio support call costs right now, at the living
+   * radioman's level. No radioman: the full base cost (the call is
+   * gated off anyway, so this is only a display number). */
+  supportCost(kind: RadioSupportKind): number {
+    return radioCost(RADIO_SUPPORT_COST[kind], this.radiomanLevel());
+  }
+
+  /** What a reinforcement team costs right now, same discount. */
+  reinforceCost(kind: "rifle" | "heavy"): number {
+    return radioCost(kind === "rifle" ? 15 : 25, this.radiomanLevel());
+  }
+
+  /** Can this support call be fired right now (gates only, no RP
+   * check, no firing)? The frontend checks this before charging RP,
+   * so the backend is only called for a call that will land. */
+  canSupport(kind: RadioSupportKind): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive()) return false;
+    if (this.commanderLevel < RADIO_CALL_LEVEL[kind]) return false;
+    if (kind === "artillery") return this.artyCd <= 0;
+    if (kind === "supply") return this.supplyCd <= 0;
+    if (kind === "recon") return this.reconCd <= 0;
+    if (kind === "mortar") return this.mortarCd <= 0;
+    if (kind === "smoke") return this.smokeCd <= 0;
+    return !this.tankCalled;
+  }
+
+  /** Radio support lives or dies with the radioman: a living, deployed squad radioman. */
+  radioLive(): boolean {
+    return this.units.some((u) => u.side === "allies" && !u.npc && u.alive && u.type === "radioman");
+  }
+
+  /** Enemy radio: a living Funker on the field. When he dies, the enemy call-ins stop. */
+  enemyRadioLive(): boolean {
+    return this.units.some((u) => u.side === "axis" && u.alive && u.enemyType === "funk");
+  }
+
+  private isFunker(u: Unit): boolean {
+    return u.side === "axis" && u.enemyType === "funk";
+  }
+
+  /** Either side's radio man: the squad radioman or the enemy Funker. */
+  private isRadioman(u: Unit): boolean {
+    return (u.side === "allies" && u.type === "radioman") || this.isFunker(u);
+  }
+
+  /** The Funker's call-in: 2 fresh Volkssturm from the east edge, once per wave. */
+  private spawnEnemyCallIn() {
+    const rng = Math.random;
+    for (let i = 0; i < 2; i++) {
+      this.spawnEnemyUnit("volks", MAP_W - 40 - rng() * 90, 90 + rng() * (MAP_H - 180), rng);
+    }
+    this.pushLog("Enemy radio: two more men coming through the trees!", "wave");
+  }
+
+  /** A random counter-attack: 2 men (a grenadier and a volks) charge in
+   * from the east edge and head straight for the player's squad. They
+   * are marked counterAttack, so the camp-and-defend rule does not hold
+   * them back — they are the attack. */
+  private spawnCounterAttack() {
+    const rng = Math.random;
+    const types: EnemyTypeId[] = ["grenadier", "volks"];
+    for (const t of types) {
+      const before = this.units.length;
+      this.spawnEnemyUnit(t, MAP_W - 40 - rng() * 90, 90 + rng() * (MAP_H - 180), rng);
+      const u = this.units[before];
+      if (u) u.counterAttack = true;
+    }
+    this.pushLog("Enemy counter-attack — they are coming at us!", "wave");
+  }
+
+  /** The Funker's rally: nearby enemy men recover 15 morale over the
+   * radio, on a 20s cooldown — the mirror of the squad radioman's
+   * Rally Call. Only fires when somebody nearby actually needs it. */
+  private funkerRally(u: Unit) {
+    if (u.abilityCd > 0 || u.broken) return;
+    const low = this.units.filter(
+      (a) => a.side === "axis" && a.alive && a.morale < 100 && dist(u.x, u.y, a.x, a.y) <= 150,
+    );
+    if (!low.length) return;
+    for (const a of low) {
+      if (a.broken && a.willFlee) a.morale = 65; // steadies a fleeing man
+      else a.morale = Math.min(100, a.morale + 15);
+    }
+    u.abilityCd = 20;
+    this.pushLog("Enemy radio: the Funker rallies his men.", "info");
+  }
+
+  /** Fresh allies for the next wave: 2 weak 2nd Platoon riflemen from the west edge. */
+  private spawnWaveAllies(n: number) {
+    const rng = Math.random;
+    for (let i = 0; i < n; i++) {
+      const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
+      this.addNpc("rifleman", 90 + rng() * 80, py, this.nextId + i, rng(), true);
+    }
+    this.pushLog(`2nd Platoon sends ${n} fresh men up the line.`, "info");
+  }
+
   canReinforce(): boolean {
-    return this.phase === "battle" && this.battleState === "active" && this.reinforcements < MAX_REINFORCEMENTS;
+    return this.phase === "battle" && this.battleState === "active" && this.reinforcements < MAX_REINFORCEMENTS && this.radioLive() && this.commanderLevel >= RADIO_CALL_LEVEL.reinforce;
+  }
+
+  /** The living squad radioman who makes the calls, or null. */
+  private livingRadioman(): Unit | null {
+    return this.units.find((u) => u.side === "allies" && !u.npc && u.alive && u.type === "radioman") ?? null;
+  }
+
+  /** Where the enemy is thickest: the living axis man with the most
+   * living axis neighbours within 120. Null when nobody is left. */
+  private densestEnemyCluster(): { x: number; y: number } | null {
+    let best: Unit | null = null;
+    let bestCount = 0;
+    for (const u of this.units) {
+      if (u.side !== "axis" || !u.alive) continue;
+      let count = 0;
+      for (const o of this.units) {
+        if (o.side === "axis" && o.alive && dist(u.x, u.y, o.x, o.y) <= 120) count++;
+      }
+      if (count > bestCount) {
+        bestCount = count;
+        best = u;
+      }
+    }
+    return best ? { x: best.x, y: best.y } : null;
+  }
+
+  /** Artillery barrage: 3 shells on the densest enemy cluster, 60s
+   * cooldown. The shells fly like the enemy mortar's (2.4s flight,
+   * staggered, red warning circle at the impact point) but they are
+   * ours — side "allies", so they hurt the enemy, and kills credit
+   * to the radioman, so they count for kill RP like any squad kill. */
+  callArtillery(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.artyCd > 0 || this.commanderLevel < RADIO_CALL_LEVEL.artillery) return false;
+    const target = this.densestEnemyCluster();
+    const radio = this.livingRadioman();
+    if (!target || !radio) return false;
+    for (let i = 0; i < ARTY_SHELLS; i++) {
+      this.projectiles.push({
+        x: radio.x, y: radio.y, sx: radio.x, sy: radio.y,
+        tx: target.x + (Math.random() - 0.5) * 80,
+        ty: target.y + (Math.random() - 0.5) * 80,
+        t: 0, dur: 2.4 + i * 0.8, side: "allies", dmg: ARTY_DMG, aoe: ARTY_AOE,
+        kind: "grenade", sourceType: "mortar", killerId: radio.id, smokeT: 0,
+      });
+    }
+    this.artyCd = ARTILLERY_CD;
+    this.pushLog("Artillery on the way — danger close!", "wave");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Supply drop: a field dressing for the worst-wounded squad man
+   * (+50 HP, the medic's triage number), 45s cooldown. Spends nothing
+   * when nobody is hurt. */
+  callSupplyDrop(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.supplyCd > 0 || this.commanderLevel < RADIO_CALL_LEVEL.supply) return false;
+    const radio = this.livingRadioman();
+    if (!radio) return false;
+    let best: Unit | null = null;
+    let worst = 1;
+    for (const a of this.units) {
+      if (a.side !== "allies" || !a.alive || a.npc) continue;
+      const pct = a.hp / a.maxHp;
+      if (pct < 1 && pct < worst) {
+        best = a;
+        worst = pct;
+      }
+    }
+    if (!best) {
+      this.pushLog("Nobody needs supplies yet.", "info");
+      return false;
+    }
+    const before = best.hp;
+    best.hp = Math.min(best.maxHp, best.hp + SUPPLY_HEAL);
+    radio.healed += best.hp - before;
+    this.healFx(best.x, best.y);
+    this.supplyCd = SUPPLY_CD;
+    this.pushLog(`${radio.name} calls in a supply drop for ${best.name}.`, "info");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Recon: a spotter flight marks the ground around the densest
+   * enemy cluster as explored (300 radius), so the fog lifts there
+   * and the player can see the enemy position, 30s cooldown. Explored
+   * cells stay explored, so the reveal is permanent for that ground. */
+  callRecon(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.reconCd > 0 || this.commanderLevel < RADIO_CALL_LEVEL.recon) return false;
+    const target = this.densestEnemyCluster();
+    if (!target) return false;
+    const cr = Math.ceil(RECON_RADIUS / CELL);
+    const cx = Math.floor(target.x / CELL);
+    const cy = Math.floor(target.y / CELL);
+    for (let gy = Math.max(0, cy - cr); gy <= Math.min(ROWS - 1, cy + cr); gy++) {
+      for (let gx = Math.max(0, cx - cr); gx <= Math.min(COLS - 1, cx + cr); gx++) {
+        const dx = (gx + 0.5) * CELL - target.x;
+        const dy = (gy + 0.5) * CELL - target.y;
+        if (dx * dx + dy * dy <= RECON_RADIUS * RECON_RADIUS) this.explored[gy * COLS + gx] = 1;
+      }
+    }
+    this.reconCd = RECON_CD;
+    this.pushLog("Recon flight reports the enemy position.", "info");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Mortar strike: one shell on the densest enemy cluster, 25s
+   * cooldown — the cheap, frequent strike next to the big artillery
+   * barrage (3 shells, 60s). Same mortar shell, same warning circle,
+   * kills credit to the radioman for kill RP. */
+  callMortarStrike(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.mortarCd > 0 || this.commanderLevel < RADIO_CALL_LEVEL.mortar) return false;
+    const target = this.densestEnemyCluster();
+    const radio = this.livingRadioman();
+    if (!target || !radio) return false;
+    this.projectiles.push({
+      x: radio.x, y: radio.y, sx: radio.x, sy: radio.y,
+      tx: target.x + (Math.random() - 0.5) * 60,
+      ty: target.y + (Math.random() - 0.5) * 60,
+      t: 0, dur: 2.4, side: "allies", dmg: MORTAR_DMG, aoe: MORTAR_AOE,
+      kind: "grenade", sourceType: "mortar", killerId: radio.id, smokeT: 0,
+    });
+    this.mortarCd = MORTAR_CD;
+    this.pushLog("Mortar strike on the way!", "wave");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Where the squad is: the average position of the living squad
+   * men. The smoke screen drops here, covering the squad. */
+  private squadCenter(): { x: number; y: number } | null {
+    let x = 0;
+    let y = 0;
+    let n = 0;
+    for (const u of this.units) {
+      if (u.side !== "allies" || !u.alive || u.npc) continue;
+      x += u.x;
+      y += u.y;
+      n++;
+    }
+    return n ? { x: x / n, y: y / n } : null;
+  }
+
+  /** True while the point sits inside a live smoke zone. */
+  private inSmoke(x: number, y: number): boolean {
+    for (const z of this.smokeZones) {
+      if (dist(x, y, z.x, z.y) <= z.r) return true;
+    }
+    return false;
+  }
+
+  /** Smoke screen: a smoke cloud over the squad (150 radius, 20s),
+   * 45s cooldown. Smoke blocks line of sight — the enemy cannot
+   * shoot men inside it, and men inside it cannot shoot out — so it
+   * is for moving and falling back, not for fighting from. */
+  callSmokeScreen(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.smokeCd > 0 || this.commanderLevel < RADIO_CALL_LEVEL.smoke) return false;
+    const center = this.squadCenter();
+    if (!center) return false;
+    this.smokeZones.push({ x: center.x, y: center.y, r: SMOKE_RADIUS, t: SMOKE_DURATION });
+    this.smokeCd = SMOKE_CD;
+    this.pushLog("Smoke screen up — move!", "info");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Tank support: an M4 Sherman rolls in from the west edge, once
+   * per battle. It is a vehicle (no morale, it never breaks), it
+   * fights like a 2nd Platoon man with a 75mm gun, and it is not a
+   * soldier — if it is destroyed it leaves no casualty and no
+   * Memorial entry. */
+  callTank(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (!this.radioLive() || this.tankCalled || this.commanderLevel < RADIO_CALL_LEVEL.tank) return false;
+    this.addNpc("tank", 90, roadYAt(90), 0, Math.random(), false);
+    const tank = [...this.units].reverse().find((u) => u.type === "tank");
+    if (tank) tank.name = "M4 Sherman";
+    this.tankCalled = true;
+    this.pushLog("Armor on the way — a Sherman is rolling in!", "wave");
+    this.dirty = true;
+    return true;
   }
 
   /** Requisitioned 2nd Platoon team enters from the allied edge, level with the squad. */
@@ -1087,8 +1640,8 @@ export class GameEngine {
         rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
         hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
-        isStatic: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
-        morale: 100, broken: false, lastHitT: 0,
+        isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
+        morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
@@ -1614,6 +2167,22 @@ export class GameEngine {
       this.healFx(best.x, best.y);
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} patches up ${best.name}.`, "info");
+    } else if (u.type === "radioman") {
+      // Rally Call: nearby men recover 15 morale. Only spends the
+      // cooldown when somebody actually needs rallying.
+      const low = this.units.filter(
+        (a) => a.side === "allies" && a.alive && a.morale < 100 && dist(u.x, u.y, a.x, a.y) <= 150,
+      );
+      if (!low.length) {
+        this.pushLog(`${u.name}: the squad is holding — nobody needs rallying.`, "info");
+        return;
+      }
+      for (const a of low) {
+        if (a.broken && a.willFlee) a.morale = 65; // steadies a fleeing man
+        else a.morale = Math.min(100, a.morale + 15);
+      }
+      u.abilityCd = spec.cd;
+      this.pushLog(`${u.name} rallies the squad on the radio.`, "info");
     } else if (u.type === "sniper") {
       const t = this.bestTarget(u, (a, b) => a.maxHp - b.maxHp);
       if (!t) {
@@ -1652,6 +2221,11 @@ export class GameEngine {
         if (hurt) this.castAuto(u);
       } else if (u.type === "sniper" || u.type === "at") {
         if (this.bestTarget(u, (a, b) => a.maxHp - b.maxHp)) this.castAuto(u);
+      } else if (u.type === "radioman") {
+        const wavering = this.units.some(
+          (a) => a.side === "allies" && a.alive && a.morale < 70 && dist(u.x, u.y, a.x, a.y) <= 150,
+        );
+        if (wavering) this.castAuto(u);
       } else if (u.type === "rifleman" || u.type === "mg") {
         const t = this.autoTarget(u);
         if (t) this.castGround(u, t.x, t.y);
@@ -1694,6 +2268,10 @@ export class GameEngine {
         type: s.type,
         enemyType: null,
         soldierId: s.id,
+        coward: isCowardQuirk(s.quirk),
+        fled: false,
+        fleeT: 0,
+        willFlee: false,
         name: s.name,
         rank: s.rank,
         level: s.level,
@@ -1713,6 +2291,7 @@ export class GameEngine {
         healMult: mb.healMult,
         bulletSpeed: spec.bulletSpeed,
         isStatic: false,
+        vehicle: false, counterAttack: false,
         orders: [],
         attackId: null,
         targetId: null,
@@ -1741,31 +2320,26 @@ export class GameEngine {
     });
   }
 
-  private spawnWave(index: number) {
-    if (!this.mission) return;
-    this.waveIndex = index;
-    const rng = mulberry32(hashStr(this.mission.id + ":wave:" + index));
-    let mobileCount = 0;
-    for (const spec of this.waves[index]) {
-      const def = ENEMY_TYPES[spec.type];
-      for (let i = 0; i < spec.count; i++) {
-        const isStatic = !!def.static;
-        const x = isStatic
-          ? MAP_W * (0.6 + rng() * 0.25)
-          : MAP_W - 40 - rng() * 90;
-        // Spread mobile spawns 26 units apart (wrapping down the edge)
-        // instead of 8: with more enemies per wave the old spacing stacked
-        // them on top of each other and they deadlocked on spawn.
-        const y = isStatic
-          ? MAP_H * (0.2 + rng() * 0.6)
-          : 90 + ((rng() * (MAP_H - 180) + mobileCount * 26) % (MAP_H - 180));
-        mobileCount++;
-        const [ecx, ecy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
-        this.units.push({
+  /** One enemy man, built exactly like a wave spawn. Wave spawns
+   * and the radio call-in both go through here. */
+  private spawnEnemyUnit(type: EnemyTypeId, x: number, y: number, rng: () => number) {
+    const def = ENEMY_TYPES[type];
+    const isStatic = !!def.static;
+    const [ecx, ecy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
+    this.units.push({
           id: this.nextId++,
           side: "axis",
           type: "rifleman",
-          enemyType: spec.type,
+          enemyType: type,
+          // The coward roll uses Math.random, NOT the wave's seeded rng:
+          // the seeded sequence is fixed per mission, so a roll from it
+          // would make cowardice a fixed fact of the mission (Silent
+          // Chateau drew zero cowards in every battle) instead of a
+          // chance that varies from one play to the next.
+          coward: type === "volks" && Math.random() < this.cowardChance,
+          fled: false,
+          fleeT: 0,
+          willFlee: false,
           soldierId: null,
           name: def.label,
           rank: "",
@@ -1784,6 +2358,8 @@ export class GameEngine {
           spread: def.spread,
           bulletSpeed: def.bulletSpeed,
           isStatic,
+          vehicle: !!def.vehicle,
+          counterAttack: false,
           orders: [],
           attackId: null,
           targetId: null,
@@ -1811,6 +2387,30 @@ export class GameEngine {
           coverT: 0,
           stuckT: 0, lastX: ecx * CELL + CELL / 2, lastY: ecy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
         });
+  }
+
+  private spawnWave(index: number) {
+    if (!this.mission) return;
+    this.waveIndex = index;
+    this.enemyRadioT = 25;
+    this.enemyRadioCalled = false;
+    const rng = mulberry32(hashStr(this.mission.id + ":wave:" + index));
+    let mobileCount = 0;
+    for (const spec of this.waves[index]) {
+      const def = ENEMY_TYPES[spec.type];
+      for (let i = 0; i < spec.count; i++) {
+        const isStatic = !!def.static;
+        const x = isStatic
+          ? MAP_W * (0.6 + rng() * 0.25)
+          : MAP_W - 40 - rng() * 90;
+        // Spread mobile spawns 26 units apart (wrapping down the edge)
+        // instead of 8: with more enemies per wave the old spacing stacked
+        // them on top of each other and they deadlocked on spawn.
+        const y = isStatic
+          ? MAP_H * (0.2 + rng() * 0.6)
+          : 90 + ((rng() * (MAP_H - 180) + mobileCount * 26) % (MAP_H - 180));
+        mobileCount++;
+        this.spawnEnemyUnit(spec.type, x, y, rng);
       }
     }
     if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
@@ -1851,6 +2451,7 @@ export class GameEngine {
         this.nextWaveT -= dt;
         if (this.nextWaveT <= 0) {
           this.nextWaveT = 0;
+          this.spawnWaveAllies(2);
           this.spawnWave(this.waveIndex + 1);
         }
       } else if (this.battleState === "active") {
@@ -1859,6 +2460,43 @@ export class GameEngine {
         this.pushLog("Area secured. VICTORY.", "win");
         this.dirty = true;
       }
+    }
+    // Enemy radio call-in: 25s into the wave, the Funker gets one
+    // call-in of 2 more men — but only if he is still alive. Kill
+    // him first and the wave gets no reinforcements.
+    if (
+      this.battleState === "active" &&
+      this.enemiesAlive() > 0 &&
+      !this.enemyRadioCalled &&
+      this.enemyRadioT > 0
+    ) {
+      this.enemyRadioT -= dt;
+      if (this.enemyRadioT <= 0) {
+        this.enemyRadioCalled = true;
+        if (this.enemyRadioLive()) this.spawnEnemyCallIn();
+      }
+    }
+    // Random counter-attack: at a random 45-90s mark, 2 enemy men
+    // charge the player's squad from the east edge, ignoring the
+    // camp-and-defend rule. At most 2 per battle, so it stays a
+    // surprise push and not a second wave.
+    if (this.battleState === "active" && this.enemiesAlive() > 0 && this.counterAttacks < this.COUNTER_ATTACK_MAX) {
+      this.counterAttackT -= dt;
+      if (this.counterAttackT <= 0) {
+        this.counterAttacks++;
+        this.counterAttackT = 45 + Math.random() * 45;
+        this.spawnCounterAttack();
+      }
+    }
+    // Radio support cooldowns tick down while the battle runs.
+    this.artyCd = Math.max(0, this.artyCd - dt);
+    this.supplyCd = Math.max(0, this.supplyCd - dt);
+    this.reconCd = Math.max(0, this.reconCd - dt);
+    this.mortarCd = Math.max(0, this.mortarCd - dt);
+    this.smokeCd = Math.max(0, this.smokeCd - dt);
+    for (let i = this.smokeZones.length - 1; i >= 0; i--) {
+      this.smokeZones[i].t -= dt;
+      if (this.smokeZones[i].t <= 0) this.smokeZones.splice(i, 1);
     }
     if (this.alliesAlive() === 0 && this.battleState === "active") {
       this.battleState = "defeat";
@@ -1933,25 +2571,39 @@ export class GameEngine {
       // Morale: pinned men lose nerve fast, heavy suppression wears
       // it down. Out of fire for 5s it comes back, faster beside a
       // medic or a leader. Break at 20, rally at 45.
-      if (u.pinned) u.morale -= 2.5 * dt;
-      else if (u.suppression >= 40) u.morale -= 1.5 * dt;
+      if (u.pinned) this.moraleLoss(u, 2.5 * dt);
+      else if (u.suppression >= 40) this.moraleLoss(u, 1.5 * dt);
       if (this.elapsed - u.lastHitT > 5 && u.suppression < 20) {
-        let rec = 4;
+        // A fleeing man's nerve does not come back on its own:
+        // only a medic or a leader nearby steadies him. A coward
+        // who rolled "stay" falls back like a normal man.
+        let rec = u.willFlee && u.broken ? 0 : 4;
         if (this.nearMedic(u)) rec += 4;
         if (this.nearLeader(u)) rec += 3;
         u.morale += rec * dt;
       }
       u.morale = Math.max(0, Math.min(100, u.morale));
-      if (!u.broken && u.morale <= 20) {
+      if (!u.broken && u.morale <= (u.coward ? 50 : 20)) {
         u.broken = true;
+        // The flee is a roll, not a guarantee: any man who breaks
+        // rolls a low chance to run for the edge, otherwise he falls
+        // back like any other man. Cowards roll the bigger chance.
+        // A fresh roll every break. NPCs never roll.
+        u.willFlee = !u.npc && Math.random() < (u.coward ? this.fleeChance : this.fleeChanceNormal);
         this.pushLog(
           u.side === "allies"
-            ? `${u.name} breaks and falls back!`
-            : `An enemy ${ENEMY_TYPES[u.enemyType!].label} breaks and falls back!`,
+            ? u.willFlee
+              ? `${u.name} breaks and runs for the edge!`
+              : `${u.name} breaks and falls back!`
+            : u.willFlee
+              ? `An enemy ${ENEMY_TYPES[u.enemyType!].label} breaks and runs!`
+              : `An enemy ${ENEMY_TYPES[u.enemyType!].label} breaks and falls back!`,
           "death",
         );
-      } else if (u.broken && u.morale >= 45) {
+      } else if (u.broken && u.morale >= (u.willFlee ? 65 : 45)) {
         u.broken = false;
+        u.willFlee = false;
+        u.fleeT = 0;
         this.pushLog(
           u.side === "allies"
             ? `${u.name} rallies and holds the line.`
@@ -1981,14 +2633,38 @@ export class GameEngine {
       // A broken man falls back: he runs from the nearest enemy and
       // does not fight until he rallies. Static guns cannot run, so
       // they hold in place and stop shooting.
+      // A broken man whose flee roll landed runs for the nearest edge
+      // of the map instead. If he reaches it while still broken, he
+      // deserts — and if he is one of your troops, the round ends. A
+      // rally call steadies him (morale to 65, rallies on the next
+      // tick), and so does a medic or a leader nearby: the rally
+      // check above clears broken before this runs.
       let moving = false;
       if (u.broken && !u.isStatic) {
-        const foe = this.nearestAlly(u);
-        if (foe) {
-          const dx = u.x - foe.x;
-          const dy = u.y - foe.y;
-          const len = Math.hypot(dx, dy) || 1;
-          moving = this.chaseTo(u, u.x + (dx / len) * 320, u.y + (dy / len) * 320, dt);
+        if (u.willFlee) {
+          const dxEdge = Math.min(u.x, MAP_W - u.x);
+          const dyEdge = Math.min(u.y, MAP_H - u.y);
+          const tx = dxEdge <= dyEdge ? (u.x < MAP_W / 2 ? 0 : MAP_W) : u.x;
+          const ty = dxEdge <= dyEdge ? u.y : (u.y < MAP_H / 2 ? 0 : MAP_H);
+          // Panic sprint: 1.5x speed, or he gets shot in the back on
+          // the way out and the mechanic never shows up at all.
+          moving = this.chaseTo(u, tx, ty, dt, 1.5);
+          u.fleeT += dt;
+          // He is gone once he is close to the edge (150), not only on
+          // the line itself: from mid-map the run is long, and at 30
+          // he was shot or rallied on the way out almost every time.
+          // And only after 2s of flight, so a man who breaks on the
+          // deployment line does not vanish before a rally call can
+          // reach him.
+          if (u.fleeT >= 2 && (dxEdge <= 150 || dyEdge <= 150)) this.desert(u);
+        } else {
+          const foe = this.nearestAlly(u);
+          if (foe) {
+            const dx = u.x - foe.x;
+            const dy = u.y - foe.y;
+            const len = Math.hypot(dx, dy) || 1;
+            moving = this.chaseTo(u, u.x + (dx / len) * 320, u.y + (dy / len) * 320, dt);
+          }
         }
       } else if (u.orders.length > 0) {
         const o = u.orders[0];
@@ -1997,6 +2673,26 @@ export class GameEngine {
         else {
           this.moveToward(u, o.x, o.y, dt);
           moving = true;
+        }
+      } else if (u.vehicle && u.side === "allies") {
+        // The Sherman follows the tank road west to east. It advances
+        // along the road's centerline, steering toward the road ahead,
+        // and stops to fire when an enemy is in range with line of
+        // sight. It never chases off-road: the road is its route, and
+        // the road is kept clear of obstacles, so it always has a
+        // clear path. At the far east edge it holds and fires.
+        const prey = this.nearestAlly(u);
+        const inRange = prey && dist(u.x, u.y, prey.x, prey.y) <= u.range * 0.9 && this.los(u, prey);
+        if (inRange) {
+          u.chase = []; // hold and fire from where it stands
+        } else if (u.x < MAP_W - 120) {
+          // Steer toward the road 120 units ahead, so it follows the
+          // road's bends instead of cutting straight across them.
+          const tx = Math.min(MAP_W - 60, u.x + 120);
+          this.moveToward(u, tx, roadYAt(tx), dt);
+          moving = true;
+        } else {
+          u.chase = []; // at the east edge: hold and fire
         }
       } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc)) && !u.isStatic && u.enemyType !== "mortar") {
         // Auto Battle core: a player squad man with AUTO on fights the
@@ -2013,7 +2709,19 @@ export class GameEngine {
           : this.nearestAlly(u);
         if (prey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
-          if (pd > u.range * 0.9 || !this.los(u, prey)) {
+          // Camp and defend: an axis unit holds its ground until it
+          // spots a player unit — within vision and with line of
+          // sight. Until then it does not advance, so the defense
+          // waits for the player instead of charging across the map.
+          // A counter-attacker ignores the rule and charges. Allies
+          // and AUTO squad men are unaffected and still chase. A
+          // medic is exempt too: its prey is a wounded man on its own
+          // side, not the player, so it moves to heal regardless.
+          const isEnemyPrey = prey.side !== u.side;
+          const spotted = u.side !== "axis" || u.counterAttack || !isEnemyPrey || (pd <= u.vision && this.los(u, prey));
+          if (!spotted) {
+            u.chase = []; // camping: hold position, do not advance
+          } else if (pd > u.range * 0.9 || !this.los(u, prey)) {
             moving = this.chaseTo(u, prey.x, prey.y, dt);
           } else {
             // In range with line of sight: the unit stops to fire, so
@@ -2205,7 +2913,7 @@ export class GameEngine {
       // NPCs/axis when the prey is out of range or has no LOS, but it
       // never runs for a unit whose orders just emptied while it was
       // in cover with a target in range but behind its own cover.
-      if (!u.isStatic && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
+      if (!u.isStatic && !u.vehicle && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
         const prey = this.nearestAlly(u);
         const hasLosTarget = focus && d <= u.range && this.los(u, focus);
         if (prey && !hasLosTarget) {
@@ -2231,7 +2939,9 @@ export class GameEngine {
       // freely. Enemies only seek cover when pinned or idle with no prey
       // in sight; when they have a prey they advance or use the existing
       // in-range cover branch above, so they do not just camp.
-      if (!u.isStatic && !u.cover && u.coverSeekT <= 0) {
+      // A vehicle never seeks cover: the Sherman follows the road, and
+      // a cover order would pull it off the road toward a sandbag.
+      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle) {
         const underFire = u.pinned || u.suppression >= 35;
         const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
         const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
@@ -2310,6 +3020,9 @@ export class GameEngine {
         // (autoUseAbilities -> castAuto).
         if (u.side === "axis" || u.npc) this.medicTriage(u);
       }
+
+      // Funker rally — the enemy mirror of the radioman's Rally Call.
+      if (this.isFunker(u)) this.funkerRally(u);
     }
 
     // Separation & collision.
@@ -2432,6 +3145,23 @@ export class GameEngine {
       this.recomputeFog();
     }
 
+    // Supply crates: a squad man who walks up to one loots it for
+    // extra RP. Squad men only — NPC allies and enemies never loot,
+    // and a broken (fleeing) man is running, not looting.
+    for (const c of this.crates) {
+      if (c.looted) continue;
+      const looter = this.units.find(
+        (u) =>
+          u.side === "allies" && !u.npc && u.alive && !u.broken &&
+          (u.x - c.x) * (u.x - c.x) + (u.y - c.y) * (u.y - c.y) <= LOOT_RADIUS * LOOT_RADIUS,
+      );
+      if (looter) {
+        c.looted = true;
+        this.lootRp += CRATE_RP;
+        this.pushLog(`${looter.name} looted a supply crate (+${CRATE_RP} RP).`, "info");
+      }
+    }
+
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 18);
     this.stepDeaths(dt);
     for (const u of this.units) if (u.shootT && u.shootT > 0) u.shootT -= dt;
@@ -2452,6 +3182,10 @@ export class GameEngine {
   }
 
   private los(a: Unit, b: Unit): boolean {
+    // Smoke: a man inside a cloud cannot see out, and a man outside
+    // cannot see in. Two men inside the same smoke can still see each
+    // other, and two men outside it see normally.
+    if (this.inSmoke(a.x, a.y) !== this.inSmoke(b.x, b.y)) return false;
     return lineClear(this.blocked, a.x, a.y, b.x, b.y);
   }
 
@@ -2459,7 +3193,7 @@ export class GameEngine {
   // Returns false (and clears the chase) while the unit is banned from
   // chasing after a stuck drop — otherwise it would re-chase the same
   // prey behind the same wall in the very next frame.
-  private chaseTo(u: Unit, x: number, y: number, dt: number): boolean {
+  private chaseTo(u: Unit, x: number, y: number, dt: number, speedMult = 1): boolean {
     if (this.elapsed < u.chaseBanT) {
       u.chase = [];
       return false;
@@ -2472,7 +3206,7 @@ export class GameEngine {
     const wp = u.chase[0];
     if (!wp) return false;
     if (dist(u.x, u.y, wp.x, wp.y) < 10) u.chase.shift();
-    this.moveToward(u, wp.x, wp.y, dt);
+    this.moveToward(u, wp.x, wp.y, dt, speedMult);
     return true;
   }
 
@@ -2533,10 +3267,10 @@ export class GameEngine {
     return false;
   }
 
-  private moveToward(u: Unit, x: number, y: number, dt: number) {
+  private moveToward(u: Unit, x: number, y: number, dt: number, speedMult = 1) {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
-    const sp = u.speed * (u.pinned ? 0.35 : 1);
+    const sp = u.speed * speedMult * (u.pinned ? 0.35 : 1);
     const step = sp * dt;
     const dx = ((x - u.x) / d) * step;
     const dy = ((y - u.y) / d) * step;
@@ -2688,6 +3422,12 @@ export class GameEngine {
     }
   }
 
+  /** Morale loss, doubled for a coward: his nerve goes twice as fast. */
+  private moraleLoss(u: Unit, amount: number) {
+    if (u.vehicle) return; // a tank has no nerve to lose
+    u.morale = Math.max(0, u.morale - amount * (u.coward ? 2 : 1));
+  }
+
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
     u.hp -= dmg;
@@ -2697,7 +3437,7 @@ export class GameEngine {
     // (Tuned down from 0.4 on 2026-11-11: at 0.4 AUTO won only
     // 5 of 10 — breaks were deciding battles instead of flavouring
     // them. Same for the casualty shock and pinned drain below.)
-    u.morale = Math.max(0, u.morale - dmg * 0.3);
+    this.moraleLoss(u, dmg * 0.3);
     u.lastHitT = this.elapsed;
     if (u.side === "allies") u.damageTaken += Math.min(dmg, u.hp + dmg);
     if (u.hp <= 0) this.kill(u, sourceType, killerId);
@@ -2712,7 +3452,7 @@ export class GameEngine {
     // recovery back for 5s, like being under fire.
     for (const a of this.units) {
       if (!a.alive || a.side !== u.side || a.id === u.id) continue;
-      a.morale = Math.max(0, a.morale - (dist(u.x, u.y, a.x, a.y) <= 250 ? 8 : 2));
+      this.moraleLoss(a, dist(u.x, u.y, a.x, a.y) <= 250 ? 8 : 2);
       a.lastHitT = this.elapsed;
     }
     if (u.side === "allies" && !u.npc) sfx("death");
@@ -2731,6 +3471,9 @@ export class GameEngine {
       });
       this.selected = this.selected.filter((id) => id !== u.id);
       this.pushLog(`${u.name} is down. He isn't getting up.`, "death");
+      if (u.type === "radioman" && !this.radioLive()) {
+        this.pushLog("Radio is down — no more calls until you hire another radioman.", "death");
+      }
     } else {
       const killer = this.unitById(killerId);
       if (killer && killer.side === "allies") {
@@ -2739,6 +3482,40 @@ export class GameEngine {
         if (u.enemyType === "officer") killer.officerKills++;
       }
       this.pushLog(`${ENEMY_TYPES[u.enemyType!].label} neutralized.`, "kill");
+      if (u.enemyType === "funk" && !this.enemyRadioLive()) {
+        this.pushLog("Enemy radio is down — no more enemy call-ins.", "kill");
+      }
+    }
+    this.dirty = true;
+  }
+
+  /** A coward who reaches the edge of the map while still broken
+   * deserts: off the field, out of the battle, gone from the roster
+   * when the report is filed — but never on the Memorial, he did not
+   * die. If he is one of your troops, the round ends right here. */
+  private desert(u: Unit) {
+    if (!u.alive || u.fled) return;
+    u.alive = false;
+    u.fled = true;
+    this.selected = this.selected.filter((id) => id !== u.id);
+    if (u.side === "allies" && !u.npc && u.soldierId) {
+      this.deserted.push({
+        soldierId: u.soldierId,
+        cause: "Broke and ran",
+        kills: u.kills,
+        damageTaken: Math.round(u.damageTaken),
+        healed: Math.round(u.healed),
+        heavyKills: u.heavyKills,
+        officerKills: u.officerKills,
+      });
+      this.pushLog(`${u.name} broke and ran off the field. The squad's nerve is gone.`, "death");
+      if (this.battleState === "active") {
+        this.battleState = "defeat";
+        this.phase = "over";
+        this.pushLog("Mission failed — a man deserted under fire.", "lose");
+      }
+    } else {
+      this.pushLog(`An enemy ${ENEMY_TYPES[u.enemyType!].label} broke and ran off the field.`, "kill");
     }
     this.dirty = true;
   }
@@ -2898,6 +3675,11 @@ export class GameEngine {
   debugCover() {
     const d = this.covers.filter((c) => c.hp !== undefined);
     return { count: d.length, hp: Math.round(d.reduce((t, c) => t + (c.hp ?? 0), 0)), sample: d[0] ? { x: d[0].x, y: d[0].y } : null };
+  }
+
+  /** Dev/test probe: is the map cell at (x, y) explored? */
+  exploredAt(x: number, y: number): boolean {
+    return this.explored[this.cellAt(x, y)] === 1;
   }
 
   /** Dev/test probe: detonate a blast at a map point (no unit damage source). */
@@ -3071,6 +3853,7 @@ export class GameEngine {
         pinned: u.pinned,
         morale: Math.round(u.morale),
         broken: u.broken,
+        coward: u.coward,
         abilityCd: u.abilityCd,
         abilityCdMax: UNIT_TYPES[u.type].ability.cd,
         kills: u.kills,
@@ -3094,6 +3877,29 @@ export class GameEngine {
       formation: this.formation,
       touchBox: this.touchBox,
       reinforcementsLeft: MAX_REINFORCEMENTS - this.reinforcements,
+      radioLive: this.radioLive(),
+      supportCd: {
+        artillery: Math.max(0, Math.ceil(this.artyCd - 1e-6)),
+        supply: Math.max(0, Math.ceil(this.supplyCd - 1e-6)),
+        recon: Math.max(0, Math.ceil(this.reconCd - 1e-6)),
+        mortar: Math.max(0, Math.ceil(this.mortarCd - 1e-6)),
+        smoke: Math.max(0, Math.ceil(this.smokeCd - 1e-6)),
+        tank: 0,
+      },
+      tankUsed: this.tankCalled,
+      supportCost: {
+        artillery: this.supportCost("artillery"),
+        supply: this.supportCost("supply"),
+        recon: this.supportCost("recon"),
+        mortar: this.supportCost("mortar"),
+        smoke: this.supportCost("smoke"),
+        tank: this.supportCost("tank"),
+      },
+      reinforceCost: {
+        rifle: this.reinforceCost("rifle"),
+        heavy: this.reinforceCost("heavy"),
+      },
+      enemyRadioLive: this.enemyRadioLive(),
       autoBattle: this.autoBattle,
     });
   }
@@ -3147,6 +3953,8 @@ export class GameEngine {
     ctx.clip();
 
     if (this.terrain) ctx.drawImage(this.terrain, 0, 0, this.terrain.width * PX, this.terrain.height * PX);
+
+    this.drawCrates(ctx);
 
     // Fallen bodies stay where they dropped.
     for (const c of this.corpses) {
@@ -3213,6 +4021,9 @@ export class GameEngine {
         }
       }
     }
+
+    // Smoke zones, under the units so the men inside stay visible.
+    this.drawSmoke(ctx);
 
     // Units (and the dying), back to front so overlapping sprites read correctly.
     const drawList = this.units
@@ -3320,10 +4131,76 @@ export class GameEngine {
     this.drawMortarWarnings(ctx);
   }
 
+  /** Smoke zones: a grey cloud on the ground that blocks line of
+   * sight. It fades as it runs out, and it is drawn under the units
+   * so the men inside stay visible. */
+  private drawSmoke(ctx: CanvasRenderingContext2D) {
+    for (const z of this.smokeZones) {
+      const x = snap(z.x);
+      const y = snap(z.y);
+      const alpha = Math.min(0.5, 0.2 + (z.t / SMOKE_DURATION) * 0.3);
+      ctx.fillStyle = `rgba(200,200,190,${alpha})`;
+      ctx.beginPath();
+      ctx.arc(x, y, z.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(220,220,210,0.5)";
+      ctx.lineWidth = PX;
+      ctx.setLineDash([6, 6]);
+      ctx.beginPath();
+      ctx.arc(x, y, z.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+
   /** Pulsing red warning circle under every incoming mortar shell for
    * its whole 2.4s flight. This is the only on-screen marker left:
    * no objective tags for any enemy — no red diamonds / labels /
    * off-screen arrows for the SS officer, MG42, mortar or flak. */
+  /** Supply crates, drawn so they read at a glance: a full crate
+   * gets a gold glow, a gold border and the RP it holds written
+   * above it; a looted one is a dark, empty, lidless box. Crates in
+   * ground nobody has explored yet stay hidden, like corpses do. */
+  private drawCrates(ctx: CanvasRenderingContext2D) {
+    for (const c of this.crates) {
+      if (!this.explored[this.cellAt(c.x, c.y)]) continue;
+      const x = snap(c.x);
+      const y = snap(c.y);
+      ctx.save();
+      if (c.looted) {
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = "#4A3A22";
+        ctx.fillRect(x - 13, y - 11, 26, 22);
+        ctx.strokeStyle = "#2A2010";
+        ctx.lineWidth = PX;
+        ctx.strokeRect(x - 13, y - 11, 26, 22);
+      } else {
+        ctx.fillStyle = "rgba(229,169,60,0.18)";
+        ctx.beginPath();
+        ctx.arc(x, y, 26, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#8A6A2E";
+        ctx.fillRect(x - 13, y - 11, 26, 22);
+        ctx.strokeStyle = "#E5A93C";
+        ctx.lineWidth = 2 * PX;
+        ctx.strokeRect(x - 13, y - 11, 26, 22);
+        ctx.strokeStyle = "#5A4218";
+        ctx.lineWidth = PX;
+        ctx.beginPath();
+        ctx.moveTo(x - 13, y - 11);
+        ctx.lineTo(x + 13, y + 11);
+        ctx.moveTo(x + 13, y - 11);
+        ctx.lineTo(x - 13, y + 11);
+        ctx.stroke();
+        ctx.fillStyle = "#E5A93C";
+        ctx.font = `bold ${11 * PX}px monospace`;
+        ctx.textAlign = "center";
+        ctx.fillText(`+${CRATE_RP} RP`, x, y - 18);
+      }
+      ctx.restore();
+    }
+  }
+
   private drawMortarWarnings(ctx: CanvasRenderingContext2D) {
     const rect = this.canvas.getBoundingClientRect();
     const dpr = this.canvas.width / Math.max(1, rect.width);
@@ -3356,6 +4233,33 @@ export class GameEngine {
   }
 
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {
+    // A deserter has left the field: nothing to draw, and no corpse.
+    if (u.fled) return;
+    if (u.vehicle) {
+      // A tank: hull, turret, barrel, tracks — a chunky pixel tank,
+      // not a man. No pose and no morale bar, just a health bar above
+      // it. Allied olive for the Sherman, German gray for the Panzer,
+      // so the two are easy to tell apart at a glance.
+      const fx = snap(u.x);
+      const fy = snap(u.y);
+      const flip = Math.cos(u.facing) < 0;
+      const ally = u.side === "allies";
+      ctx.fillStyle = "#1E1E14";
+      ctx.fillRect(fx - 18, fy - 6, 36, 12);
+      ctx.fillStyle = ally ? "#4A5A2E" : "#565650";
+      ctx.fillRect(fx - 15, fy - 9, 30, 10);
+      ctx.fillStyle = ally ? "#5A6E3A" : "#6A6A66";
+      ctx.fillRect(fx - 7, fy - 14, 14, 8);
+      ctx.fillStyle = "#2E2E20";
+      ctx.fillRect(flip ? fx - 23 : fx + 7, fy - 13, 16, 3);
+      const w = 36;
+      const pct = Math.max(0, u.hp / u.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
+      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      return;
+    }
     const isAlly = u.side === "allies";
     const look = lookOf(u);
     const flip = Math.cos(u.facing) < 0;
@@ -3417,6 +4321,18 @@ export class GameEngine {
     const ax = flip ? img.width - 1 - FEET_X : FEET_X;
     const top = feetY - SPR_H * PX + bob;
     ctx.drawImage(img, fx - ax * PX, top, img.width * PX, img.height * PX);
+
+    // Radioman: dark backpack on the back, thin antenna rising above
+    // the helmet with a tip dot, so he reads as the radio man.
+    // The enemy Funker gets the same kit.
+    if (this.isRadioman(u) && u.alive) {
+      const backX = fx + (flip ? 4 : -4) * PX;
+      ctx.fillStyle = "#2A3324";
+      ctx.fillRect(backX - PX, top + 6 * PX, PX * 3, PX * 4);
+      ctx.fillStyle = "#8D9A83";
+      ctx.fillRect(backX, top - 4 * PX, PX, PX * 10);
+      ctx.fillRect(backX - PX, top - 5 * PX, PX * 3, PX);
+    }
 
     if (!u.alive) return;
 
@@ -3709,6 +4625,12 @@ function coverField(ctx: Ctx, blockers: Blocker[], rng: () => number, x0: number
     const x = x0 + rng() * (x1 - x0);
     const y = 90 + rng() * (MAP_H - 180);
     const r = rng();
+    // Do not scatter cover on top of an existing blocker: a wreck or
+    // ruin landing against a building leaves a gap too narrow for a
+    // unit to pass, and a unit ordered through it wedges in the pocket
+    // instead of walking around. 60 units clear of a blocker's edge
+    // leaves room for a man (18 across) to slip between the two.
+    if (blockers.some((b) => Math.hypot(x - b.x, y - b.y) < b.r + 60)) continue;
     if (r < 0.35) drawSandbags(ctx, x, y, rng() * Math.PI, 4 + Math.floor(rng() * 3));
     else if (r < 0.6) drawRuin(ctx, blockers, x, y, rng);
     else if (r < 0.82) drawCrates(ctx, blockers, x, y);
@@ -3822,7 +4744,7 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
   canvas.width = MAP_W;
   canvas.height = MAP_H;
   const ctx = canvas.getContext("2d")!;
-  const blockers: Blocker[] = [];
+  let blockers: Blocker[] = [];
   const snow = kind === "forest";
 
   ctx.fillStyle = snow ? "#3A4238" : "#2A3520";
@@ -3834,13 +4756,31 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.ellipse(rng() * MAP_W, rng() * MAP_H, r, r * (0.5 + rng() * 0.5), rng() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
   }
+  // The road matches the ground it runs on: a dirt road on dirt
+  // ground, a sandy trail on sand ground. The beach is the sand map,
+  // so its road is a light packed-sand trail with sand-coloured ruts;
+  // every other map gets the worn brown dirt track with darker ruts.
+  // Same pixel-art style as the rest of the map, no new look — the road
+  // reads as dirt on dirt and sand on sand, not pavement. The ruts
+  // follow the same bezier as the band, offset 10 units either side of
+  // the centerline.
   const road = (y: number) => {
-    ctx.strokeStyle = "#4A3E2C";
+    const sandy = kind === "beach";
+    ctx.strokeStyle = sandy ? "#C9B184" : "#4A3E2C";
     ctx.lineWidth = 46;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.bezierCurveTo(MAP_W * 0.3, y - 90, MAP_W * 0.7, y + 90, MAP_W, y);
     ctx.stroke();
+    // Two wheel ruts where wheels have packed the ground down.
+    ctx.strokeStyle = sandy ? "#A68B5A" : "#33261A";
+    ctx.lineWidth = 7;
+    for (const off of [-10, 10]) {
+      ctx.beginPath();
+      ctx.moveTo(0, y + off);
+      ctx.bezierCurveTo(MAP_W * 0.3, y - 90 + off, MAP_W * 0.7, y + 90 + off, MAP_W, y + off);
+      ctx.stroke();
+    }
   };
   const gapPick = (n: number) => Array.from({ length: n }, (_, i) => (i + 0.3 + rng() * 0.4) / n);
 
@@ -3868,16 +4808,19 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawHedgehog(ctx, blockers, hx, hy);
       COVERS.push({ x: hx, y: hy, r: 11, q: 0.35, q0: 0.35, type: "light", hp: 80, maxHp: 80 });
     }
-    coverField(ctx, blockers, rng, 1100, 3100, 16);
+    coverField(ctx, blockers, rng, 1100, 3900, 20);
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
-    for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 2750, y, 0, 6); // second trench line, new eastern ground
-    // Dug trenches: one mid-field, one on the new eastern ground.
+    for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 2750, y, 0, 6); // second trench line, eastern ground
+    for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 3550, y, 0, 6); // third trench line, new eastern ground
+    // Dug trenches: one mid-field, one eastern, one on the new ground.
     drawTrench(ctx, blockers, 1400, 80, 1400, MAP_H - 80, [0.5], rng);
     drawTrench(ctx, blockers, 2600, 80, 2600, MAP_H - 80, [0.35, 0.7], rng);
+    drawTrench(ctx, blockers, 3400, 80, 3400, MAP_H - 80, [0.35, 0.7], rng);
     // Bluffs: dune-grass ridge with three draws (the real Omaha exits).
     hedgerow(ctx, blockers, 1000, 0, 1000, MAP_H, [0.2, 0.5, 0.82], rng);
     hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
     hedgerow(ctx, blockers, 2500, 0, 2500, MAP_H, gapPick(2), rng);
+    hedgerow(ctx, blockers, 3300, 0, 3300, MAP_H, gapPick(2), rng);
     road(MAP_H / 2);
     // Concrete pillbox ruins on the bluff.
     for (const py of [MAP_H * 0.32, MAP_H * 0.68]) {
@@ -3893,26 +4836,27 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     }
   } else if (kind === "airborne" || kind === "bocage") {
     road(MAP_H / 2);
-    for (const x of [620, 1120, 1620, 2050, 2600]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
+    for (const x of [620, 1120, 1620, 2050, 2600, 3400]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
     for (const y of [430, 920]) {
-      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030], [2140, 2580]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
+      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030], [2140, 2580], [2940, 3380]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
     }
-    for (let i = 0; i < 12; i++) drawTree(ctx, blockers, 700 + rng() * 2400, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
+    for (let i = 0; i < 12; i++) drawTree(ctx, blockers, 700 + rng() * 3200, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
     drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
     drawTrench(ctx, blockers, 1400, 60, 1400, MAP_H - 60, [0.5], rng);
     drawTrench(ctx, blockers, 2400, 60, 2400, MAP_H - 60, [0.3, 0.65], rng);
-    coverField(ctx, blockers, rng, 300, 3100, 20);
+    drawTrench(ctx, blockers, 3400, 60, 3400, MAP_H - 60, [0.3, 0.65], rng);
+    coverField(ctx, blockers, rng, 300, 3900, 24);
     if (kind === "airborne") {
       ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
       ctx.fillRect(0, 0, MAP_W, MAP_H);
     }
   } else if (kind === "town") {
     road(MAP_H / 2);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 15; i++) {
       const w = 110 + rng() * 90;
       const h = 90 + rng() * 60;
-      const bx = 520 + (i % 4) * 620 + rng() * 80;
-      const by = 80 + Math.floor(i / 4) * 430 + rng() * 60;
+      const bx = 520 + (i % 5) * 620 + rng() * 80;
+      const by = 80 + Math.floor(i / 5) * 430 + rng() * 60;
       if (Math.abs(by + h / 2 - MAP_H / 2) < 110) continue; // keep the main street open
       drawBuilding(ctx, blockers, bx, by, w, h);
     }
@@ -3921,8 +4865,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     // lands on the main street, so the road stays open.
     drawTrench(ctx, blockers, 900, 80, 900, MAP_H - 80, [0.5], rng);
     drawTrench(ctx, blockers, 2700, 80, 2700, MAP_H - 80, [0.35, 0.7], rng);
-    for (let i = 0; i < 9; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
-    coverField(ctx, blockers, rng, 500, 3100, 10);
+    drawTrench(ctx, blockers, 3500, 80, 3500, MAP_H - 80, [0.35, 0.7], rng);
+    for (let i = 0; i < 12; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
+    coverField(ctx, blockers, rng, 500, 3900, 12);
   } else if (kind === "causeway") {
     ctx.fillStyle = "#16252A";
     ctx.fillRect(0, 0, MAP_W, MAP_H * 0.3);
@@ -3934,14 +4879,15 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       drawBush(ctx, x + 22, MAP_H * 0.7, 15, rng);
       blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15, kind: "bush" });
     }
-    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 600 + rng() * 2500, MAP_H * (0.38 + rng() * 0.24), 16, false);
-    for (let i = 0; i < 11; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
+    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 600 + rng() * 3300, MAP_H * (0.38 + rng() * 0.24), 16, false);
+    for (let i = 0; i < 14; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
     drawWreck(ctx, blockers, 1250, MAP_H * 0.47, 0.2);
     drawWreck(ctx, blockers, 1850, MAP_H * 0.55, -0.3);
     drawWreck(ctx, blockers, 2650, MAP_H * 0.5, 0.1);
+    drawWreck(ctx, blockers, 3450, MAP_H * 0.53, -0.2);
     // Trenches parallel to the causeway road, inside the dry strip.
-    drawTrench(ctx, blockers, 800, MAP_H / 2 - 180, 3000, MAP_H / 2 - 180, [0.5], rng);
-    drawTrench(ctx, blockers, 800, MAP_H / 2 + 180, 3000, MAP_H / 2 + 180, [0.5], rng);
+    drawTrench(ctx, blockers, 800, MAP_H / 2 - 180, 3800, MAP_H / 2 - 180, [0.5], rng);
+    drawTrench(ctx, blockers, 800, MAP_H / 2 + 180, 3800, MAP_H / 2 + 180, [0.5], rng);
   } else if (kind === "forest") {
     road(MAP_H / 2);
     for (let i = 0; i < 110; i++) {
@@ -3950,13 +4896,16 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       if (Math.abs(ty - MAP_H / 2) < 60) continue;
       drawTree(ctx, blockers, tx, ty, 16 + rng() * 12, snow);
     }
-    coverField(ctx, blockers, rng, 400, 3100, 12);
+    coverField(ctx, blockers, rng, 400, 3900, 15);
     drawSandbags(ctx, 1900, MAP_H / 2 - 120, 0, 7); // bunker line
     drawSandbags(ctx, 1900, MAP_H / 2 + 120, 0, 7);
-    drawSandbags(ctx, 2700, MAP_H / 2 - 120, 0, 7); // second bunker line, new eastern ground
+    drawSandbags(ctx, 2700, MAP_H / 2 - 120, 0, 7); // second bunker line, eastern ground
     drawSandbags(ctx, 2700, MAP_H / 2 + 120, 0, 7);
+    drawSandbags(ctx, 3500, MAP_H / 2 - 120, 0, 7); // third bunker line, new eastern ground
+    drawSandbags(ctx, 3500, MAP_H / 2 + 120, 0, 7);
     drawTrench(ctx, blockers, 1500, 60, 1500, MAP_H - 60, [0.5], rng);
     drawTrench(ctx, blockers, 2600, 60, 2600, MAP_H - 60, [0.3, 0.65], rng);
+    drawTrench(ctx, blockers, 3400, 60, 3400, MAP_H - 60, [0.3, 0.65], rng);
   }
 
   // Craters (cosmetic, walkable).
@@ -3969,5 +4918,17 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.ellipse(cx, cy, r, r * 0.7, rng() * Math.PI, 0, Math.PI * 2);
     ctx.fill();
   }
+  // The tank road runs west to east and must be clear: no blocker or
+  // cover may overlap the road surface, so the Sherman has a clear
+  // path. A blocker overlaps the road when its circle reaches the
+  // road's edge (centerline +- ROAD_HALF). Dropping just the circles
+  // on the road leaves a gap in a hedgerow or a building's edge where
+  // the road passes, which is the right look — the road cuts through.
+  // The road is then repainted on top, so it reads as clear dirt
+  // instead of a hedgerow or wall drawn across it.
+  const onRoad = (x: number, y: number, r: number) => Math.abs(y - roadYAt(x)) < r + ROAD_HALF;
+  blockers = blockers.filter((b) => !onRoad(b.x, b.y, b.r));
+  COVERS = COVERS.filter((c) => !onRoad(c.x, c.y, c.r));
+  road(MAP_H / 2);
   return { canvas, blockers, covers: COVERS };
 }

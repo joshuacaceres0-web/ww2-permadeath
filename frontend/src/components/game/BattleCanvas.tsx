@@ -6,13 +6,14 @@ interface Props {
   mission: Mission;
   squad: Soldier[];
   commanderBonus: number;
+  commanderLevel: number;
   variant: Variant;
   onHud: (h: HudSnapshot) => void;
   engineRef: { current: GameEngine | null };
 }
 
 // Mounts the canvas and owns the GameEngine lifecycle for exactly one battle.
-export default function BattleCanvas({ mission, squad, commanderBonus, variant, onHud, engineRef }: Props) {
+export default function BattleCanvas({ mission, squad, commanderBonus, commanderLevel, variant, onHud, engineRef }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const hudRef = useRef(onHud);
   hudRef.current = onHud;
@@ -24,9 +25,10 @@ export default function BattleCanvas({ mission, squad, commanderBonus, variant, 
     engineRef.current = engine;
     engine.setup(
       mission,
-      squad.map((s) => ({ id: s.id, name: s.name, type: s.type, rank: s.rank, level: s.level, medals: s.medals ?? [] })),
+      squad.map((s) => ({ id: s.id, name: s.name, type: s.type, rank: s.rank, level: s.level, medals: s.medals ?? [], quirk: s.quirk })),
       commanderBonus,
-      variant
+      variant,
+      commanderLevel
     );
     engine.attach();
     if (import.meta.env.DEV) (window as unknown as { __vanguard?: GameEngine }).__vanguard = engine;

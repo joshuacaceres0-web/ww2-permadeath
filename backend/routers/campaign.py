@@ -12,6 +12,8 @@ from models.models import (
     CommanderIn,
     GameStateOut,
     MissionOut,
+    RadioSupportIn,
+    RadioSupportOut,
     ReinforceIn,
     ReinforceOut,
     SaveSummaryOut,
@@ -20,9 +22,9 @@ from models.models import (
 )
 from lib.db import db
 from lib.save import S, save_lock, sid
-from lib.gen import XP_PER_KILL, XP_PER_MISSION, commander_level, COMMANDER_RANKS, make_epitaph, rank_for
+from lib.gen import XP_PER_KILL, XP_PER_MISSION, commander_level, COMMANDER_RANKS, level_for, make_epitaph, rank_for
 from lib.medals import NAMES, award
-from lib.missions import mission_by_index, mission_list
+from lib.missions import RADIO_SUPPORT_COST, battle_reward, mission_by_index, mission_list, radio_cost
 from lib.state import DEFAULT_STATE, STATE_ID, career_wins, get_state, seed_squad, state_out
 
 router = APIRouter()
@@ -68,6 +70,14 @@ REINFORCEMENT_COST = {"rifle": 15, "heavy": 25}
 MAX_REINFORCEMENTS = 3
 
 
+async def radioman_level() -> int:
+    """Highest level (0-6) among the radiomen in the deployed squad,
+    or 0 when there is none. A rookie pays full cost; a veteran pays
+    5% less per level (max 30% off at level 6)."""
+    docs = await S.soldiers.find({"status": "active", "type": "radioman"}).to_list(10)
+    return max((level_for(d.get("missions", 0)) for d in docs), default=0)
+
+
 @router.post("/battle/reinforce", response_model=ReinforceOut)
 async def battle_reinforce(input: ReinforceIn):
     """Spend requisition mid-battle to call in an AI-controlled 2nd Platoon team.
@@ -83,7 +93,10 @@ async def battle_reinforce(input: ReinforceIn):
         mission = mission_by_index(state["mission_index"])
         if state["campaign_complete"] or not mission or mission.id != input.mission_id:
             raise HTTPException(status_code=409, detail="That mission is not the current operation")
-        cost = REINFORCEMENT_COST[input.kind]
+        level = await radioman_level()
+        if level == 0 and await S.soldiers.count_documents({"status": "active", "type": "radioman"}) == 0:
+            raise HTTPException(status_code=409, detail="Radio is down — no radioman in the squad")
+        cost = radio_cost(REINFORCEMENT_COST[input.kind], level)
         used = state.get("reinforcements_used", 0) if state.get("reinforcements_mission") == input.mission_id else 0
         if used >= MAX_REINFORCEMENTS:
             raise HTTPException(status_code=409, detail="No reinforcements left for this operation (max 3)")
@@ -98,6 +111,32 @@ async def battle_reinforce(input: ReinforceIn):
             raise HTTPException(status_code=402, detail="Insufficient requisition points")
         after = await get_state()
         return ReinforceOut(kind=input.kind, cost=cost, requisition=after["requisition"])
+
+
+@router.post("/battle/radio-support", response_model=RadioSupportOut)
+async def battle_radio_support(input: RadioSupportIn):
+    """Charge requisition for one radio support call, at the radioman's
+    discounted price. The frontend calls the engine to fire the call
+    only after this succeeds."""
+    if input.kind not in RADIO_SUPPORT_COST:
+        raise HTTPException(status_code=422, detail="Unknown radio support call")
+    async with save_lock():
+        state = await get_state()
+        mission = mission_by_index(state["mission_index"])
+        if state["campaign_complete"] or not mission or mission.id != input.mission_id:
+            raise HTTPException(status_code=409, detail="That mission is not the current operation")
+        level = await radioman_level()
+        if level == 0 and await S.soldiers.count_documents({"status": "active", "type": "radioman"}) == 0:
+            raise HTTPException(status_code=409, detail="Radio is down — no radioman in the squad")
+        cost = radio_cost(RADIO_SUPPORT_COST[input.kind], level)
+        res = await S.game_state.update_one(
+            {"id": STATE_ID, "requisition": {"$gte": cost}},
+            {"$inc": {"requisition": -cost}},
+        )
+        if res.modified_count == 0:
+            raise HTTPException(status_code=402, detail="Insufficient requisition points")
+        after = await get_state()
+        return RadioSupportOut(kind=input.kind, cost=cost, requisition=after["requisition"])
 
 
 @router.post("/battle/complete", response_model=BattleResultOut)
@@ -134,6 +173,10 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             "fallen": sorted(
                 (f.soldier_id, f.cause or "", f.kills) for f in input.fallen
             ),
+            "deserted": sorted(
+                (f.soldier_id, f.cause or "", f.kills) for f in input.deserted
+            ),
+            "loot_rp": input.loot_rp,
             "survivors": sorted((s.soldier_id, s.kills) for s in input.survivors),
         }
         filing_key = "fp:" + hashlib.sha256(
@@ -201,6 +244,15 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         await S.soldiers.delete_one({"id": fallen.soldier_id})
         memorial_names.append(doc["name"])
 
+    # Desertion: a man who broke and ran is gone from the roster just
+    # like the fallen — but he did not die, so there is no memorial
+    # entry, no epitaph, and no posthumous medal.
+    for gone in input.deserted:
+        doc = await S.soldiers.find_one({"id": gone.soldier_id})
+        if not doc:
+            continue
+        await S.soldiers.delete_one({"id": gone.soldier_id})
+
     # Survivors bank kills and XP; a victory survived is a promotion. Only men who were
     # deployed are in this list — reserves stay frozen.
     for survivor in input.survivors:
@@ -223,6 +275,15 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
 
     old_level = commander_level(career_wins(state))
     new_level = commander_level(career_wins(state) + (1 if input.victory else 0))
+
+    # Squad kills for the kill RP: every kill by a deployed squad
+    # man, alive, fallen or deserted. NPC (2nd Platoon) kills are not
+    # in the report, so they never count.
+    total_kills = (
+        sum(f.kills for f in input.fallen)
+        + sum(g.kills for g in input.deserted)
+        + sum(sv.kills for sv in input.survivors)
+    )
 
     mission_index = state["mission_index"]
     campaign_complete = state["campaign_complete"]
@@ -247,7 +308,10 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             },
         },
         "$inc": {
-            "requisition": mission.reward if input.victory else 0,
+            # A win pays the mission reward on top of the kill RP;
+            # a loss pays the kill RP only. Kills are the squad's own
+            # (survivors + fallen + deserted); NPC kills do not count.
+            "requisition": battle_reward(mission.reward, input.victory, total_kills, input.loot_rp),
             "battles_won": 1 if input.victory else 0,
             "battles_lost": 0 if input.victory else 1,
         },
@@ -256,7 +320,7 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         state_update["$addToSet"] = {"filed_battles": filing_key}
     await S.game_state.update_one({"id": STATE_ID}, state_update)
     return BattleResultOut(
-        requisition=state["requisition"] + (mission.reward if input.victory else 0),
+        requisition=state["requisition"] + battle_reward(mission.reward, input.victory, total_kills, input.loot_rp),
         mission_index=mission_index,
         campaign_complete=campaign_complete,
         memorial_names=memorial_names,

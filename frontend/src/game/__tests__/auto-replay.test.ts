@@ -129,6 +129,8 @@ describe("AUTO replay recorder", () => {
         morale: Math.round(u.morale as number),
         broken: !!u.broken,
         medic: u.type === "medic" || u.enemyType === "medic",
+        radio: u.type === "radioman" || u.enemyType === "funk",
+        fled: !!(u as unknown as { fled?: boolean }).fled,
       }));
       frames.push({ t, phase: engine.phase, battleState: engine.battleState, wave: (engine.waveIndex as number) + 1, units });
     };

@@ -134,6 +134,8 @@ function buildGrid(seed: number, type: UnitTypeId, level: number): Grid {
     mg: "#E24A4A",
     sniper: "#4ECDC4",
     at: "#E5A93C",
+    radioman: "#7FB3D5",
+    tank: "#6B7C3F",
   };
   g[15][12] = pip[type];
   g[15][13] = pip[type];

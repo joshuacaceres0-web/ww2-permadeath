@@ -42,6 +42,9 @@ QUIRKS = [
     "Preacher", "Quiet One", "Bar Fly", "Brooklyn", "Farm Boy", "Lucky",
     "Grumbler", "Fast Talker", "Night Owl", "Dead Shot", "Chow Hound", "Windy",
     "Professor", "Hillbilly", "Cowboy", "Pops", "Kid", "Deacon",
+    # Cowardly quirks: a man with one of these runs for the edge of the
+    # battlefield when his morale breaks, and deserts if he reaches it.
+    "Skittish", "Jumpy",
 ]
 OCCUPATIONS = [
     "worked the night shift at a steel mill",
@@ -144,7 +147,7 @@ RANKS = ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."]
 MAX_LEVEL = len(RANKS) - 1
 
 # The player's own ladder.
-COMMANDER_RANKS = ["2nd Lt.", "1st Lt.", "Capt.", "Major", "Lt. Col.", "Col.", "Brig. Gen."]
+COMMANDER_RANKS = ["2nd Lt.", "1st Lt.", "Capt.", "Major", "Lt. Col.", "Col.", "Brig. Gen.", "Maj. Gen."]
 WINS_PER_COMMANDER_LEVEL = 2
 
 XP_PER_KILL = 20

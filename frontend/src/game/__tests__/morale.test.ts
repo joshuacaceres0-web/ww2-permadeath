@@ -98,7 +98,11 @@ async function makeEngine() {
   const engine = new GameEngine(canvas, () => {});
   engine.setup(MISSION as never, SQUAD as never, 0, "");
   engine.begin();
-  return engine as unknown as AnyEngine;
+  const e = engine as unknown as AnyEngine;
+  // Deterministic by default: no flee roll in morale tests.
+  (e as unknown as { fleeChance: number }).fleeChance = 0;
+  (e as unknown as { fleeChanceNormal: number }).fleeChanceNormal = 0;
+  return e;
 }
 
 function step(e: AnyEngine, seconds: number) {

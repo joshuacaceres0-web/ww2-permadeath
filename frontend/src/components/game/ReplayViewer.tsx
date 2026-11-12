@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { replayPlayLabel, replayPlayRestarts } from "@/game/replay-controls";
 import type { BattleReplay, ReplayObstacle } from "@/game/engine";
 
 /** Ruin walls, hedgerows and buildings are built from overlapping
@@ -130,6 +131,35 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           ctx.fill();
         }
       }
+      // Supply crates: gold-bordered boxes with the RP written above
+      // them while they are full, dark and empty once looted.
+      for (const c of f.crates ?? []) {
+        const x = c.x * sx;
+        const y = c.y * sy;
+        if (c.looted) {
+          ctx.globalAlpha = 0.55;
+          ctx.fillStyle = "#4A3A22";
+          ctx.fillRect(x - 8, y - 7, 16, 14);
+          ctx.strokeStyle = "#2A2010";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(x - 8, y - 7, 16, 14);
+          ctx.globalAlpha = 1;
+        } else {
+          ctx.fillStyle = "rgba(229,169,60,0.18)";
+          ctx.beginPath();
+          ctx.arc(x, y, 16, 0, 7);
+          ctx.fill();
+          ctx.fillStyle = "#8A6A2E";
+          ctx.fillRect(x - 8, y - 7, 16, 14);
+          ctx.strokeStyle = "#E5A93C";
+          ctx.lineWidth = 2;
+          ctx.strokeRect(x - 8, y - 7, 16, 14);
+          ctx.fillStyle = "#E5A93C";
+          ctx.font = "bold 9px monospace";
+          ctx.textAlign = "center";
+          ctx.fillText("+25 RP", x, y - 12);
+        }
+      }
       const prev = replay.frames[Math.max(0, frameIdx - 1)];
       const prevById = new Map(prev ? prev.units.map((pu) => [pu.id, pu]) : []);
       for (const u of f.units) {
@@ -138,7 +168,10 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
         const morale = u.morale ?? 100;
         const broken = u.broken ?? false;
         const coverType = u.coverType ?? (u.cover ? "light" : null);
+        // A deserter has left the field: nothing to draw.
+        if ((u as unknown as { fled?: boolean }).fled) continue;
         const isMedic = u.medic ?? false;
+        const isRadio = (u as unknown as { radio?: boolean }).radio ?? false;
         ctx.globalAlpha = u.alive ? 1 : 0.25;
         // Heal glow: his HP rose since the last frame, so a medic
         // patched him up — a green ring around the man.
@@ -165,6 +198,13 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           ctx.fillRect(x - 11, y - 10, 22, 4);
           ctx.fillStyle = moraleBarColor(morale, broken);
           ctx.fillRect(x - 10, y - 9, 20 * Math.max(0, morale / 100), 2);
+          // Radio antenna: a thin line above the dot, so the radio
+          // man reads in the replay just like on the live map.
+          if (isRadio) {
+            ctx.fillStyle = "#E3E7DC";
+            ctx.fillRect(x - 1, y - 22, 2, 6);
+            ctx.fillRect(x - 2, y - 24, 4, 2);
+          }
           // Directional cover shield, same colours as the live game:
           // teal for light cover, gold for heavy.
           if (coverType) {
@@ -246,8 +286,25 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
           Squad alive {squadAlive}/5 · Enemies alive {foesAlive} · {replay.result.toUpperCase()}
         </span>
         <span className="ml-auto flex flex-wrap items-center gap-2">
-          <Button data-testid="replay-play-btn" variant="outline" size="lg" className="h-11 px-4" onClick={() => setPlaying((p) => !p)}>
-            {playing ? "❚❚ PAUSE" : "▶ PLAY"}
+          <Button
+            data-testid="replay-play-btn"
+            variant="outline"
+            size="lg"
+            aria-label={playing ? "Pause replay" : "Play replay"}
+            className={`h-12 min-w-28 px-6 text-base font-bold ${playing ? "" : "border-[#E5A93C] text-[#E5A93C]"}`}
+            onClick={() => {
+              // PLAY at the last frame restarts from the beginning.
+              // Without this the loop ends again on the first tick
+              // and PLAY looks dead: the replay finished, the button
+              // said PLAY, and tapping it did nothing.
+              if (!playing && replayPlayRestarts(idxRef.current, replay.frames.length)) {
+                idxRef.current = 0;
+                setIdx(0);
+              }
+              setPlaying((p) => !p);
+            }}
+          >
+            {replayPlayLabel(playing)}
           </Button>
           <Button
             data-testid="replay-restart-btn"
@@ -308,7 +365,7 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
         <span className="text-[#E24A4A]">● Enemy</span> · Faded = dead
         <br />
         Bars above each man: health on top, morale below it (green holds, amber wavers, red about to break, BROKEN = fell back).{" "}
-        <span className="text-[#F0F5EB]">✚ Medic</span> · <span className="text-[#4ECDC4]">■ Light cover</span> ·{" "}
+        <span className="text-[#F0F5EB]">✚ Medic</span> · <span className="text-[#E3E7DC]">┬ Radio man</span> · <span className="text-[#E5A93C]">▣ Supply crate (+25 RP)</span> · <span className="text-[#4ECDC4]">■ Light cover</span> ·{" "}
         <span className="text-[#E5A93C]">■ Heavy cover</span> · <span className="text-[#7A5A2E]">■ Trench, best cover</span> ·{" "}
         <span className="text-[#7CFC66]">○ Healed this frame</span>
         <br />

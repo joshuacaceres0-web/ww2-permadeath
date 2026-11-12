@@ -45,7 +45,17 @@ function UnitCard({
         <span className="truncate font-mono text-[13px] font-semibold text-[#EDEDE2]">
           {index + 1} · {unit.name.split(" ").slice(-1)[0].toUpperCase()}
         </span>
-        <span className="shrink-0 whitespace-nowrap font-mono text-[10px] tracking-[0.1em] text-[#E5A93C]">
+        <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] tracking-[0.1em] text-[#E5A93C]">
+          {unit.type === "radioman" && (
+            <span className="border border-[#4ECDC4]/70 px-1 text-[9px] text-[#4ECDC4]" title="Carries the radio — no radioman, no reinforcements">
+              RADIO
+            </span>
+          )}
+          {unit.coward && unit.alive && (
+            <span className="border border-[#E5A93C]/70 px-1 text-[9px] text-[#E5A93C]" title="Coward: when his morale goes he may run for the edge — if he flees, the round ends">
+              COWARD
+            </span>
+          )}
           {unit.alive ? `${unit.rank.toUpperCase()} ${spec.label.slice(0, 3).toUpperCase()}` : "KIA"}
         </span>
       </div>

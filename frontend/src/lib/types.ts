@@ -1,9 +1,10 @@
 // Hand-written mirrors of the backend Pydantic models (backend/models/models.py).
 // Nothing infers across the HTTP boundary — keep these in sync in the same edit.
 
-export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at";
+export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at" | "radioman" | "tank";
 export type EnemyTypeId =
   | "volks"
+  | "funk"
   | "grenadier"
   | "mg42"
   | "officer"
@@ -12,7 +13,8 @@ export type EnemyTypeId =
   | "scharfschutze"
   | "mortar"
   | "fallschirmjager"
-  | "medic";
+  | "medic"
+  | "panzer";
 export type SoldierStatus = "active" | "reserve";
 export type DecorKind = "poppies" | "roses" | "lilies" | "wreath" | "candle" | "flag";
 
