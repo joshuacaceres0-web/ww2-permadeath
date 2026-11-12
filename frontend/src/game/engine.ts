@@ -317,6 +317,13 @@ export interface ReplayUnit {
   alive: boolean;
   kills: number;
   cover: boolean;
+  /** Directional cover the man is actually using, or null. */
+  coverType: "light" | "heavy" | null;
+  /** Morale 0-100 at this frame, and whether he is broken. */
+  morale: number;
+  broken: boolean;
+  /** True for the player's medic, the 2nd Platoon medic and the Axis Sanitaeter. */
+  medic: boolean;
 }
 
 export interface ReplayFrame {
@@ -839,6 +846,10 @@ export class GameEngine {
         alive: u.alive,
         kills: u.kills,
         cover: !!u.cover,
+        coverType: u.cover ? (u.cover.type ?? "light") : null,
+        morale: Math.round(u.morale),
+        broken: u.broken,
+        medic: this.isMedic(u),
       })),
     });
   }

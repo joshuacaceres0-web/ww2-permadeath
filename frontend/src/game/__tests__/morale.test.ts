@@ -107,13 +107,58 @@ function step(e: AnyEngine, seconds: number) {
 
 function park(e: AnyEngine, west = true) {
   // Park everyone on their own side, far from the enemy, so the
-  // sim measures morale alone and nobody shoots anybody.
+  // sim measures morale alone and nobody shoots anybody. The enemy
+  // is also disarmed (range 0): a stray long-range bullet used to
+  // land mid-test and reset the recovery clock, failing the recovery
+  // tests about one run in four.
   for (const u of e.units) {
     if (u.side === "allies") { u.x = 200; u.y = 600; }
-    else { u.x = 2100; u.y = 600; }
+    else { u.x = 2100; u.y = 600; (u as Record<string, unknown>).range = 0; }
     (u as Record<string, unknown>).speed = 0;
   }
 }
+
+// Same disarm, for tests that cannot park (the broken man must be
+// able to run, so his speed stays).
+function disarmEnemy(e: AnyEngine) {
+  for (const u of e.units) {
+    if (u.side === "axis") (u as Record<string, unknown>).range = 0;
+  }
+}
+
+describe("replay records morale, cover and medics", () => {
+  it("every replay frame carries morale, broken, cover type and medic flags", async () => {
+    const e = await makeEngine();
+    const hurt = e.units.find((x) => x.side === "allies" && !x.npc && x.type === "rifleman")!;
+    e.damage(hurt, 40, "rifle", null);
+    // Only 1s: long enough to record a frame after the hit, short
+    // enough that his morale has not climbed back to 100 yet.
+    step(e, 1);
+    const replay = (e as unknown as { getReplay: () => { frames: Array<{ units: Array<Record<string, unknown>> }> } | null }).getReplay();
+    expect(replay).not.toBeNull();
+    const last = replay!.frames[replay!.frames.length - 1];
+    expect(last.units.length).toBeGreaterThan(0);
+    for (const u of last.units) {
+      expect(typeof u.morale).toBe("number");
+      expect(typeof u.broken).toBe("boolean");
+      expect(typeof u.medic).toBe("boolean");
+      expect(u.coverType === null || u.coverType === "light" || u.coverType === "heavy").toBe(true);
+      if (u.cover === true) expect(u.coverType === "light" || u.coverType === "heavy").toBe(true);
+    }
+    const hurtNow = last.units.find((u) => u.id === (hurt as unknown as { id: number }).id)!;
+    expect(hurtNow.morale as number).toBeLessThan(100);
+    const medics = last.units.filter((u) => u.medic === true);
+    expect(medics.length).toBeGreaterThanOrEqual(2); // player medic + at least the enemy medic
+  });
+
+  it("morale bar colours match the live game", async () => {
+    const { moraleBarColor } = await import("../../components/game/ReplayViewer");
+    expect(moraleBarColor(100, false)).toBe("#7FB069");
+    expect(moraleBarColor(50, false)).toBe("#E5A93C");
+    expect(moraleBarColor(20, false)).toBe("#E24A4A");
+    expect(moraleBarColor(90, true)).toBe("#E24A4A");
+  }, 30000);
+});
 
 describe("morale", () => {
   it("starts at 100 for every man", async () => {
@@ -184,6 +229,7 @@ describe("morale", () => {
 
   it("a broken man falls back away from the enemy and does not shoot", async () => {
     const e = await makeEngine();
+    disarmEnemy(e);
     const u = e.units.find((x) => x.side === "allies" && !x.npc && x.type === "rifleman")!;
     u.x = 800; u.y = 600;
     u.morale = 10;

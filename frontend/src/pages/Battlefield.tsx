@@ -687,6 +687,8 @@ export default function Battlefield() {
                 maxHp: UNIT_TYPES[soldier.type].hp,
                 suppression: 0,
                 pinned: false,
+                morale: 100,
+                broken: false,
                 abilityCd: 0,
                 abilityCdMax: UNIT_TYPES[soldier.type].ability.cd,
                 kills: soldier.kills,
