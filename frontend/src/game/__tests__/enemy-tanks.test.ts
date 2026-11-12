@@ -142,20 +142,23 @@ describe("enemy tanks", () => {
 });
 
 describe("camp and defend", () => {
-  it("enemies hold their ground until they spot a player unit", { timeout: 30000 }, async () => {
+  it("enemies hold their beach garrison until they spot a player unit", { timeout: 30000 }, async () => {
     const e = await makeEngine();
     const foes = () => e.units.filter((u) => u.side === "axis" && u.alive && !u.isStatic);
-    const startX = foes().map((u) => u.x);
-    expect(startX.length).toBeGreaterThan(0);
-    expect(Math.min(...startX)).toBeGreaterThan(3600);
+    const start = foes().map((u) => ({ x: u.x, y: u.y }));
+    expect(start.length).toBeGreaterThan(0);
+    // Wave 1 garrisons in the first trench line, in the west (the
+    // town trench is at x 900).
+    expect(Math.max(...start.map((p) => p.x))).toBeLessThan(1600);
     step(e, 10);
-    // Ten seconds in, the squad is still ~3800 units away (far beyond
-    // the 240 vision), so the enemy has spotted nobody and has not
-    // advanced: every living mobile enemy is still near the east edge.
+    // Ten seconds in, the squad is still far away (beyond the 240
+    // vision), so the enemy has spotted nobody and has not advanced
+    // east toward the player: every living mobile enemy is still in
+    // the western garrison zone, patrolling near home.
     const after = foes();
     expect(after.length).toBeGreaterThan(0);
     for (const u of after) {
-      expect(u.x, `enemy ${u.enemyType} advanced to ${Math.round(u.x)}`).toBeGreaterThan(3500);
+      expect(u.x, `enemy ${u.enemyType} left the beach garrison, x=${Math.round(u.x)}`).toBeLessThan(1700);
     }
   });
 

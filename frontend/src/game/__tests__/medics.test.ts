@@ -96,6 +96,12 @@ async function makeEngine() {
   return engine as unknown as AnyEngine;
 }
 
+function disarmEnemy(e: AnyEngine) {
+  for (const u of e.units) {
+    if (u.side === "axis") (u as Record<string, unknown>).range = 0;
+  }
+}
+
 function step(e: AnyEngine, seconds: number) {
   for (let i = 0; i < Math.round(seconds * 60); i++) e.update(1 / 60);
 }
@@ -160,6 +166,7 @@ describe("medics on both sides", () => {
 
   it("a 2nd Platoon medic's aura mends a wounded NPC nearby", async () => {
     const e = await makeEngine();
+    disarmEnemy(e);
     const medic = e.units.find((u) => u.side === "allies" && u.npc && u.type === "medic")!;
     const hurt = e.units.find((u) => u.side === "allies" && u.npc && u.type === "rifleman")!;
     medic.x = 300; medic.y = 600;
@@ -172,6 +179,7 @@ describe("medics on both sides", () => {
 
   it("a 2nd Platoon medic triages a wounded NPC for +50 HP", async () => {
     const e = await makeEngine();
+    disarmEnemy(e);
     const medic = e.units.find((u) => u.side === "allies" && u.npc && u.type === "medic")!;
     const hurt = e.units.find((u) => u.side === "allies" && u.npc && u.type === "rifleman")!;
     medic.x = 300; medic.y = 600;
@@ -203,6 +211,7 @@ describe("medics on both sides", () => {
 
   it("the player's medic aura mends a wounded squad man", async () => {
     const e = await makeEngine();
+    disarmEnemy(e);
     const medic = e.units.find((u) => u.side === "allies" && !u.npc && u.type === "medic")!;
     const hurt = e.units.find((u) => u.side === "allies" && !u.npc && u.type === "rifleman")!;
     medic.x = 300; medic.y = 600;

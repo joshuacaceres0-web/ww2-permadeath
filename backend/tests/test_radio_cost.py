@@ -21,7 +21,7 @@ def test_base_costs():
         "mortar": 20,
         "smoke": 15,
         "artillery": 30,
-        "tank": 50,
+        "tank": 60,
     }
 
 
@@ -30,7 +30,7 @@ def test_discount_per_level():
     assert radio_cost(30, 1) == 29
     assert radio_cost(30, 2) == 27
     assert radio_cost(30, 6) == 21
-    assert radio_cost(50, 6) == 35
+    assert radio_cost(60, 6) == 42
     assert radio_cost(10, 6) == 7
     assert radio_cost(15, 6) == 11
     assert radio_cost(25, 6) == 18

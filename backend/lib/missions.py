@@ -38,7 +38,7 @@ RADIO_SUPPORT_COST = {
     "mortar": 20,
     "smoke": 15,
     "artillery": 30,
-    "tank": 50,
+    "tank": 60,
 }
 RADIO_DISCOUNT_PER_LEVEL = 0.05
 
@@ -81,7 +81,7 @@ MISSIONS: List[dict] = [
             {"type": "funk", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
             {"type": "grenadier", "wave": 1, "count": 2},
-            {"type": "mg42", "wave": 1, "count": 1},
+            {"type": "mg42", "wave": 1, "count": 2},
             {"type": "volks", "wave": 2, "count": 3},
             {"type": "funk", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 2},
@@ -115,6 +115,7 @@ MISSIONS: List[dict] = [
             {"type": "volks", "wave": 1, "count": 2},
             {"type": "funk", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
+            {"type": "mg42", "wave": 1, "count": 2},
             {"type": "officer", "wave": 2, "count": 1},
             {"type": "grenadier", "wave": 2, "count": 1},
             {"type": "funk", "wave": 2, "count": 1},
@@ -149,7 +150,7 @@ MISSIONS: List[dict] = [
             {"type": "grenadier", "wave": 1, "count": 2},
             {"type": "funk", "wave": 1, "count": 1},
             {"type": "panzerfaust", "wave": 1, "count": 2},
-            {"type": "mg42", "wave": 1, "count": 1},
+            {"type": "mg42", "wave": 1, "count": 2},
             {"type": "volks", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},
             {"type": "volks", "wave": 2, "count": 2},
@@ -188,7 +189,7 @@ MISSIONS: List[dict] = [
             {"type": "grenadier", "wave": 1, "count": 2},
             {"type": "funk", "wave": 1, "count": 1},
             {"type": "officer", "wave": 1, "count": 1},
-            {"type": "mg42", "wave": 1, "count": 1},
+            {"type": "mg42", "wave": 1, "count": 2},
             {"type": "flak", "wave": 1, "count": 1},
             {"type": "volks", "wave": 1, "count": 1},
             {"type": "medic", "wave": 1, "count": 1},

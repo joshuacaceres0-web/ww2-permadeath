@@ -116,7 +116,7 @@ export const RADIO_SUPPORT_COST: Record<RadioSupportKind, number> = {
   mortar: 20,
   smoke: 15,
   artillery: 30,
-  tank: 50,
+  tank: 60,
 };
 /** 5% off per radioman level (max 30% off at level 6). */
 export const RADIO_DISCOUNT_PER_LEVEL = 0.05;
@@ -171,6 +171,17 @@ interface Unit {
   /** A counter-attacker: spawned by a random counter-attack, he charges
    * the player's squad and ignores the camp-and-defend rule. */
   counterAttack: boolean;
+  /** Garrison home (where the man spawned) and his current patrol
+   * target. A camping enemy patrols around his home instead of
+   * standing frozen: he walks slowly to a point near home, then picks
+   * another, so the defense is alive even when nothing is spotted. */
+  homeX: number;
+  homeY: number;
+  patrolX: number;
+  patrolY: number;
+  /** Wave 1 trench garrison: the man holds the first trench line,
+   * and patrols along it instead of wandering open ground. */
+  trenchHold?: boolean;
   orders: Order[];
   attackId: number | null;
   targetId: number | null;
@@ -1637,7 +1648,7 @@ export class GameEngine {
       this.units.push({
         id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
         name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${SURN[i % SURN.length]}`,
-        rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0,
+        rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0, homeX: cx * CELL + CELL / 2, homeY: cy * CELL + CELL / 2, patrolX: cx * CELL + CELL / 2, patrolY: cy * CELL + CELL / 2,
         hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
@@ -2279,6 +2290,7 @@ export class GameEngine {
         x: sx,
         y,
         facing: 0,
+        homeX: sx, homeY: y, patrolX: sx, patrolY: y,
         hp: spec.hp + mb.hp,
         maxHp: spec.hp + mb.hp,
         speed: spec.speed,
@@ -2322,11 +2334,19 @@ export class GameEngine {
 
   /** One enemy man, built exactly like a wave spawn. Wave spawns
    * and the radio call-in both go through here. */
-  private spawnEnemyUnit(type: EnemyTypeId, x: number, y: number, rng: () => number) {
+  private spawnEnemyUnit(type: EnemyTypeId, x: number, y: number, rng: () => number, exact = false) {
     const def = ENEMY_TYPES[type];
     const isStatic = !!def.static;
-    const [ecx, ecy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
-    this.units.push({
+    // exact: the caller placed the man deliberately (wave 1 in a
+    // trench) — use the point as-is. The default snaps to the nearest
+    // open cell centre, which would knock him off the trench line.
+    const [px, py] = exact
+      ? [x, y]
+      : (() => {
+          const [cx, cy] = nearestOpen(this.blocked, Math.floor(x / CELL), Math.floor(y / CELL));
+          return [cx * CELL + CELL / 2, cy * CELL + CELL / 2];
+        })();
+    const u: Unit = {
           id: this.nextId++,
           side: "axis",
           type: "rifleman",
@@ -2345,9 +2365,11 @@ export class GameEngine {
           rank: "",
           level: 0,
           reaction: 0.6,
-          x: ecx * CELL + CELL / 2,
-          y: ecy * CELL + CELL / 2,
+          x: px,
+          y: py,
           facing: Math.PI,
+          homeX: px, homeY: py, patrolX: px, patrolY: py,
+          trenchHold: false,
           hp: def.hp,
           maxHp: def.hp,
           speed: def.speed,
@@ -2385,8 +2407,28 @@ export class GameEngine {
           npc: false,
           cover: null,
           coverT: 0,
-          stuckT: 0, lastX: ecx * CELL + CELL / 2, lastY: ecy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
-        });
+          stuckT: 0, lastX: px, lastY: py, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
+        };
+    this.units.push(u);
+    return u;
+  }
+
+  // The first trench line: the westernmost dug trench on the map,
+  // read off the trench cover spots the terrain builder laid down.
+  // On the vertical-trench maps that is one whole line (every spot
+  // on it shares the minimum trench x); on the causeway the
+  // trenches run parallel to the road, so the garrison takes the
+  // western 600 units of both lines. Spots a unit cannot stand in
+  // (a ruin or tree sitting on the trench) are dropped. The road
+  // band already cleared any spots on the road.
+  private firstTrenchSpots(): Array<{ x: number; y: number }> {
+    const trench = this.covers.filter((c) => c.kind === "trench");
+    if (!trench.length) return [];
+    const minX = Math.min(...trench.map((c) => c.x));
+    return trench
+      .filter((c) => c.x <= minX + 600)
+      .map((c) => ({ x: c.x, y: c.y }))
+      .filter((s) => !this.pointBlocked(s.x + 8, s.y));
   }
 
   private spawnWave(index: number) {
@@ -2395,22 +2437,66 @@ export class GameEngine {
     this.enemyRadioT = 25;
     this.enemyRadioCalled = false;
     const rng = mulberry32(hashStr(this.mission.id + ":wave:" + index));
+    // Wave 1 garrisons IN the first trench line, not on open ground
+    // near the beach: the mobile men stand in the dug trench (the
+    // westernmost one), spread along the whole line. Each man stands
+    // 8 units east of the trench floor so the trench sits on the
+    // threat side and counts as his cover — a man standing exactly
+    // on the spot gets nothing from it, because the directional
+    // cover check needs the cover on the threat side. Static guns
+    // stay on the bluffs, as before. Waves 2 and 3 are
+    // reinforcements from the east, as before.
+    const beach = index === 0;
+    const trenchSpots = beach ? this.firstTrenchSpots() : [];
+    const mobileTotal = this.waves[index].reduce(
+      (n, s) => n + (ENEMY_TYPES[s.type].static ? 0 : s.count),
+      0,
+    );
+    const staticTotal = this.waves[index].reduce(
+      (n, s) => n + (ENEMY_TYPES[s.type].static ? s.count : 0),
+      0,
+    );
     let mobileCount = 0;
+    let trenchCount = 0;
+    let staticCount = 0;
     for (const spec of this.waves[index]) {
       const def = ENEMY_TYPES[spec.type];
       for (let i = 0; i < spec.count; i++) {
         const isStatic = !!def.static;
-        const x = isStatic
-          ? MAP_W * (0.6 + rng() * 0.25)
-          : MAP_W - 40 - rng() * 90;
-        // Spread mobile spawns 26 units apart (wrapping down the edge)
-        // instead of 8: with more enemies per wave the old spacing stacked
-        // them on top of each other and they deadlocked on spawn.
-        const y = isStatic
-          ? MAP_H * (0.2 + rng() * 0.6)
-          : 90 + ((rng() * (MAP_H - 180) + mobileCount * 26) % (MAP_H - 180));
+        let x: number;
+        let y: number;
+        let trench = false;
+        if (isStatic) {
+          x = beach ? 700 + rng() * 300 : MAP_W * (0.6 + rng() * 0.25);
+          // Wave 1 is the prepared beach defense: spread the static
+          // nests along the line in bands, one nest per band, so the
+          // MGs cover the whole beach instead of bunching at one y.
+          // Waves 2 and 3 are reinforcements, so they keep the old
+          // random y.
+          y =
+            beach && staticTotal > 1
+              ? 90 + ((staticCount + rng() * 0.7) * (MAP_H - 180)) / staticTotal
+              : MAP_H * (0.2 + rng() * 0.6);
+          staticCount++;
+        } else if (beach && trenchSpots.length) {
+          // Spread along the line: man i takes spot i * spots /
+          // total, so the garrison covers the whole trench instead
+          // of bunching at one end.
+          const spot = trenchSpots[Math.floor((trenchCount * trenchSpots.length) / mobileTotal)];
+          x = spot.x + 8;
+          y = spot.y;
+          trench = true;
+          trenchCount++;
+        } else {
+          x = beach ? 350 + rng() * 500 : MAP_W - 40 - rng() * 90;
+          // Spread mobile spawns 26 units apart (wrapping down the edge)
+          // instead of 8: with more enemies per wave the old spacing stacked
+          // them on top of each other and they deadlocked on spawn.
+          y = 90 + ((rng() * (MAP_H - 180) + mobileCount * 26) % (MAP_H - 180));
+        }
         mobileCount++;
-        this.spawnEnemyUnit(spec.type, x, y, rng);
+        const u = this.spawnEnemyUnit(spec.type, x, y, rng, trench);
+        if (trench) u.trenchHold = true;
       }
     }
     if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
@@ -2720,7 +2806,36 @@ export class GameEngine {
           const isEnemyPrey = prey.side !== u.side;
           const spotted = u.side !== "axis" || u.counterAttack || !isEnemyPrey || (pd <= u.vision && this.los(u, prey));
           if (!spotted) {
-            u.chase = []; // camping: hold position, do not advance
+            // Camping, but not frozen: patrol slowly around the
+            // garrison home. A static gun or a vehicle never patrols.
+            if (u.side === "axis" && !u.isStatic && !u.vehicle) {
+              if (dist(u.x, u.y, u.patrolX, u.patrolY) < 24) {
+                // A trench garrison man patrols along his trench line:
+                // pick another spot on the first line within 150 of
+                // home, so he stays dug in instead of wandering off
+                // into the open. Anyone else patrols around home.
+                let picked = false;
+                if (u.trenchHold) {
+                  const near = this.firstTrenchSpots().filter(
+                    (s) => dist(s.x, s.y, u.homeX, u.homeY) <= 150,
+                  );
+                  if (near.length) {
+                    const pick = near[Math.floor(Math.random() * near.length)];
+                    u.patrolX = pick.x + 8;
+                    u.patrolY = pick.y;
+                    picked = true;
+                  }
+                }
+                if (!picked) {
+                  u.patrolX = Math.max(24, Math.min(MAP_W - 24, u.homeX + (Math.random() * 2 - 1) * 150));
+                  u.patrolY = Math.max(24, Math.min(MAP_H - 24, u.homeY + (Math.random() * 2 - 1) * 150));
+                }
+              }
+              this.moveToward(u, u.patrolX, u.patrolY, dt, 0.5);
+              moving = true;
+            } else {
+              u.chase = []; // camping: hold position
+            }
           } else if (pd > u.range * 0.9 || !this.los(u, prey)) {
             moving = this.chaseTo(u, prey.x, prey.y, dt);
           } else {
@@ -2909,11 +3024,17 @@ export class GameEngine {
       // behind a wall with no line of sight for 4s repositions toward
       // its nearest enemy instead of camping there forever. Player
       // squad men are excluded on purpose — they hold where Josh put
-      // them until he orders them. The chase branch above already moves
-      // NPCs/axis when the prey is out of range or has no LOS, but it
-      // never runs for a unit whose orders just emptied while it was
-      // in cover with a target in range but behind its own cover.
-      if (!u.isStatic && !u.vehicle && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
+      // them until he orders them. A trench garrison man is excluded
+      // too: his trench IS his post, and he patrols it until he
+      // spots a player unit (camp and defend). Without this, the
+      // idle timer ordered him out of the trench after 4s to chase
+      // the nearest enemy — the garrison abandoned its own trench
+      // before the player ever got there. The chase branch above
+      // already moves NPCs/axis when the prey is out of range or has
+      // no LOS, but it never runs for a unit whose orders just
+      // emptied while it was in cover with a target in range but
+      // behind its own cover.
+      if (!u.isStatic && !u.vehicle && !u.trenchHold && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
         const prey = this.nearestAlly(u);
         const hasLosTarget = focus && d <= u.range && this.los(u, focus);
         if (prey && !hasLosTarget) {

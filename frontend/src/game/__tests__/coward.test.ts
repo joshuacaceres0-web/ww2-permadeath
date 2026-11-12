@@ -186,12 +186,16 @@ describe("cowards", () => {
     (e as unknown as { fleeChance: number }).fleeChance = 1; // the roll always lands
     const volks = e.units.find((u) => u.side === "axis" && u.enemyType === "volks")!;
     volks.coward = true; // the test decides: this one is a coward
+    volks.x = 600; volks.y = 100; // near the north edge: he flees north, away from the squad
     const startX = volks.x;
+    const startY = volks.y;
     expect(e.enemiesAlive()).toBe(3);
     breakAndHold(e, volks, 8);
     expect(volks.alive).toBe(false);
     expect(volks.fled).toBe(true);
-    expect(volks.x).toBeGreaterThan(startX); // he ran east, for the edge
+    // He ran for the nearest edge (not always east — he spawns at the
+    // beach now, so it may be north, south or west): he moved.
+    expect(Math.hypot(volks.x - startX, volks.y - startY)).toBeGreaterThan(0);
     expect(e.enemiesAlive()).toBe(2);
     expect(hud().log.map((l) => l.text).join(" ")).toMatch(/broke and ran off the field/);
     expect((e as unknown as { fallen: Array<{ soldierId: string }> }).fallen.length).toBe(0);

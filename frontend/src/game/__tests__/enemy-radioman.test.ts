@@ -87,6 +87,7 @@ const SQUAD = [
 type U = Record<string, unknown> & {
   id: number; x: number; y: number; hp: number; maxHp: number; morale: number; alive: boolean;
   side: string; npc: boolean; type: string; enemyType: string | null; abilityCd: number;
+  counterAttack: boolean;
 };
 type Hud = Record<string, unknown> & { enemyRadioLive: boolean; log: Array<{ text: string }> };
 type AnyEngine = Record<string, unknown> & {
@@ -178,7 +179,10 @@ describe("enemy radioman", () => {
     // Count every axis man ever created, not just the living: the two
     // called-in men walk into the squad's guns and die, so the alive
     // count alone cannot prove no second call-in happened.
-    const totalAxis = e.units.filter((u) => u.side === "axis").length;
+    // Counter-attackers are excluded: a random counter-attack (45-90s)
+    // can also add 2 men inside this 60s window, and they are a
+    // separate feature, not a second Funker call-in.
+    const totalAxis = e.units.filter((u) => u.side === "axis" && !u.counterAttack).length;
     expect(totalAxis).toBe(5); // wave 1 (3) + one call-in (2), never 7
   }, 30000); // 60s of sim is 3600 engine updates; slow under parallel load
 

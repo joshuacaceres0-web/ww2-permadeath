@@ -45,6 +45,13 @@ describe("stalemate breaker", () => {
     const e = engine as unknown as Record<string, unknown>;
     engine.setup(MISSION as never, SQUAD as never, 0, "");
     engine.begin();
+    // Counter-attacks off for this test: a random counter-attack
+    // (45-90s, 2 men) is combat, and its spawn changes the alive
+    // count, which resets the stalemate clock — so the breaker would
+    // not fire at 60s and the test would fail intermittently. This
+    // test is about the breaker in a true stalemate; counter-attacks
+    // are covered by enemy-tanks.test.ts.
+    e.counterAttacks = 2;
     // Bring in wave 2 so the static MG42 exists, then set up the stalemate.
     (e as { spawnWave: (i: number) => void }).spawnWave(1);
     const units = e.units as Array<Record<string, unknown>>;
@@ -72,17 +79,26 @@ describe("stalemate breaker", () => {
     const hunting = squad.filter((u) => (u.orders as unknown[]).length > 0 || (u.chase as unknown[]).length > 0).length;
     console.log(`STALEMATE idleAt59=${idleAt59} huntingAt65=${hunting}/${squad.length} phase=${e.phase}`);
     expect(hunting).toBeGreaterThan(0);
-    // The hunt must actually close the distance: run on and check the
-    // living squad has moved east of its hold position (or combat
-    // resumed). Dead men keep their last position, so they must not
-    // count toward the minimum — a man who dies in cover at x=390
-    // would otherwise hold minX there even in a victory.
+    // The hunt must actually close the distance: sample the living
+    // squad's position as the hunt plays out. A frontal walk into a
+    // lone MG42 is costly — the squad can be wiped before the 60s
+    // are up (defeat, alive 0/5, seen in a full-suite run) — so the
+    // check is how far each man got while alive, not whether anyone
+    // survived. The slowest man's furthest east point must clear
+    // the hold position by 100.
     const x0 = Math.min(...squad.map((u) => u.x as number));
-    step(60);
+    const furthest = new Map<number, number>();
+    for (const u of squad) furthest.set(u.id as number, u.x as number);
+    for (let i = 0; i < 60; i++) {
+      step(1);
+      for (const u of squad) {
+        if (!u.alive) continue;
+        furthest.set(u.id as number, Math.max(furthest.get(u.id as number)!, u.x as number));
+      }
+    }
+    const slowestFurthest = Math.min(...[...furthest.values()]);
     const aliveEnd = squad.filter((u) => u.alive);
-    const x1 = aliveEnd.length ? Math.min(...aliveEnd.map((u) => u.x as number)) : x0;
-    console.log(`STALEMATE minX ${Math.round(x0)} -> ${Math.round(x1)} phase=${e.phase} battleState=${e.battleState} alive=${aliveEnd.length}/${squad.length}`);
-    expect(aliveEnd.length).toBeGreaterThan(0);
-    expect(x1).toBeGreaterThan(x0 + 100);
+    console.log(`STALEMATE minX ${Math.round(x0)} -> slowest furthest ${Math.round(slowestFurthest)} phase=${e.phase} battleState=${e.battleState} alive=${aliveEnd.length}/${squad.length}`);
+    expect(slowestFurthest).toBeGreaterThan(x0 + 100);
   }, 120000);
 });

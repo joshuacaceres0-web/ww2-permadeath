@@ -135,8 +135,8 @@ async function makeEngine(squad: unknown, commanderLevel = 8) {
 }
 
 describe("radio call costs scale with the radioman's level", () => {
-  it("base costs: supply 10, recon 10, mortar 20, smoke 15, artillery 30, tank 50", () => {
-    expect(RADIO_SUPPORT_COST).toEqual({ supply: 10, recon: 10, mortar: 20, smoke: 15, artillery: 30, tank: 50 });
+  it("base costs: supply 10, recon 10, mortar 20, smoke 15, artillery 30, tank 60", () => {
+    expect(RADIO_SUPPORT_COST).toEqual({ supply: 10, recon: 10, mortar: 20, smoke: 15, artillery: 30, tank: 60 });
   });
 
   it("radioCost: 5% off per level, max 30% off at level 6", () => {
@@ -144,7 +144,7 @@ describe("radio call costs scale with the radioman's level", () => {
     expect(radioCost(30, 1)).toBe(29);
     expect(radioCost(30, 2)).toBe(27);
     expect(radioCost(30, 6)).toBe(21);
-    expect(radioCost(50, 6)).toBe(35);
+    expect(radioCost(60, 6)).toBe(42);
     expect(radioCost(10, 6)).toBe(7);
     expect(radioCost(15, 6)).toBe(11);
     expect(radioCost(25, 6)).toBe(18);
@@ -173,11 +173,11 @@ describe("radio call costs scale with the radioman's level", () => {
   it("supportCost follows the radioman's level, rookie pays full, veteran pays less", async () => {
     const { e } = await makeEngine(squadWithRadio(0));
     expect(e.supportCost("artillery")).toBe(30);
-    expect(e.supportCost("tank")).toBe(50);
+    expect(e.supportCost("tank")).toBe(60);
     expect(e.supportCost("supply")).toBe(10);
     const { e: eVet } = await makeEngine(squadWithRadio(6));
     expect(eVet.supportCost("artillery")).toBe(21);
-    expect(eVet.supportCost("tank")).toBe(35);
+    expect(eVet.supportCost("tank")).toBe(42);
     expect(eVet.supportCost("supply")).toBe(7);
   });
 
@@ -205,10 +205,10 @@ describe("radio call costs scale with the radioman's level", () => {
 
   it("the HUD reports the discounted costs", async () => {
     const { e, hud } = await makeEngine(squadWithRadio(6));
-    expect(hud().supportCost).toEqual({ artillery: 21, supply: 7, recon: 7, mortar: 14, smoke: 11, tank: 35 });
+    expect(hud().supportCost).toEqual({ artillery: 21, supply: 7, recon: 7, mortar: 14, smoke: 11, tank: 42 });
     expect(hud().reinforceCost).toEqual({ rifle: 11, heavy: 18 });
     const { hud: hud0 } = await makeEngine(squadWithRadio(0));
-    expect(hud0().supportCost).toEqual({ artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 50 });
+    expect(hud0().supportCost).toEqual({ artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 });
     expect(hud0().reinforceCost).toEqual({ rifle: 15, heavy: 25 });
   });
 });

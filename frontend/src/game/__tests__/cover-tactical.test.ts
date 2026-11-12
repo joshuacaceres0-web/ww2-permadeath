@@ -93,6 +93,21 @@ async function makeEngine() {
   return engine as unknown as AnyEngine;
 }
 
+function disarmEnemy(e: AnyEngine) {
+  for (const u of e.units) {
+    if (u.side === "axis") {
+      (u as Record<string, unknown>).range = 0;
+      u.x = 3000; // far east, off the cover spot
+      u.y = 600;
+      // Move the garrison home too, or the patrol walks them back.
+      (u as Record<string, unknown>).homeX = 3000;
+      (u as Record<string, unknown>).homeY = 600;
+      (u as Record<string, unknown>).patrolX = 3000;
+      (u as Record<string, unknown>).patrolY = 600;
+    }
+  }
+}
+
 describe("tactical cover", () => {
   it("coverBetween protects only from the shooter's side — a flanker gets nothing", async () => {
     const e = await makeEngine();
@@ -108,6 +123,7 @@ describe("tactical cover", () => {
 
   it("one man per light spot, two per heavy spot", async () => {
     const e = await makeEngine();
+    disarmEnemy(e);
     const squad = e.units.filter((u) => u.side === "allies" && !u.npc);
     expect(squad.length).toBe(5);
     // Light sandbag at (600,600): two men hug it, threat is east.
@@ -123,6 +139,7 @@ describe("tactical cover", () => {
 
     // Heavy ruin wall: three men hug it, two get cover, one is exposed.
     const e2 = await makeEngine();
+    disarmEnemy(e2);
     const squad2 = e2.units.filter((u) => u.side === "allies" && !u.npc);
     const heavy = { x: 600, y: 600, r: 10, q: 0.9, q0: 0.9, type: "heavy", hp: 400, maxHp: 400 };
     e2.covers.push(heavy);

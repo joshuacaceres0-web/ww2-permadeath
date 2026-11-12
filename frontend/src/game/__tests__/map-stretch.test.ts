@@ -71,6 +71,8 @@ const baseMission = {
     { type: "volks", wave: 1, count: 3 },
     { type: "medic", wave: 1, count: 1 },
     { type: "mg42", wave: 1, count: 1 },
+    { type: "volks", wave: 2, count: 2 },
+    { type: "grenadier", wave: 2, count: 1 },
   ],
 } as const;
 
@@ -134,11 +136,28 @@ describe("map stretch: 3200 -> 4000 wide", () => {
   );
 
   it.each(["dday", "town", "causeway", "forest"])(
-    "terrain %s spawns enemies on the new eastern ground",
+    "terrain %s spawns wave 2 reinforcements on the new eastern ground",
     async (terrain) => {
       const e = await makeEngine(terrain);
+      // Wave 1 is the beach garrison (west). Wave 2 is reinforcements
+      // from the east, so drive it in and check it lands east of x=3200.
+      (e as unknown as { spawnWave: (i: number) => void }).spawnWave(1);
       const east = e.units.filter((u) => u.side === "axis" && u.x > 3200);
-      expect(east.length, `${terrain} must spawn enemies east of x=3200`).toBeGreaterThan(0);
+      expect(east.length, `${terrain} must spawn wave 2 enemies east of x=3200`).toBeGreaterThan(0);
+    },
+  );
+
+  it.each(["dday", "town", "causeway", "forest"])(
+    "terrain %s garrisons wave 1 at the beach, in the west",
+    async (terrain) => {
+      const e = await makeEngine(terrain);
+      const wave1 = e.units.filter((u) => u.side === "axis" && u.alive);
+      expect(wave1.length).toBeGreaterThan(0);
+      for (const u of wave1) {
+        // Wave 1 is in the first trench line now: the western trench
+        // sits at x 900-1500 depending on terrain.
+        expect(u.x, `${terrain} wave 1 ${u.type} spawned at x=${Math.round(u.x)}, not at the beach`).toBeLessThan(1600);
+      }
     },
   );
 

@@ -235,6 +235,10 @@ describe("morale", () => {
   it("a broken man falls back away from the enemy and does not shoot", async () => {
     const e = await makeEngine();
     disarmEnemy(e);
+    // The enemy stands east of him, so "away from the enemy" is west.
+    for (const a of e.units) {
+      if (a.side === "axis") { a.x = 2000; a.y = 600; }
+    }
     const u = e.units.find((x) => x.side === "allies" && !x.npc && x.type === "rifleman")!;
     u.x = 800; u.y = 600;
     u.morale = 10;

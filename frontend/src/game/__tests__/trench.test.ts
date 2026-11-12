@@ -99,6 +99,20 @@ async function makeEngine(terrain = "town") {
   return engine as unknown as AnyEngine;
 }
 
+function disarmEnemy(e: AnyEngine) {
+  for (const u of e.units) {
+    if (u.side === "axis") {
+      (u as Record<string, unknown>).range = 0;
+      u.x = 3000;
+      u.y = 600;
+      (u as Record<string, unknown>).homeX = 3000;
+      (u as Record<string, unknown>).homeY = 600;
+      (u as Record<string, unknown>).patrolX = 3000;
+      (u as Record<string, unknown>).patrolY = 600;
+    }
+  }
+}
+
 function step(e: AnyEngine, seconds: number) {
   for (let i = 0; i < Math.round(seconds * 60); i++) e.update(1 / 60);
 }
@@ -141,6 +155,7 @@ describe("trenches", () => {
 
   it("a man can walk straight across a trench line", async () => {
     const e = await makeEngine("town");
+    disarmEnemy(e);
     const man = e.units.find((x) => x.side === "allies" && !x.npc && x.type === "rifleman")!;
     man.x = 700;
     man.y = 400; // through the trench itself, not its gap at y=675

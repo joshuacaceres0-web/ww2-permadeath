@@ -452,7 +452,7 @@ export default function Battlefield() {
             commanderLevel={state?.commander_level ?? 1}
             supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 }}
             tankUsed={hud?.tankUsed ?? false}
-            supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 50 }}
+            supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 }}
             reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
             onCall={callIn}
             onSupport={callSupport}
@@ -788,7 +788,7 @@ export default function Battlefield() {
               radioLive: false,
               supportCd: { artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 },
               tankUsed: false,
-              supportCost: { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 50 },
+              supportCost: { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 },
               reinforceCost: { rifle: 15, heavy: 25 },
               enemyRadioLive: false,
               autoBattle: false,
