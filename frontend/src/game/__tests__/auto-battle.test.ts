@@ -181,10 +181,22 @@ describe("Auto Battle — core", () => {
   it("replay: the engine records a frame every 0.5s for the debrief screen", async () => {
     const { engine } = await makeBattle();
     const getReplay = () =>
-      (engine as unknown as { getReplay: () => { frames: Array<{ t: number; units: unknown[] }>; result: string; durationSec: number } }).getReplay();
+      (engine as unknown as {
+        getReplay: () => {
+          frames: Array<{ t: number; units: unknown[] }>;
+          result: string;
+          durationSec: number;
+          obstacles: Array<{ x: number; y: number; r: number; kind: string }>;
+        };
+      }).getReplay();
     let replay = getReplay();
     expect(replay.frames.length).toBeGreaterThanOrEqual(1);
     expect(replay.frames[0].t).toBe(0);
+    // Trees, ruins and obstacles are marked on the replay map.
+    expect(replay.obstacles.length).toBeGreaterThan(10);
+    const kinds = new Set(replay.obstacles.map((o) => o.kind));
+    console.log(`replay obstacles=${replay.obstacles.length} kinds=${[...kinds].join(",")}`);
+    expect(kinds.has("ruin") || kinds.has("building")).toBe(true);
     engine.setAutoBattle(true);
     step(engine, 10);
     replay = getReplay();

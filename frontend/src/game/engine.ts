@@ -205,10 +205,12 @@ interface Particle {
   kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom";
 }
 
+export type BlockerKind = "tree" | "ruin" | "building" | "hedgerow" | "wreck" | "crate" | "hedgehog" | "pillbox" | "bush" | "obstacle";
 interface Blocker {
   x: number;
   y: number;
   r: number;
+  kind?: BlockerKind;
 }
 
 export interface HudUnit {
@@ -304,12 +306,20 @@ export interface ReplayFrame {
   units: ReplayUnit[];
 }
 
+export interface ReplayObstacle {
+  x: number;
+  y: number;
+  r: number;
+  kind: BlockerKind;
+}
+
 export interface BattleReplay {
   mission: string;
   mapW: number;
   mapH: number;
   durationSec: number;
   result: "active" | "victory" | "defeat";
+  obstacles: ReplayObstacle[];
   frames: ReplayFrame[];
 }
 
@@ -798,6 +808,7 @@ export class GameEngine {
       mapH: MAP_H,
       durationSec: Math.round(this.elapsed),
       result: this.battleState,
+      obstacles: this.blockers.map((b) => ({ x: b.x, y: b.y, r: b.r, kind: b.kind ?? "obstacle" })),
       frames: this.replayFrames,
     };
   }
@@ -3202,7 +3213,7 @@ function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () =
     for (let t = 6; t < len; t += 12) {
       const bx = ww > wh ? wx + t : wx + ww / 2;
       const by = ww > wh ? wy + wh / 2 : wy + t;
-      blockers.push({ x: bx, y: by, r: 7 });
+      blockers.push({ x: bx, y: by, r: 7, kind: "ruin" });
       COVERS.push({ x: bx, y: by, r: 7, q: 0.8 });
     }
   }
@@ -3223,7 +3234,7 @@ function drawCrates(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
     ctx.moveTo(x + dx - 7, y + dy - 7);
     ctx.lineTo(x + dx + 7, y + dy + 7);
     ctx.stroke();
-    const b = { x: x + dx, y: y + dy, r: 8 };
+    const b = { x: x + dx, y: y + dy, r: 8, kind: "crate" as const };
     blockers.push(b);
     COVERS.push({ x: x + dx, y: y + dy, r: 8, q: 0.55, q0: 0.55, kind: "crate", hp: 70, maxHp: 70, blocker: b });
   }
@@ -3261,7 +3272,7 @@ function drawWreck(ctx: Ctx, blockers: Blocker[], x: number, y: number, ang: num
   for (const t of [-24, 0, 24]) {
     const bx = x + Math.cos(ang) * t;
     const by = y + Math.sin(ang) * t;
-    blockers.push({ x: bx, y: by, r: 22 });
+    blockers.push({ x: bx, y: by, r: 22, kind: "wreck" });
     COVERS.push({ x: bx, y: by, r: 22, q: 0.85 });
   }
 }
@@ -3308,7 +3319,7 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
     const x = x0 + (x1 - x0) * f + (rng() - 0.5) * 6;
     const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
     drawBush(ctx, x, y, 17, rng);
-    blockers.push({ x, y, r: 16 });
+    blockers.push({ x, y, r: 16, kind: "hedgerow" });
     COVERS.push({ x, y, r: 16, q: 0.45 });
   }
   // Worn dirt marks the gaps so the player sees where to go.
@@ -3335,7 +3346,7 @@ function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number
     ctx.stroke();
     ctx.fillStyle = snow ? "#C9D2CC" : "#2D5222";
   }
-  blockers.push({ x, y, r: r * 0.75 });
+  blockers.push({ x, y, r: r * 0.75, kind: "tree" });
   COVERS.push({ x, y, r: r * 0.75, q: 0.6 });
 }
 
@@ -3356,7 +3367,7 @@ function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: nu
   ctx.stroke();
   // Cover the footprint with blocker circles.
   const r = Math.min(w, h) / 2;
-  for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) blockers.push({ x: bx, y: by, r: r * 1.05 });
+  for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) blockers.push({ x: bx, y: by, r: r * 1.05, kind: "building" });
 }
 
 function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
@@ -3373,7 +3384,7 @@ function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
   ctx.strokeStyle = "#6A6A60";
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  blockers.push({ x, y, r: 11 });
+  blockers.push({ x, y, r: 11, kind: "hedgehog" });
 }
 
 function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElement; blockers: Blocker[]; covers: Cover[] } {
@@ -3443,7 +3454,7 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       ctx.strokeRect(1080, py - 22, 50, 44);
       ctx.fillStyle = "#1A1A18";
       ctx.fillRect(1080, py - 4, 8, 8);
-      blockers.push({ x: 1105, y: py, r: 26 });
+      blockers.push({ x: 1105, y: py, r: 26, kind: "pillbox" });
     }
   } else if (kind === "airborne" || kind === "bocage") {
     road(MAP_H / 2);
@@ -3478,9 +3489,9 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     road(MAP_H / 2);
     for (let x = 300; x < MAP_W; x += 44) {
       drawBush(ctx, x, MAP_H * 0.3, 15, rng); // reed banks along the flood
-      blockers.push({ x, y: MAP_H * 0.3, r: 15 });
+      blockers.push({ x, y: MAP_H * 0.3, r: 15, kind: "bush" });
       drawBush(ctx, x + 22, MAP_H * 0.7, 15, rng);
-      blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15 });
+      blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15, kind: "bush" });
     }
     for (let i = 0; i < 8; i++) drawTree(ctx, blockers, 600 + rng() * 1700, MAP_H * (0.38 + rng() * 0.24), 16, false);
     for (let i = 0; i < 7; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);

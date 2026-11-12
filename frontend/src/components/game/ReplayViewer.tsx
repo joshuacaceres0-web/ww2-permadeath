@@ -47,6 +47,46 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
       ctx.fillStyle = "#E5A93C";
       ctx.font = "bold 16px monospace";
       ctx.fillText("REPLAY", 12, 24);
+      // Trees, ruins and every other obstacle, exactly where the
+      // engine put them: trees green, ruins grey stone, buildings
+      // brown, hedgerows dark green, wrecks / hedgehogs / pillboxes
+      // dark steel, crates and bushes tan.
+      for (const o of replay.obstacles ?? []) {
+        const x = o.x * sx;
+        const y = o.y * sy;
+        const r = Math.max(3, o.r * sx);
+        if (o.kind === "tree") {
+          ctx.fillStyle = "#2D5222";
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, 7);
+          ctx.fill();
+          ctx.fillStyle = "#7CFC66";
+          ctx.beginPath();
+          ctx.arc(x, y, r * 0.45, 0, 7);
+          ctx.fill();
+        } else if (o.kind === "ruin") {
+          ctx.fillStyle = "#8C877A";
+          ctx.fillRect(x - r, y - r, r * 2, r * 2);
+          ctx.strokeStyle = "#2A2824";
+          ctx.strokeRect(x - r, y - r, r * 2, r * 2);
+        } else if (o.kind === "building") {
+          ctx.fillStyle = "#5A3A2A";
+          ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        } else if (o.kind === "hedgerow") {
+          ctx.fillStyle = "#2C4A1C";
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, 7);
+          ctx.fill();
+        } else if (o.kind === "crate" || o.kind === "bush") {
+          ctx.fillStyle = "#6B5232";
+          ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        } else {
+          ctx.fillStyle = "#3A3E30";
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, 7);
+          ctx.fill();
+        }
+      }
       for (const u of f.units) {
         const x = u.x * sx;
         const y = u.y * sy;
@@ -138,6 +178,10 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
       <p className="mt-2 font-mono text-[11px] text-[#8D9A83]">
         <span className="text-[#7CFC66]">● Your squad</span> · <span className="text-[#4ECDC4]">● 2nd Platoon</span> ·{" "}
         <span className="text-[#E24A4A]">● Enemy</span> · Faded = dead
+        <br />
+        Obstacles: <span className="text-[#7CFC66]">● Tree</span> · <span className="text-[#B8B2A4]">■ Ruin</span> ·{" "}
+        <span className="text-[#C08A5A]">■ Building</span> · <span className="text-[#5A8A3A]">● Hedgerow</span> ·{" "}
+        <span className="text-[#9A9A8A]">● Wreck / steel</span>
       </p>
     </div>
   );
