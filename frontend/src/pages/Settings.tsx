@@ -63,19 +63,19 @@ export default function Settings() {
         </h1>
         <p className="mt-2 font-mono text-sm text-[#A2B29A]">Saved on this device. Your campaign is not affected.</p>
 
-        <section className="mt-6 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
+        <section className="mt-6 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
           <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">GAME SPEED</h2>
           <p className="font-mono text-sm text-[#8D9A83]">How fast battles run. Pause still works at any speed.</p>
           <Choice name="speed" value={s.speed} options={SPEEDS} onPick={(v) => update({ speed: v })} />
         </section>
 
-        <section className="mt-3 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
+        <section className="mt-4 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
           <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">SCREEN SHAKE</h2>
           <p className="font-mono text-sm text-[#8D9A83]">Camera jolt from explosions.</p>
           <Choice name="shake" value={s.shake} options={SHAKES} onPick={(v) => update({ shake: v })} />
         </section>
 
-        <section className="mt-3 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
+        <section className="mt-4 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
           <div className="flex items-center justify-between">
             <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">SOUND</h2>
             <button
@@ -124,7 +124,7 @@ export default function Settings() {
           </button>
         </section>
 
-        <section className="mt-3 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-4">
+        <section className="mt-4 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
           <div className="flex items-center justify-between">
             <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">MUSIC</h2>
             <button

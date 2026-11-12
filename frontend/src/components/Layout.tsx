@@ -41,7 +41,7 @@ export default function Layout() {
               <span className="block font-heading text-lg font-bold tracking-wider text-[#F0F5EB]">
                 VANGUARD '44
               </span>
-              <span className="block font-mono text-[9px] uppercase tracking-[0.3em] text-[#8D9A83]">
+              <span className="hidden font-mono text-[9px] uppercase tracking-[0.3em] text-[#8D9A83] min-[420px]:block">
                 Permafrost · The Sacrifice Division
               </span>
             </span>
@@ -105,7 +105,7 @@ export default function Layout() {
         className={
           inGame
             ? "flex min-h-0 flex-1 flex-col"
-            : "mx-auto w-full max-w-7xl flex-1 px-4 py-6"
+            : "mx-auto w-full max-w-7xl flex-1 px-4 py-6 pb-20 md:pb-6"
         }
       >
         <Outlet />

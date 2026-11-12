@@ -323,30 +323,10 @@ export default function Battlefield() {
           </Button>
         </div>
       )}
-      {/* CRT status bar */}
-      <div className="flex flex-wrap items-center gap-3 border-b border-[#2E3628] bg-[#0D0F0C] px-4 py-2 font-mono text-xs short:flex-nowrap short:gap-2 short:px-2 short:py-1">
-        <Button
-          data-testid="auto-battle-btn"
-          variant="outline"
-          size="xs"
-          onClick={() => engineRef.current?.toggleAutoBattle()}
-          disabled={hud?.briefing || hud?.state !== "active"}
-          className={hud?.autoBattle ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]" : ""}
-          title="Auto Battle: the squad fights on its own. Tap again, or give any order, to take command."
-        >
-          {hud?.autoBattle ? "AUTO ON" : "AUTO"}
-        </Button>
-        <Button
-          data-testid="full-map-btn"
-          variant="outline"
-          size="xs"
-          onClick={toggleFullMap}
-          disabled={hud?.briefing || hud?.state !== "active"}
-          className={fullMap ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
-          title="Full map: hide the controls on the map and zoom out to the whole battlefield"
-        >
-          {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
-        </Button>
+      {/* CRT status bar — two clear rows instead of one crowded wrap:
+          row 1 is the battle status, row 2 is the controls. */}
+      <div className="border-b border-[#2E3628] bg-[#0D0F0C] font-mono text-xs short:py-1">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
         <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
           {mission.code}
         </span>
@@ -378,7 +358,31 @@ export default function Battlefield() {
             AUTO BATTLE ON — SQUAD FIGHTING ON ITS OWN
           </span>
         )}
-        <div className="ml-auto flex items-center gap-2">
+        </div>
+        <div className="flex flex-wrap items-center gap-2 border-t border-[#2E3628] px-4 py-1.5">
+        <Button
+          data-testid="auto-battle-btn"
+          variant="outline"
+          size="xs"
+          onClick={() => engineRef.current?.toggleAutoBattle()}
+          disabled={hud?.briefing || hud?.state !== "active"}
+          className={hud?.autoBattle ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]" : ""}
+          title="Auto Battle: the squad fights on its own. Tap again, or give any order, to take command."
+        >
+          {hud?.autoBattle ? "AUTO ON" : "AUTO"}
+        </Button>
+        <Button
+          data-testid="full-map-btn"
+          variant="outline"
+          size="xs"
+          onClick={toggleFullMap}
+          disabled={hud?.briefing || hud?.state !== "active"}
+          className={fullMap ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
+          title="Full map: hide the controls on the map and zoom out to the whole battlefield"
+        >
+          {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
+        </Button>
+        <div className="ml-auto flex flex-wrap items-center gap-2">
           {!touch && (
             <div className="flex items-center gap-0.5" data-testid="formation-picker" title="Formation (F)">
               {FORMATIONS.map((f) => (
@@ -433,6 +437,7 @@ export default function Battlefield() {
           >
             <Flag size={12} className="mr-1" /> RETREAT
           </Button>
+        </div>
         </div>
       </div>
 

@@ -108,7 +108,7 @@ export default function Home() {
     <div className="grid gap-6 lg:grid-cols-[2fr_1fr]">
       {/* War theater */}
       <section className="space-y-4">
-        <div className="scanlines relative overflow-hidden border border-[#2E3628] bg-[#1A1D17] p-6">
+        <div className="scanlines relative overflow-hidden border border-[#2E3628] bg-[#1A1D17] p-6 pr-20 sm:pr-6">
           <div className="absolute right-4 top-4 rotate-6 border-2 border-double border-[#5C4A1E] px-2 py-0.5 font-mono text-[10px] tracking-[0.25em] text-[#E5A93C]/70">
             CLASSIFIED
           </div>

@@ -59,7 +59,7 @@ export default function Memorial() {
       <Graveyard entries={entries ?? []} decor={decor ?? []} selectedId={selectedId} onSelect={setSelectedId} />
 
       {selected && (
-        <div className="flex gap-4 border border-[#5C4A1E] bg-[#15130D] p-4" data-testid="grave-plaque">
+        <div className="flex flex-col gap-4 border border-[#5C4A1E] bg-[#15130D] p-4 sm:flex-row" data-testid="grave-plaque">
           <Portrait seed={selected.portrait_seed} type={selected.type} size={72} fallen />
           <div className="min-w-0 space-y-1.5">
             <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#C68B45]">Here lies</p>

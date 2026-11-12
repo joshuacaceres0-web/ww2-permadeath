@@ -57,7 +57,7 @@ export default function StartMenu() {
             PERMAFROST, THE SACRIFICE DIVISION
           </p>
 
-          <nav className="mt-8 space-y-2.5" aria-label="Start menu">
+          <nav className="mt-8 space-y-3" aria-label="Start menu">
             <button
               data-testid="menu-continue"
               disabled={!hasSave}

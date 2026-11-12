@@ -99,7 +99,7 @@ export default function SquadDock({ hud, onSelect, onAbility, onSplit, onSelectT
   const teamSelected = (ids: number[]) => ids.length > 0 && ids.every((id) => hud.selectedIds.includes(id)) && hud.selectedIds.length === ids.length;
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2 short:px-1.5 short:py-1.5">
-      <div className="flex items-center gap-1.5" data-testid="fireteam-bar">
+      <div className="flex flex-wrap items-center gap-1.5" data-testid="fireteam-bar">
         {!split ? (
           <Button
             data-testid="split-squad-btn"

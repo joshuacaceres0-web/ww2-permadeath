@@ -234,7 +234,7 @@ function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) 
       </DialogHeader>
 
       <div className="space-y-3">
-        <div className="flex gap-1" data-testid="dossier-rank-ladder">
+        <div className="grid grid-cols-4 gap-1 sm:grid-cols-7" data-testid="dossier-rank-ladder">
           {RANKS.map((r, i) => (
             <div
               key={r}
