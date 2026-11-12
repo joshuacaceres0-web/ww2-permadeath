@@ -88,6 +88,13 @@ interface Unit {
   cooldown: number;
   suppression: number;
   pinned: boolean;
+  // Morale: 0-100, starts at 100. Falls under fire, casualties and
+  // suppression; recovers out of fire, faster near a medic or a
+  // leader. At 20 or below the man breaks and falls back; at 45 he
+  // rallies and fights again.
+  morale: number;
+  broken: boolean;
+  lastHitT: number;
   abilityCd: number;
   burst: number;
   burstTimer: number;
@@ -231,6 +238,8 @@ export interface HudUnit {
   maxHp: number;
   suppression: number;
   pinned: boolean;
+  morale: number;
+  broken: boolean;
   abilityCd: number;
   abilityCdMax: number;
   kills: number;
@@ -997,7 +1006,7 @@ export class GameEngine {
     if (this.phase !== "battle") return;
     this.takeManualControl();
     const u = this.unitById(unitId);
-    if (!u || !u.alive || u.abilityCd > 0) return;
+    if (!u || !u.alive || u.abilityCd > 0 || u.broken) return;
     const spec = UNIT_TYPES[u.type].ability;
     if (spec.aim === "auto") {
       this.castAuto(u);
@@ -1064,6 +1073,7 @@ export class GameEngine {
         hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
+        morale: 100, broken: false, lastHitT: 0,
         abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
@@ -1501,6 +1511,32 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  /** A friendly medic within 120: morale recovers faster beside him. */
+  private nearMedic(u: Unit): boolean {
+    return this.units.some((a) => a.alive && a.side === u.side && a.id !== u.id && this.isMedic(a) && dist(u.x, u.y, a.x, a.y) <= 120);
+  }
+
+  /** A leader within 200: morale recovers faster beside him. Axis
+   * follow a living officer; the Allies follow the highest-rank
+   * living squad man (Sgt outranks Cpl outranks Pfc outranks Pvt).
+   * If the leader is dead, the bonus is gone with him. */
+  private nearLeader(u: Unit): boolean {
+    if (u.side === "axis") {
+      return this.units.some((a) => a.alive && a.side === "axis" && a.enemyType === "officer" && dist(u.x, u.y, a.x, a.y) <= 200);
+    }
+    let best = -1;
+    let leader: Unit | null = null;
+    for (const a of this.units) {
+      if (a.side !== "allies" || !a.alive || a.npc) continue;
+      const v = a.rank.startsWith("Sgt") ? 3 : a.rank.startsWith("Cpl") ? 2 : a.rank.startsWith("Pfc") ? 1 : 0;
+      if (v > best) {
+        best = v;
+        leader = a;
+      }
+    }
+    return !!leader && dist(u.x, u.y, leader.x, leader.y) <= 200;
+  }
+
   /** A medic on either side: the player's medic (type "medic") or an
    * Axis Sanitaeter (enemyType "medic"). Both heal only their own side. */
   private isMedic(u: Unit): boolean {
@@ -1527,7 +1563,7 @@ export class GameEngine {
    * their own every update; the player's medic uses castAuto (same
    * numbers, with the radio line) through Q or AUTO. */
   private medicTriage(u: Unit) {
-    if (u.abilityCd > 0) return;
+    if (u.abilityCd > 0 || u.broken) return;
     const best = this.worstHurtAlly(u, 130);
     if (!best) return;
     const before = best.hp;
@@ -1593,7 +1629,7 @@ export class GameEngine {
 
   private autoUseAbilities() {
     for (const u of this.units) {
-      if (u.side !== "allies" || u.npc || !u.alive || u.abilityCd > 0) continue;
+      if (u.side !== "allies" || u.npc || !u.alive || u.abilityCd > 0 || u.broken) continue;
       if (u.type === "medic") {
         const hurt = this.units.some(
           (a) => a.side === "allies" && a.alive && a.hp < a.maxHp && dist(u.x, u.y, a.x, a.y) <= 130,
@@ -1668,6 +1704,7 @@ export class GameEngine {
         cooldown: rng() * 0.5,
         suppression: 0,
         pinned: false,
+        morale: 100, broken: false, lastHitT: 0,
         abilityCd: 0,
         burst: 0,
         burstTimer: 0,
@@ -1738,6 +1775,7 @@ export class GameEngine {
           cooldown: rng() * 1.2,
           suppression: 0,
           pinned: false,
+          morale: 100, broken: false, lastHitT: 0,
           abilityCd: 0,
           burst: 0,
           burstTimer: 0,
@@ -1877,6 +1915,36 @@ export class GameEngine {
       else if (u.suppression <= 22) u.pinned = false;
       u.abilityCd = Math.max(0, u.abilityCd - dt);
 
+      // Morale: pinned men lose nerve fast, heavy suppression wears
+      // it down. Out of fire for 5s it comes back, faster beside a
+      // medic or a leader. Break at 20, rally at 45.
+      if (u.pinned) u.morale -= 2.5 * dt;
+      else if (u.suppression >= 40) u.morale -= 1.5 * dt;
+      if (this.elapsed - u.lastHitT > 5 && u.suppression < 20) {
+        let rec = 4;
+        if (this.nearMedic(u)) rec += 4;
+        if (this.nearLeader(u)) rec += 3;
+        u.morale += rec * dt;
+      }
+      u.morale = Math.max(0, Math.min(100, u.morale));
+      if (!u.broken && u.morale <= 20) {
+        u.broken = true;
+        this.pushLog(
+          u.side === "allies"
+            ? `${u.name} breaks and falls back!`
+            : `An enemy ${ENEMY_TYPES[u.enemyType!].label} breaks and falls back!`,
+          "death",
+        );
+      } else if (u.broken && u.morale >= 45) {
+        u.broken = false;
+        this.pushLog(
+          u.side === "allies"
+            ? `${u.name} rallies and holds the line.`
+            : `An enemy ${ENEMY_TYPES[u.enemyType!].label} rallies.`,
+          "info",
+        );
+      }
+
       let target = this.unitById(u.targetId);
       if (target && !this.los(u, target)) target = null;
       if (!target || !target.alive) {
@@ -1895,8 +1963,19 @@ export class GameEngine {
 
       // Movement decision: queued orders first; axis advance on their own; allies with
       // an attack order close in.
+      // A broken man falls back: he runs from the nearest enemy and
+      // does not fight until he rallies. Static guns cannot run, so
+      // they hold in place and stop shooting.
       let moving = false;
-      if (u.orders.length > 0) {
+      if (u.broken && !u.isStatic) {
+        const foe = this.nearestAlly(u);
+        if (foe) {
+          const dx = u.x - foe.x;
+          const dy = u.y - foe.y;
+          const len = Math.hypot(dx, dy) || 1;
+          moving = this.chaseTo(u, u.x + (dx / len) * 320, u.y + (dy / len) * 320, dt);
+        }
+      } else if (u.orders.length > 0) {
         const o = u.orders[0];
         const od = dist(u.x, u.y, o.x, o.y);
         if (od < 8) u.orders.shift();
@@ -2192,7 +2271,7 @@ export class GameEngine {
           // draws a pulsing red circle at the impact point for its whole flight.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && this.los(u, focus)) {
+      } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && !u.broken && this.los(u, focus)) {
         const interval = u.fireInterval * aura;
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
@@ -2596,6 +2675,14 @@ export class GameEngine {
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
     u.hp -= dmg;
+    // Under fire: every hit shakes nerve, 0.3 morale per HP lost.
+    // A rifle hit costs about 4, a sniper round about 12, a
+    // panzerfaust about 17. No single hit breaks a fresh man.
+    // (Tuned down from 0.4 on 2026-11-11: at 0.4 AUTO won only
+    // 5 of 10 — breaks were deciding battles instead of flavouring
+    // them. Same for the casualty shock and pinned drain below.)
+    u.morale = Math.max(0, u.morale - dmg * 0.3);
+    u.lastHitT = this.elapsed;
     if (u.side === "allies") u.damageTaken += Math.min(dmg, u.hp + dmg);
     if (u.hp <= 0) this.kill(u, sourceType, killerId);
   }
@@ -2604,6 +2691,14 @@ export class GameEngine {
     u.alive = false;
     u.hp = 0;
     u.deathT = 0;
+    // Casualty shock: men close by watch a friend die (-8 within
+    // 250), the whole side feels it (-2). The shock also holds
+    // recovery back for 5s, like being under fire.
+    for (const a of this.units) {
+      if (!a.alive || a.side !== u.side || a.id === u.id) continue;
+      a.morale = Math.max(0, a.morale - (dist(u.x, u.y, a.x, a.y) <= 250 ? 8 : 2));
+      a.lastHitT = this.elapsed;
+    }
     if (u.side === "allies" && !u.npc) sfx("death");
     this.corpseFx(u);
     if (u.side === "allies" && u.npc) {
@@ -2958,6 +3053,8 @@ export class GameEngine {
         maxHp: u.maxHp,
         suppression: Math.round(u.suppression),
         pinned: u.pinned,
+        morale: Math.round(u.morale),
+        broken: u.broken,
         abilityCd: u.abilityCd,
         abilityCdMax: UNIT_TYPES[u.type].ability.cd,
         kills: u.kills,
@@ -3340,6 +3437,21 @@ export class GameEngine {
       ctx.fillRect(bx, by, on * PX, PX);
     }
 
+    // Morale bar: one row below the health bar. Green holds, amber
+    // wavers, red is about to break. Allies always show it; an enemy
+    // shows it once his nerve starts to slip.
+    if (u.morale < 100 || isAlly) {
+      const msegs = 8;
+      const mpct = Math.max(0, u.morale / 100);
+      const mon = Math.ceil(mpct * msegs);
+      const mbx = fx - (msegs / 2) * PX;
+      const mby = headY + PX;
+      ctx.fillStyle = "rgba(10,12,8,0.85)";
+      ctx.fillRect(mbx - PX, mby - PX, (msegs + 2) * PX, PX * 3);
+      ctx.fillStyle = u.broken ? "#E24A4A" : mpct > 0.6 ? "#7FB069" : mpct > 0.3 ? "#E5A93C" : "#E24A4A";
+      ctx.fillRect(mbx, mby, mon * PX, PX);
+    }
+
     // In-cover marker: small pixel shield beside the head.
     if (u.cover && (isAlly || this.visible[this.cellAt(u.x, u.y)])) {
       const sx = fx - 7 * PX;
@@ -3365,6 +3477,12 @@ export class GameEngine {
       ctx.fillText("PINNED", fx + PX, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4) + PX);
       ctx.fillStyle = "#E24A4A";
       ctx.fillText("PINNED", fx, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4));
+    }
+    if (u.broken && !u.pinned) {
+      ctx.fillStyle = "#0D0F0C";
+      ctx.fillText("BROKEN", fx + PX, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4) + PX);
+      ctx.fillStyle = "#E24A4A";
+      ctx.fillText("BROKEN", fx, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4));
     }
   }
 }

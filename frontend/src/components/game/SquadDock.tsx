@@ -55,12 +55,18 @@ function UnitCard({
           style={{ width: `${unit.alive ? hpPct : 0}%` }}
         />
       </div>
+      <div className="mt-0.5 h-1 w-full bg-[#121411]" data-testid={`unit-dock-morale-${index}`}>
+        <div
+          className={`h-full ${unit.broken ? "bg-[#E24A4A]" : unit.morale > 60 ? "bg-[#7FB069]" : unit.morale > 30 ? "bg-[#E5A93C]" : "bg-[#E24A4A]"}`}
+          style={{ width: `${unit.alive ? unit.morale : 0}%` }}
+        />
+      </div>
       <div className="mt-1 flex items-center justify-between font-mono text-[10px] text-[#8D9A83] short:hidden">
         <span data-testid={`unit-dock-hp-${index}`}>
           {unit.alive ? `${unit.hp}/${unit.maxHp}` : "—"}
         </span>
-        <span className={unit.pinned ? "text-[#E24A4A]" : ""}>
-          {unit.pinned ? "PINNED" : unit.kills > 0 ? `${unit.kills} KILLS` : "STABLE"}
+        <span className={unit.broken || unit.pinned ? "text-[#E24A4A]" : ""}>
+          {unit.broken ? "BROKEN" : unit.pinned ? "PINNED" : unit.kills > 0 ? `${unit.kills} KILLS` : "STABLE"}
         </span>
       </div>
       <div className="mt-1 flex items-center gap-2">
