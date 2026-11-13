@@ -40,6 +40,11 @@ const CELL = 24;
 const COLS = Math.ceil(MAP_W / CELL);
 const ROWS = Math.ceil(MAP_H / CELL);
 const UNIT_R = 9;
+// NPC tactical fallback tuning (2026-11-12): a 2nd Platoon man at
+// this share of his health or less falls back; healed above the
+// rejoin share, he goes back to the fight.
+const NPC_FALLBACK_HP = 0.35;
+const NPC_REJOIN_HP = 0.6;
 const PAN_SPEED = 900;
 const PX = 3; // world units per screen pixel — the whole battlefield renders as chunky pixel art
 const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
@@ -218,6 +223,11 @@ interface Unit {
   fleeT: number;
   /** True once he has deserted: off the field, not dead, not in the Memorial. */
   fled: boolean;
+  /** Tactical fallback (NPC allies): at 35% health or less the man
+   * breaks off, pulls back west to cover near the rear, and holds
+   * there until healed above 60%, then rejoins. Set and cleared by
+   * the fallback check in update; all NPC allies, every mission. */
+  npcFallback?: boolean;
   abilityCd: number;
   burst: number;
   burstTimer: number;
@@ -1001,13 +1011,18 @@ export class GameEngine {
     this.replayT = 0;
     this.autoBattle = false;
     this.spawnAllies(squad, rng, commanderBonus);
-    // 2nd Platoon: 12 weak allies, so they support the fight but can
+    // 2nd Platoon: weak allies, so they support the fight but can
     // never clear a wave on their own — in the Emergent play test
     // Wave 1 was cleared entirely by them while the player's squad stood
     // idle and fired nothing. The real count was 2 + min(3, mission.index),
-    // i.e. 2-5; Josh picked 12 on 2026-11-11. Still weak, spread down
-    // the western edge so they do not spawn stacked on each other.
-    this.spawnNpcAllies(12, rng);
+    // i.e. 2-5; Josh picked 12 on 2026-11-11, and on 2026-11-12 he
+    // raised the Overlord beach landing to 32: a full landing force
+    // to match the hardened beach defense (9 MG42s and 3 mortars in
+    // wave 1 alone). The airborne drop and the other missions stay
+    // at 12. Still weak, spread down the western edge so they do
+    // not spawn stacked on each other.
+    const npcAllies = mission.terrain === "dday" && this.variant !== "airborne" ? 32 : 12;
+    this.spawnNpcAllies(npcAllies, rng);
     this.spawnWave(0);
     this.recomputeFog();
     this.resize();
@@ -1312,8 +1327,8 @@ export class GameEngine {
     // Spread down the western edge instead of clustering at one y, so
     // they do not spawn stacked and deadlock on each other.
     // The first man is 2nd Platoon's medic: one rifleman becomes the
-    // medic, so the platoon is still 12 men and heals its own wounded
-    // with the same aura and triage as every other medic.
+    // medic, so the platoon count stays the same and it heals its
+    // own wounded with the same aura and triage as every other medic.
     for (let i = 0; i < n; i++) {
       const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
       this.addNpc(i === 0 ? "medic" : "rifleman", 90 + rng() * 80, py, i, rng(), true);
@@ -2458,18 +2473,21 @@ export class GameEngine {
     // on the spot gets nothing from it, because the directional
     // cover check needs the cover on the threat side. Static guns
     // hold the west positions — and on the beach landing itself the
-    // defense sits in two lines: the first nests right on the sand
-    // at the shoreline, the overflow scattered east inland (see the
-    // shoreline branch below). Waves 2 and 3 are AGGRESSIVE
+    // defense sits in three lines: the MG nests at the grassline
+    // where the beach meets the grass, the mortars at the shoreline,
+    // and the overflow scattered east inland (see the shoreline
+    // branch below). Waves 2 and 3 are AGGRESSIVE
     // reinforcements from the east: they charge on spawn instead of
     // camping and defending, so the fight comes to the player.
     const beach = index === 0;
     const shoreline = beach && this.mission.terrain === "dday" && this.variant !== "airborne";
-    // Josh's beach layout: the first 6 MG42 nests and the first 2
-    // mortars sit right at the shoreline; any more than that scatter
-    // east inland as a second line in depth.
-    const SHORE_MG42 = 6;
+    // Josh's beach layout: the first 6 MG42 nests sit at the
+    // grassline, the first 2 mortars right at the shoreline; any
+    // more than that scatter east inland as guns in depth. Each
+    // line spreads in its own bands along the whole beach.
+    const GRASS_MG42 = 6;
     const SHORE_MORTAR = 2;
+    let grassStaticTotal = 0;
     let shoreStaticTotal = 0;
     if (shoreline) {
       let mg = 0;
@@ -2479,17 +2497,19 @@ export class GameEngine {
         for (let i = 0; i < s.count; i++) {
           if (s.type === "mg42") {
             mg++;
-            if (mg > SHORE_MG42) continue;
+            if (mg <= GRASS_MG42) grassStaticTotal++;
           } else if (s.type === "mortar") {
             mo++;
-            if (mo > SHORE_MORTAR) continue;
+            if (mo <= SHORE_MORTAR) shoreStaticTotal++;
+          } else {
+            shoreStaticTotal++;
           }
-          shoreStaticTotal++;
         }
       }
     }
     let mgSeen = 0;
     let mortarSeen = 0;
+    let grassCount = 0;
     let shoreCount = 0;
     const trenchSpots = beach ? this.firstTrenchSpots() : [];
     const mobileTotal = this.waves[index].reduce(
@@ -2511,23 +2531,38 @@ export class GameEngine {
         let y: number;
         let trench = false;
         if (isStatic) {
-          let east = false;
-          if (shoreline && spec.type === "mg42") {
-            mgSeen++;
-            east = mgSeen > SHORE_MG42;
-          } else if (shoreline && spec.type === "mortar") {
-            mortarSeen++;
-            east = mortarSeen > SHORE_MORTAR;
+          let zone: "grass" | "shore" | "east" | null = null;
+          if (shoreline) {
+            if (spec.type === "mg42") {
+              mgSeen++;
+              zone = mgSeen > GRASS_MG42 ? "east" : "grass";
+            } else if (spec.type === "mortar") {
+              mortarSeen++;
+              zone = mortarSeen > SHORE_MORTAR ? "east" : "shore";
+            } else {
+              zone = "shore";
+            }
           }
-          if (east) {
+          if (zone === "east") {
             // Scattered east inland: no line and no bands, just
             // guns in depth behind the beach defense.
             x = 1700 + rng() * 1500;
             y = 120 + rng() * (MAP_H - 240);
-          } else if (shoreline) {
+          } else if (zone === "grass") {
+            // The grassline: the foot of the dune-grass ridge at
+            // x 1000, where the sand and the shingle give way to
+            // grass. The nests sit just west of the ridge with a
+            // clear field of fire over the whole beach, spread in
+            // bands along the line.
+            x = 880 + rng() * 140;
+            y =
+              grassStaticTotal > 1
+                ? 90 + ((grassCount + rng() * 0.7) * (MAP_H - 180)) / grassStaticTotal
+                : MAP_H * (0.2 + rng() * 0.6);
+            grassCount++;
+          } else if (zone === "shore") {
             // Right at the shoreline, on the sand west of the
-            // bluffs, spread along the beach in bands so the nests
-            // cover the whole landing instead of bunching at one y.
+            // bluffs, spread along the beach in their own bands.
             x = 350 + rng() * 300;
             y =
               shoreStaticTotal > 1
@@ -2798,6 +2833,32 @@ export class GameEngine {
       // rally call steadies him (morale to 65, rallies on the next
       // tick), and so does a medic or a leader nearby: the rally
       // check above clears broken before this runs.
+      // Tactical fallback for wounded NPC allies (Josh, 2026-11-12):
+      // at 35% health or less a 2nd Platoon man breaks off instead
+      // of standing and dying in place — he pulls back west, to a
+      // cover spot near the rear when there is one, and holds there
+      // until the medic brings him back above 60%, then he rejoins.
+      // All NPC allies, every mission. A broken man is morale's
+      // business, not this rule's, so the trigger skips him.
+      if (u.npc && u.side === "allies" && !u.isStatic && !u.vehicle) {
+        if (!u.npcFallback && !u.broken && u.hp <= u.maxHp * NPC_FALLBACK_HP) {
+          u.npcFallback = true;
+          u.chase = [];
+          const destX = Math.max(46, u.x - 300);
+          let dx = destX;
+          let dy = u.y;
+          for (const c of this.bestCovers(u, 480)) {
+            if (c.x < u.x - 60 && dist(c.x, c.y, destX, u.y) <= 180) {
+              dx = c.x;
+              dy = c.y;
+              break;
+            }
+          }
+          u.orders = findPath(this.blocked, u.x, u.y, dx, dy);
+        } else if (u.npcFallback && u.hp > u.maxHp * NPC_REJOIN_HP) {
+          u.npcFallback = false;
+        }
+      }
       let moving = false;
       if (u.broken && !u.isStatic) {
         if (u.willFlee) {
@@ -2853,6 +2914,12 @@ export class GameEngine {
         } else {
           u.chase = []; // at the east edge: hold and fire
         }
+      } else if (u.npc && u.npcFallback) {
+        // Holding at the rear after a tactical fallback: his orders
+        // brought him back, and he does not rejoin the fight until
+        // he is healed — the fallback check above clears the flag
+        // once he is back above 60% health.
+        u.chase = [];
       } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc)) && !u.isStatic && u.enemyType !== "mortar") {
         // Auto Battle core: a player squad man with AUTO on fights the
         // same way as an NPC ally — chase the nearest enemy when out of
@@ -3108,7 +3175,7 @@ export class GameEngine {
       // no LOS, but it never runs for a unit whose orders just
       // emptied while it was in cover with a target in range but
       // behind its own cover.
-      if (!u.isStatic && !u.vehicle && !u.trenchHold && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
+      if (!u.isStatic && !u.vehicle && !u.trenchHold && !u.npcFallback && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
         const prey = this.nearestAlly(u);
         const hasLosTarget = focus && d <= u.range && this.los(u, focus);
         if (prey && !hasLosTarget) {
@@ -3136,7 +3203,7 @@ export class GameEngine {
       // in-range cover branch above, so they do not just camp.
       // A vehicle never seeks cover: the Sherman follows the road, and
       // a cover order would pull it off the road toward a sandbag.
-      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle) {
+      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle && !u.npcFallback) {
         const underFire = u.pinned || u.suppression >= 35;
         const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
         const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
@@ -3222,6 +3289,7 @@ export class GameEngine {
 
     // Separation & collision.
     this.resolveCollisions();
+    this.disperseNpcs(dt);
 
     // Bullets.
     for (let i = this.bullets.length - 1; i >= 0; i--) {
@@ -3573,6 +3641,53 @@ export class GameEngine {
     for (const u of this.units) {
       u.x = Math.max(10, Math.min(MAP_W - 10, u.x));
       u.y = Math.max(10, Math.min(MAP_H - 10, u.y));
+    }
+  }
+
+  /** Josh's spread rule (2026-11-12): no more than 3 NPC allies
+   * bundled in one spot. A 2nd Platoon man with 3 or more NPC
+   * neighbours within 44 units is in a bundle of 4+, and he steps
+   * away from the bundle's centre until it thins to 3. The
+   * pairwise separation in resolveCollisions only stops men
+   * standing on top of each other; this stops the platoon landing
+   * and advancing as one clump and one target. Asked for on the
+   * beach landing first, then confirmed for all NPC allies in
+   * every mission. A man in cover counts toward a bundle but is
+   * never moved himself: dispersion does not pull a man out of
+   * his cover, and broken men are left out entirely. */
+  private disperseNpcs(dt: number) {
+    const R = 44;
+    const men = this.units.filter((u) => u.side === "allies" && u.npc && u.alive && !u.broken);
+    for (const u of men) {
+      if (u.cover) continue;
+      let cx = 0;
+      let cy = 0;
+      let n = 0;
+      for (const o of men) {
+        if (o === u) continue;
+        if (dist(u.x, u.y, o.x, o.y) <= R) {
+          cx += o.x;
+          cy += o.y;
+          n++;
+        }
+      }
+      if (n < 3) continue;
+      cx /= n;
+      cy /= n;
+      let dx = u.x - cx;
+      let dy = u.y - cy;
+      let d = Math.hypot(dx, dy);
+      if (d < 0.001) {
+        // Dead centre of the bundle: pick a fixed direction by id
+        // so the men do not all pick the same one.
+        const ang = (u.id % 8) * (Math.PI / 4);
+        dx = Math.cos(ang);
+        dy = Math.sin(ang);
+        d = 1;
+      }
+      const step = 46 * dt * (n - 1);
+      u.x += (dx / d) * step;
+      u.y += (dy / d) * step;
     }
   }
 
@@ -4959,12 +5074,12 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
   // reads as dirt on dirt and sand on sand, not pavement. The ruts
   // follow the same bezier as the band, offset 10 units either side of
   // the centerline.
-  const road = (y: number) => {
+  const road = (y: number, fromX = 0) => {
     const sandy = kind === "beach";
     ctx.strokeStyle = sandy ? "#C9B184" : "#4A3E2C";
     ctx.lineWidth = 46;
     ctx.beginPath();
-    ctx.moveTo(0, y);
+    ctx.moveTo(fromX, y);
     ctx.bezierCurveTo(MAP_W * 0.3, y - 90, MAP_W * 0.7, y + 90, MAP_W, y);
     ctx.stroke();
     // Two wheel ruts where wheels have packed the ground down.
@@ -4972,12 +5087,17 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.lineWidth = 7;
     for (const off of [-10, 10]) {
       ctx.beginPath();
-      ctx.moveTo(0, y + off);
+      ctx.moveTo(fromX, y + off);
       ctx.bezierCurveTo(MAP_W * 0.3, y - 90 + off, MAP_W * 0.7, y + 90 + off, MAP_W, y + off);
       ctx.stroke();
     }
   };
   const gapPick = (n: number) => Array.from({ length: n }, (_, i) => (i + 0.3 + rng() * 0.4) / n);
+  // On the beach the road is a trail that starts at the waterline
+  // (the sea fills x 0-260): no road on the water. Everywhere else
+  // the road runs the full width. Both the branch call below and
+  // the clear-band repaint at the end use this start.
+  const roadStartX = kind === "beach" ? 260 : 0;
 
   if (kind === "beach") {
     // Sea, surf, sand, shingle, bluffs with draws, then the fields.
@@ -5016,7 +5136,8 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     hedgerow(ctx, blockers, 1700, 0, 1700, MAP_H, gapPick(2), rng);
     hedgerow(ctx, blockers, 2500, 0, 2500, MAP_H, gapPick(2), rng);
     hedgerow(ctx, blockers, 3300, 0, 3300, MAP_H, gapPick(2), rng);
-    road(MAP_H / 2);
+    // The trail starts at the waterline: no road on the water.
+    road(MAP_H / 2, roadStartX);
     // Concrete pillbox ruins on the bluff.
     for (const py of [MAP_H * 0.32, MAP_H * 0.68]) {
       ctx.fillStyle = "#6A6A62";
@@ -5124,6 +5245,6 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
   const onRoad = (x: number, y: number, r: number) => Math.abs(y - roadYAt(x)) < r + ROAD_HALF;
   blockers = blockers.filter((b) => !onRoad(b.x, b.y, b.r));
   COVERS = COVERS.filter((c) => !onRoad(c.x, c.y, c.r));
-  road(MAP_H / 2);
+  road(MAP_H / 2, roadStartX);
   return { canvas, blockers, covers: COVERS };
 }

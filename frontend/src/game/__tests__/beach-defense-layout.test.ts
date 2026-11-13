@@ -1,10 +1,12 @@
 // @vitest-environment node
 // Josh's beach layout for Overlord, after a 5/5-alive AUTO win in
-// 156s looked too easy: the wave 1 defense sits in two lines. The
-// first 6 MG42 nests and the first 2 mortars are right on the sand
-// at the shoreline (x 350-650, spread in bands along the beach);
-// the remaining 3 MGs and 1 mortar scatter east inland (x 1700+)
-// as guns in depth. The infantry still holds the first trench.
+// 156s looked too easy: the wave 1 defense sits in three lines.
+// The first 6 MG42 nests are at the grassline where the beach
+// meets the grass (x 880-1020, the foot of the dune ridge, spread
+// in bands along the whole beach); the first 2 mortars are right
+// on the sand at the shoreline (x 350-650); the remaining 3 MGs
+// and 1 mortar scatter east inland (x 1700+) as guns in depth.
+// The infantry still holds the first trench.
 import { describe, expect, it } from "vitest";
 
 function stubBrowser() {
@@ -106,24 +108,25 @@ async function makeEngine(variant = "") {
 }
 
 // Spawn snapping can shift a unit a few units off its placed point,
-// so the shore/east split is judged with margin: shore x < 750,
-// east x >= 1650, and nothing in between.
+// so the lines are judged with margin: shoreline x < 750, grassline
+// 820-1120, east x >= 1650, and nothing in the gaps.
 const isShore = (u: U) => u.x < 750;
+const isGrass = (u: U) => u.x >= 820 && u.x < 1120;
 const isEast = (u: U) => u.x >= 1650;
 
-describe("Overlord beach layout: shoreline line + scattered east line", () => {
-  it("fields 9 MG42 nests: 6 at the shoreline, 3 scattered east", async () => {
+describe("Overlord beach layout: grassline, shoreline, scattered east", () => {
+  it("fields 9 MG42 nests: 6 at the grassline, 3 scattered east", async () => {
     const e = await makeEngine();
     const mgs = e.units.filter((u) => u.enemyType === "mg42");
     expect(mgs.length).toBe(9);
-    const shore = mgs.filter(isShore);
+    const grass = mgs.filter(isGrass);
     const east = mgs.filter(isEast);
-    expect(shore.length).toBe(6);
+    expect(grass.length).toBe(6);
     expect(east.length).toBe(3);
-    expect(mgs.filter((u) => !isShore(u) && !isEast(u)).length).toBe(0);
+    expect(mgs.filter((u) => !isGrass(u) && !isEast(u)).length).toBe(0);
     for (const mg of mgs) expect(mg.isStatic).toBe(true);
-    // The shoreline line covers the whole beach, top to bottom.
-    const ys = shore.map((u) => u.y);
+    // The grassline covers the whole beach, top to bottom.
+    const ys = grass.map((u) => u.y);
     expect(Math.min(...ys)).toBeLessThan(300);
     expect(Math.max(...ys)).toBeGreaterThan(750);
   });

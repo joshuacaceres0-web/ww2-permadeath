@@ -4,11 +4,12 @@
 // art style, same clear path for the Sherman.
 import { describe, expect, it } from "vitest";
 
-type Stroke = { lineWidth: number; strokeStyle: string };
+type Stroke = { lineWidth: number; strokeStyle: string; startX: number | null };
 const strokes: Stroke[] = [];
 
 function recordingCtx() {
   const state: Record<string, unknown> = { lineWidth: 1, strokeStyle: "#000000", fillStyle: "#000000" };
+  let pathStartX: number | null = null;
   return new Proxy(
     {},
     {
@@ -18,9 +19,19 @@ function recordingCtx() {
         if (prop === "getImageData") return () => ({ data: new Uint8ClampedArray(4) });
         if (prop === "createLinearGradient" || prop === "createRadialGradient" || prop === "createPattern")
           return () => ({ addColorStop: () => {} });
+        if (prop === "beginPath") {
+          return () => {
+            pathStartX = null;
+          };
+        }
+        if (prop === "moveTo") {
+          return (x: number) => {
+            if (pathStartX === null) pathStartX = x;
+          };
+        }
         if (prop === "stroke") {
           return () => {
-            strokes.push({ lineWidth: state.lineWidth as number, strokeStyle: state.strokeStyle as string });
+            strokes.push({ lineWidth: state.lineWidth as number, strokeStyle: state.strokeStyle as string, startX: pathStartX });
           };
         }
         if (prop in state) return state[prop as string];
@@ -105,5 +116,22 @@ describe("road matches the terrain", () => {
       expect(s.some((t) => t.lineWidth === 7 && t.strokeStyle === "#33261A")).toBe(true);
       expect(s.some((t) => t.lineWidth === 46 && t.strokeStyle === "#C9B184")).toBe(false);
     }
+  });
+
+  it("the beach trail starts at the shoreline, not on the water", async () => {
+    const s = await buildTerrainStrokes("dday");
+    // The sea fills x 0-260. Neither the trail band (46 wide) nor
+    // its ruts (7 wide, sandy colour) may start over the water.
+    const band = s.filter((t) => t.lineWidth === 46);
+    expect(band.length).toBeGreaterThanOrEqual(1);
+    for (const t of band) expect(t.startX).toBeGreaterThanOrEqual(260);
+    const ruts = s.filter((t) => t.lineWidth === 7 && t.strokeStyle === "#A68B5A");
+    expect(ruts.length).toBeGreaterThanOrEqual(2);
+    for (const t of ruts) expect(t.startX).toBeGreaterThanOrEqual(260);
+    // Control: a dirt map's road still runs the full width.
+    const town = await buildTerrainStrokes("town");
+    const townBand = town.filter((t) => t.lineWidth === 46);
+    expect(townBand.length).toBeGreaterThanOrEqual(1);
+    for (const t of townBand) expect(t.startX).toBe(0);
   });
 });
