@@ -39,10 +39,12 @@ export default function Battlefield() {
   const [report, setReport] = useState<BattleReport | null>(null);
   const [replay, setReplay] = useState<BattleReplay | null>(null);
   const [showReplay, setShowReplay] = useState(false);
-  // Full-map view: hides every control sitting on top of the map and
-  // zooms the engine out to the whole 4000x1350 map, so the full
-  // battlefield is visible at once. The top bar stays, with a
-  // SHOW CONTROLS button to get back.
+  // Full-map view (Josh, 2026-11-12): a paused look only. It
+  // hides every control sitting on top of the map and zooms
+  // the engine out to the whole 4000x1350 map while the
+  // battle stays paused; BACK TO LEADER resumes into the
+  // camera's hard lock on the team leader. There is no live
+  // free-camera mode.
   const [fullMap, setFullMap] = useState(false);
   const toggleFullMap = () => {
     const next = !fullMap;
@@ -540,8 +542,8 @@ export default function Battlefield() {
               <h3 className="mt-1 font-heading text-xl font-bold text-[#F0F5EB]">{mission.code} — PAUSED</h3>
               <div className="mt-4 flex flex-col gap-2">
                 <Button data-testid="esc-resume" onClick={() => closeEsc(true)}>RESUME</Button>
-                <Button data-testid="esc-fullmap" variant="outline" onClick={() => { toggleFullMap(); closeEsc(true); }}>
-                  {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
+                <Button data-testid="esc-fullmap" variant="outline" onClick={() => { toggleFullMap(); closeEsc(false); }}>
+                  FULL MAP — PAUSED LOOK
                 </Button>
                 <div className="flex items-center justify-between border border-[#2E3628] px-2 py-1.5">
                   <span className="font-mono text-[10px] tracking-wider text-[#8D9A83]">REINFORCE / RADIO</span>
@@ -621,10 +623,10 @@ export default function Battlefield() {
         {fullMap && (
           <button
             data-testid="show-controls-btn"
-            onClick={toggleFullMap}
+            onClick={() => { toggleFullMap(); engineRef.current?.setPaused(false); }}
             className="absolute bottom-3 right-3 z-20 border border-[#4ECDC4] bg-[#0D0F0C]/90 px-3 py-2 font-mono text-[11px] tracking-wider text-[#4ECDC4]"
           >
-            SHOW CONTROLS
+            BACK TO LEADER
           </button>
         )}
 

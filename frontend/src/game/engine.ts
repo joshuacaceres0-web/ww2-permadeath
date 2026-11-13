@@ -1333,6 +1333,42 @@ export class GameEngine {
     this.cam.y = Math.max(0, Math.min(MAP_H - this.viewH, this.cam.y));
   }
 
+  /** The battle camera's lock target (Josh, 2026-11-12): the
+   * team leader. During an intro the lock sits on his landing
+   * spot (his boat grounds there, his parachute comes down
+   * there). When he is down or out, the middle of the men
+   * still on the field — a retreating squad is watched as a
+   * group once its leader is gone. Null only when there is
+   * nobody to watch. */
+  private cameraTarget(): { x: number; y: number } | null {
+    const L = this.leaderUnit();
+    if (this.introT >= 0 && L) return { x: L.landX ?? L.x, y: L.landY ?? L.y };
+    if (L && L.alive && !L.extracted) return { x: L.x, y: L.y };
+    const men = this.units.filter((u) => u.side === "allies" && !u.npc && u.alive);
+    if (men.length) {
+      return {
+        x: men.reduce((s, u) => s + u.x, 0) / men.length,
+        y: men.reduce((s, u) => s + u.y, 0) / men.length,
+      };
+    }
+    return L ? { x: L.x, y: L.y } : null;
+  }
+
+  /** Hard lock (Josh, 2026-11-12): the battle view re-centers
+   * on the lock target every tick, exactly, with no clamp at
+   * the map edges — centered at all times is the rule, so
+   * near an edge the view shows past the battlefield rather
+   * than let the leader drift off-center. One frame snap, no
+   * follow lag. Full map is the only exception, and update()
+   * only lets it live while the battle is paused. */
+  private lockCamera() {
+    if (this.phase !== "battle" || this.fitWholeMap) return;
+    const t = this.cameraTarget();
+    if (!t) return;
+    this.cam.x = t.x - this.viewW / 2;
+    this.cam.y = t.y - this.viewH / 2;
+  }
+
   centerOn(x: number, y: number) {
     this.cam.x = x - this.viewW / 2;
     this.cam.y = y - this.viewH / 2;
@@ -1502,6 +1538,11 @@ export class GameEngine {
 
   /** Camera to a unit (SquadDock card click). */
   focusUnit(id: number) {
+    // In battle this no longer moves the camera: the view is
+    // hard locked to the team leader (Josh, 2026-11-12), and a
+    // squad dock click must not break the lock. Outside battle
+    // it centers as before.
+    if (this.phase === "battle") return;
     const u = this.unitById(id);
     if (u) this.centerOn(u.x, u.y);
   }
@@ -2425,7 +2466,9 @@ export class GameEngine {
       if (allies[idx]) {
         this.takeManualControl();
         this.selected = allies[idx].alive ? [allies[idx].id] : [];
-        if (allies[idx].alive) this.centerOn(allies[idx].x, allies[idx].y);
+        // No centerOn: the battle camera is hard locked to the
+        // team leader (Josh, 2026-11-12) and never jumps to
+        // another man.
         this.aimUnitId = null;
         this.dirty = true;
       }
@@ -2522,7 +2565,9 @@ export class GameEngine {
         return;
       }
       if (Math.hypot(dx, dy) > 10) this.touchPan.moved = true;
-      if (this.touchPan.moved) {
+      if (this.touchPan.moved && this.phase !== "battle") {
+        // Drag pan exists outside battle only: in battle the
+        // camera is hard locked to the leader (Josh, 2026-11-12).
         this.cam.x = this.touchPan.cx - dx / this.view.s;
         this.cam.y = this.touchPan.cy - dy / this.view.s;
         this.clampCam();
@@ -3343,10 +3388,16 @@ export class GameEngine {
 
   private update(dt: number) {
     if (this.phase !== "battle" || this.paused) return;
+    // Full map is a paused look only (Josh, 2026-11-12): the
+    // Esc menu opens it while the battle is paused, and the
+    // moment the battle runs again the view snaps back to the
+    // locked leader view.
+    if (this.fitWholeMap) this.setFitMap(false);
     // The intro runs first and alone: enemies frozen, no combat,
     // no replay frames — the battle starts when it ends.
     if (this.introT >= 0) {
       this.advanceIntro(dt);
+      this.lockCamera();
       this.dirty = true;
       return;
     }
@@ -3564,13 +3615,8 @@ export class GameEngine {
           L.orders = [];
           L.chase = [];
           this.moveToward(L, L.x + (dx / len) * 56, L.y + (dy / len) * 56, dt);
-          // Keep the fight on screen: when the leader walks out
-          // of the middle of the view, the camera follows him.
-          const sx = (L.x - this.cam.x) * this.view.s;
-          const sy = (L.y - this.cam.y) * this.view.s;
-          const vw = this.canvas.clientWidth || 960;
-          const vh = this.canvas.clientHeight || 540;
-          if (sx < vw * 0.18 || sx > vw * 0.82 || sy < vh * 0.18 || sy > vh * 0.82) this.centerOn(L.x, L.y);
+          // The camera does not follow here anymore: it is
+          // hard locked to the leader at the end of update().
         }
       }
     }
@@ -4432,6 +4478,9 @@ export class GameEngine {
     if (this.shake > 0) this.shake = Math.max(0, this.shake - dt * 18);
     this.stepDeaths(dt);
     for (const u of this.units) if (u.shootT && u.shootT > 0) u.shootT -= dt;
+    // The camera settles last, on wherever the leader ended
+    // the tick: hard lock, every tick (Josh, 2026-11-12).
+    this.lockCamera();
   }
 
   private autoTarget(u: Unit): Unit | null {
@@ -5369,19 +5418,19 @@ export class GameEngine {
     if (!this.running) return;
     const dt = Math.min(0.05, (ts - this.last) / 1000);
     this.last = ts;
-    if (this.holdPan.x || this.holdPan.y) {
+    // No free camera in battle (Josh, 2026-11-12): hold pan and
+    // key pan only work outside the battle phase, where there
+    // is no leader to lock to. In battle the camera is hard
+    // locked (see lockCamera in update()).
+    if (this.phase !== "battle" && (this.holdPan.x || this.holdPan.y)) {
       this.cam.x += this.holdPan.x * PAN_SPEED * dt;
       this.cam.y += this.holdPan.y * PAN_SPEED * dt;
       this.clampCam();
     }
-    if (this.keys.size) {
+    if (this.phase !== "battle" && this.keys.size) {
       const k = this.keys;
-      // In a manual battle WASD drives the leader, so only the
-      // arrow keys pan the camera there. Everywhere else WASD
-      // pans as it always did.
-      const wasdPans = !(this.phase === "battle" && !this.autoBattle);
-      const vx = ((wasdPans && k.has("d")) || k.has("arrowright") ? 1 : 0) - ((wasdPans && k.has("a")) || k.has("arrowleft") ? 1 : 0);
-      const vy = ((wasdPans && k.has("s")) || k.has("arrowdown") ? 1 : 0) - ((wasdPans && k.has("w")) || k.has("arrowup") ? 1 : 0);
+      const vx = (k.has("d") || k.has("arrowright") ? 1 : 0) - (k.has("a") || k.has("arrowleft") ? 1 : 0);
+      const vy = (k.has("s") || k.has("arrowdown") ? 1 : 0) - (k.has("w") || k.has("arrowup") ? 1 : 0);
       this.cam.x += vx * PAN_SPEED * dt;
       this.cam.y += vy * PAN_SPEED * dt;
       this.clampCam();
