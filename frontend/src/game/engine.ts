@@ -271,6 +271,10 @@ interface Unit {
    * there until healed above 60%, then rejoins. Set and cleared by
    * the fallback check in update; all NPC allies, every mission. */
   npcFallback?: boolean;
+  /** Prone: dropped flat under heavy fire (suppression 70+).
+   * Harder to hit at range, no protection up close, slower
+   * movement and fire. Footmen only. */
+  prone?: boolean;
   abilityCd: number;
   burst: number;
   burstTimer: number;
@@ -3209,6 +3213,14 @@ export class GameEngine {
       u.suppression = Math.max(0, u.suppression - 9 * dt);
       if (u.suppression >= 55) u.pinned = true;
       else if (u.suppression <= 22) u.pinned = false;
+      // Prone (Josh, 2026-11-12): past pinned, under a real
+      // weight of fire, a footman drops flat and stays down
+      // until the fire slackens. Vehicles and gun nests have
+      // no belly to drop onto.
+      if (!u.vehicle && !u.isStatic) {
+        if (u.suppression >= 70) u.prone = true;
+        else if (u.suppression < 30) u.prone = false;
+      }
       u.abilityCd = Math.max(0, u.abilityCd - dt);
 
       // Morale: pinned men lose nerve fast, heavy suppression wears
@@ -3733,7 +3745,7 @@ export class GameEngine {
         // at 55 and never fired again, while 95% of frontal
         // rounds stopped at the wall — the trench locked both
         // ways and read as frozen (Josh's playtest, 2026-11-12).
-        const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1);
+        const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
       }
@@ -3817,6 +3829,20 @@ export class GameEngine {
             // (0.7x: sustained fire pins a man behind cover, but a
             // single stopped round does not — full strength pinned
             // whole squads in testing and AUTO lost 3 in a row).
+            // Prone (Josh, 2026-11-12): a flat man is a
+            // sliver of a target at range — up to 45% of hits
+            // thwarted at 250+, fading linearly to none at 60,
+            // because up close nobody misses a man on the
+            // ground in front of them.
+            if (!u.vehicle && u.prone) {
+              const shotDist = dist(b.ox, b.oy, u.x, u.y);
+              const proneChance = 0.45 * Math.max(0, Math.min(1, (shotDist - 60) / 190));
+              if (Math.random() < proneChance) {
+                this.puff(b.x, b.y);
+                dead = true;
+                break;
+              }
+            }
             // Foliage concealment (Josh, 2026-11-12): a man
             // standing in trees or bushes is a ghost target.
             // The shooters are firing blindly into the green,
@@ -4089,7 +4115,7 @@ export class GameEngine {
     if (d < 1) return;
     const sx = u.x;
     const sy = u.y;
-    let sp = u.speed * speedMult * (u.pinned ? 0.35 : 1);
+    let sp = u.speed * speedMult * (u.pinned ? 0.35 : 1) * (u.prone ? 0.45 : 1);
     // The beach obstacle belt: picking through the hedgehogs
     // slows the landing force and channels it into the lanes the
     // MGs cover (Josh's suggestion, 2026-11-12). Landing force
@@ -5602,7 +5628,8 @@ export class GameEngine {
     if (!u.alive) {
       const t = u.deathT ?? 1;
       pose = t < 0.22 ? "hit" : t < 0.48 ? "kneel" : "dead";
-    } else if ((u.shootT ?? 0) > 0) pose = u.cover || u.pinned || u.isStatic ? "crouch" : "shoot";
+    } else if (u.prone) pose = "prone";
+    else if ((u.shootT ?? 0) > 0) pose = u.cover || u.pinned || u.isStatic ? "crouch" : "shoot";
     else if (moving) {
       const f = Math.floor(u.walk / 1.6) % 4;
       pose = f === 0 ? "walkA" : f === 2 ? "walkB" : "stand";
@@ -5669,7 +5696,7 @@ export class GameEngine {
 
     // Muzzle flash on the first frames of a shot.
     if ((u.shootT ?? 0) > 0.08 && look.weapon !== "mortar" && look.weapon !== "none") {
-      const crouch = pose === "crouch";
+      const crouch = pose === "crouch" || pose === "prone";
       const reach = look.weapon === "sniper" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
       const wy = look.weapon === "bazooka" ? 4 + (crouch ? 0 : 1) : look.weapon === "flak" ? 6 : 6 + (crouch ? 3 : 0);
       const mx = fx + (flip ? -1 : 1) * (reach - FEET_X + (flip ? 1 : 0)) * PX - (flip ? PX : 0);

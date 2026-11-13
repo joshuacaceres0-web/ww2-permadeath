@@ -8,7 +8,7 @@ export const SPR_W = 16;
 export const SPR_H = 14;
 export const FEET_X = 5;
 
-export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead";
+export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "prone";
 export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none";
 export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer";
 
@@ -45,6 +45,60 @@ export const PAL: Record<string, Palette> = {
 type Px = (x: number, y: number, c: string) => void;
 
 function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
+  if (pose === "prone") {
+    // Flat on his belly, head up on his elbows, weapon aimed
+    // forward. Same horizontal layout as the dead pose, but
+    // alive: helmet high, face up, arms under the gun.
+    for (let x = 0; x <= 1; x++) {
+      px(x, 10, pal.boots);
+      px(x, 11, pal.boots);
+    }
+    for (let x = 1; x <= 5; x++) {
+      px(x, 10, pal.pants);
+      px(x, 11, pal.pantsDark);
+    }
+    for (let x = 5; x <= 10; x++) {
+      for (let y = 9; y <= 11; y++) {
+        let c = y === 11 ? pal.uniDark : pal.uni;
+        if (pal.camo && (x * 7 + y * 3) % 4 === 0) c = pal.camo[(x + y) % pal.camo.length];
+        px(x, y, c);
+      }
+    }
+    px(7, 10, pal.gear); // pack strap across the back
+    px(10, 10, pal.uni); // elbows on the ground
+    px(11, 10, pal.uni);
+    // Head raised at the front.
+    for (let x = 11; x <= 13; x++) px(x, 6, pal.helmetHi);
+    for (let x = 11; x <= 13; x++) px(x, 7, pal.helmet);
+    for (let x = 10; x <= 13; x++) px(x, 8, pal.helmet); // brim
+    px(12, 8, SKIN);
+    px(13, 8, SKIN);
+    px(12, 9, SKIN_D);
+    px(13, 9, SKIN);
+    if (head === "us-medic") {
+      px(12, 6, "#D8D6C8");
+      px(12, 7, "#A0302A");
+    }
+    // The weapon, aimed forward along the ground.
+    if (weapon === "rifle") {
+      for (let x = 11; x <= 15; x++) px(x, 9, x <= 12 ? WOOD : METAL);
+    } else if (weapon === "mg") {
+      for (let x = 11; x <= 15; x++) px(x, 9, METAL);
+      px(14, 10, METAL); // bipod leg
+      px(15, 9, METAL_HI);
+    } else if (weapon === "sniper") {
+      for (let x = 11; x <= 15; x++) px(x, 9, METAL);
+      px(13, 8, METAL); // scope
+    } else if (weapon === "bazooka") {
+      for (let x = 10; x <= 14; x++) {
+        px(x, 8, "#4A5234");
+        px(x, 9, "#3E4A34");
+      }
+    } else if (weapon === "smg" || weapon === "pistol") {
+      for (let x = 11; x <= 13; x++) px(x, 9, METAL);
+    }
+    return;
+  }
   if (pose === "dead") {
     // Lying on his side, weapon dropped.
     for (let x = 0; x <= 2; x++) for (let y = 9; y <= 11; y++) px(x, y, y === 9 ? pal.helmetHi : pal.helmet);
