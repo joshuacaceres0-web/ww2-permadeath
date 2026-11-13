@@ -400,6 +400,8 @@ interface Unit {
   lastShotT?: number;
   /** Engineer at work on a mine this tick: hands busy, no fire. */
   clearing?: boolean;
+  /** Satchel Charge (AT class item): thrown once per battle. */
+  satchelUsed?: boolean;
   /** Prone: dropped flat under heavy fire (suppression 70+).
    * Harder to hit at range, no protection up close, slower
    * movement and fire. Footmen only. */
@@ -1151,6 +1153,8 @@ export class GameEngine {
   private smokeCd = 0;
   /** True once the tank has been called this battle (once per battle). */
   private tankCalled = false;
+  /** Code Book (radioman class item): its one free call spent. */
+  private freeCallUsed = false;
   /** Smoke zones on the map: {x, y, r, t} — t is seconds left. */
   private smokeZones: Array<{ x: number; y: number; r: number; t: number }> = [];
   /** Commander level (1-8) — gates the radio calls, one per level. */
@@ -1330,6 +1334,7 @@ export class GameEngine {
     this.mortarCd = 0;
     this.smokeCd = 0;
     this.tankCalled = false;
+    this.freeCallUsed = false;
     this.smokeZones = [];
     this.commanderLevel = commanderLevel;
     this.reinforcements = 0;
@@ -2205,7 +2210,28 @@ export class GameEngine {
    * radioman's level. No radioman: the full base cost (the call is
    * gated off anyway, so this is only a display number). */
   supportCost(kind: RadioSupportKind): number {
+    // The Code Book (radioman class item): while its one free
+    // call is still in hand, every call prices at zero.
+    if (!this.freeCallUsed && this.livingRadioman()?.equipment.includes("codebook")) return 0;
     return radioCost(RADIO_SUPPORT_COST[kind], this.radiomanLevel());
+  }
+
+  /** Spend the code book's one free call of the battle, if the
+   * living radioman carries it. The frontend asks before it
+   * charges RP: true means this call is covered, charge nothing. */
+  codeBookCovers(): boolean {
+    if (this.freeCallUsed) return false;
+    const rm = this.livingRadioman();
+    if (!rm || !rm.equipment.includes("codebook")) return false;
+    this.freeCallUsed = true;
+    this.pushLog(`${rm.name}'s code book covers the call — no requisition spent.`, "info");
+    this.dirty = true;
+    return true;
+  }
+
+  /** Hand the free call back (the covered call could not fire). */
+  refundFreeCall(): void {
+    this.freeCallUsed = false;
   }
 
   /** What a reinforcement team costs right now, same discount. */
@@ -2586,14 +2612,15 @@ export class GameEngine {
    * fights like a 2nd Platoon man with a 75mm gun, and it is not a
    * soldier — if it is destroyed it leaves no casualty and no
    * Memorial entry. */
-  /** Fresh batteries (Barracks gear): a radioman carrying a
-   * fresh set works the net faster, and every support answer
-   * comes 20% sooner. Read at cast time from the man himself. */
+  /** Fresh batteries and the long range antenna (Barracks
+   * gear): the radioman's own kit shortens every support
+   * answer — 20% for the batteries, 25% for the antenna, and
+   * the two stack. Read at cast time from the man himself. */
   private radioCd(base: number): number {
-    const rm = this.units.find(
-      (x) => x.alive && x.side === "allies" && !x.npc && this.isRadioman(x) && x.equipment.includes("batteries"),
-    );
-    return rm ? Math.round(base * 0.8) : base;
+    const rm = this.livingRadioman();
+    if (!rm) return base;
+    const mult = (rm.equipment.includes("batteries") ? 0.8 : 1) * (rm.equipment.includes("antenna") ? 0.75 : 1);
+    return mult === 1 ? base : Math.round(base * mult);
   }
 
   callTank(): boolean {
@@ -3124,13 +3151,13 @@ export class GameEngine {
       this.projectiles.push({
         x: u.x, y: u.y, sx: u.x, sy: u.y, tx: x, ty: y, t: 0,
         dur: Math.max(0.5, dist(u.x, u.y, x, y) / 380),
-        side: "allies", dmg: 60, aoe: 70, kind: "grenade", sourceType: "grenade",
+        side: "allies", dmg: u.equipment.includes("grenades") ? 85 : 60, aoe: u.equipment.includes("grenades") ? 85 : 70, kind: "grenade", sourceType: "grenade",
         killerId: u.id, smokeT: 0,
       });
-      u.abilityCd = spec.cd;
+      u.abilityCd = spec.cd * (u.equipment.includes("grenades") ? 0.6 : 1);
       this.pushLog(`${u.name} frags the objective.`, "info");
     } else if (u.type === "mg") {
-      u.burst = 16;
+      u.burst = u.equipment.includes("barrel") ? 24 : 16;
       u.burstTimer = 0;
       u.burstTarget = { x, y };
       u.facing = Math.atan2(y - u.y, x - u.x);
@@ -3151,7 +3178,7 @@ export class GameEngine {
       // Cover-only, exactly like the terrain's own sandbags: the
       // shelter lives in the cover roll, and the position draws
       // and wears down like any other sandbag.
-      const bagHp = u.equipment.includes("hbtcap") ? 165 : 110;
+      const bagHp = Math.max(u.equipment.includes("hbtcap") ? 165 : 110, u.equipment.includes("toolroll") ? 150 : 110);
       this.covers.push({ x: px, y: py, r: 15, q: 0.65, q0: 0.65, kind: "sandbag", hp: bagHp, maxHp: bagHp, type: "light" });
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} throws up a sandbag position.`, "info");
@@ -3177,7 +3204,7 @@ export class GameEngine {
       e.clearing = false;
       if (!e.alive || e.broken) continue;
       for (const m of this.mines) {
-        if (m.armed && !m.revealed && dist(e.x, e.y, m.x, m.y) <= ENGINEER_DETECT_RANGE) {
+        if (m.armed && !m.revealed && dist(e.x, e.y, m.x, m.y) <= (e.equipment.includes("probekit") ? 120 : ENGINEER_DETECT_RANGE)) {
           m.revealed = true;
         }
       }
@@ -3195,7 +3222,7 @@ export class GameEngine {
         e.clearing = true;
         if (e.movedT !== this.elapsed) {
           work.clearT = (work.clearT ?? 0) + dt;
-          if (work.clearT >= ENGINEER_CLEAR_SECONDS) {
+          if (work.clearT >= (e.equipment.includes("probekit") ? 2.5 : ENGINEER_CLEAR_SECONDS)) {
             work.armed = false;
             work.cleared = true;
             work.clearT = 0;
@@ -3281,6 +3308,13 @@ export class GameEngine {
     const before = best.hp;
     best.hp = Math.min(best.maxHp, best.hp + 50 * u.healMult);
     u.healed += best.hp - before;
+    // Morphine Syrettes (medic class item): the patched man
+    // comes back steadier — morale up, and a broken man who
+    // was about to run is steadied where he stands.
+    if (u.equipment.includes("morphine")) {
+      if (best.broken && best.willFlee) best.morale = Math.max(best.morale, 65);
+      else best.morale = Math.min(100, best.morale + 20);
+    }
     this.healFx(best.x, best.y);
     u.abilityCd = 10;
     if (u.side === "allies") this.pushLog(`${u.name} patches up ${best.name}.`, "info");
@@ -3308,6 +3342,11 @@ export class GameEngine {
       const before = best.hp;
       best.hp = Math.min(best.maxHp, best.hp + 50 * u.healMult);
       u.healed += best.hp - before;
+      // Morphine Syrettes: the patched man comes back steadier.
+      if (u.equipment.includes("morphine")) {
+        if (best.broken && best.willFlee) best.morale = Math.max(best.morale, 65);
+        else best.morale = Math.min(100, best.morale + 20);
+      }
       this.healFx(best.x, best.y);
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} patches up ${best.name}.`, "info");
@@ -3356,7 +3395,7 @@ export class GameEngine {
         this.pushLog(`${u.name}: nothing in sight to mark.`, "info");
         return;
       }
-      best.markedUntil = this.elapsed + 10;
+      best.markedUntil = this.elapsed + (u.equipment.includes("flares") ? 16 : 10);
       best.markedAmbush = this.inFoliage(u);
       u.abilityCd = spec.cd;
       this.pushLog(
@@ -3502,6 +3541,12 @@ export class GameEngine {
    * His own spotting is unaffected — that is the whole point of
    * him. True for the allied Recon and the axis Beobachter
    * alike. */
+  /** How hard a hidden man is to pick out: the usual fraction,
+   * deeper still for a Recon under his camouflage net. */
+  private hideFactor(u: Unit): number {
+    return u.equipment.includes("camonet") ? 0.35 : RECON_SPOT_FACTOR;
+  }
+
   reconHidden(u: Unit): boolean {
     const spotterClass = (u.side === "allies" && u.type === "recon") || u.enemyType === "spotter";
     if (!spotterClass || !u.alive) return false;
@@ -3599,7 +3644,7 @@ export class GameEngine {
       const has = (id: string) => gear.includes(id);
       const gun = GUN_DEFS[gear.find((id) => id in GUN_DEFS) ?? ""];
       const baseMag = gun ? gun.magSize : spec.magSize;
-      const magSize = baseMag >= 5 && has("ammo") ? Math.ceil(baseMag * 1.5) : baseMag;
+      const magSize = Math.ceil(baseMag * (has("bearerbox") ? 1.5 : 1) * (baseMag >= 5 && has("ammo") ? 1.5 : 1));
       const buildHp = spec.hp + mb.hp + 12 * (upg.toughness ?? 0) + (has("parahelmet") ? 12 : 0);
       this.units.push({
         id: this.nextId++,
@@ -3622,13 +3667,13 @@ export class GameEngine {
         hp: buildHp,
         maxHp: buildHp,
         speed: spec.speed * (1 + 0.06 * (upg.legs ?? 0)),
-        range: gun ? gun.range : spec.range,
+        range: (gun ? gun.range : spec.range) + (has("matchammo") ? 40 : 0),
         vision: spec.vision + mb.vision + 25 * (upg.eyes ?? 0) + (has("binoculars") ? 60 : 0),
         dmg: gun ? gun.dmg : spec.dmg,
         fireInterval: (gun ? gun.fireInterval : spec.fireInterval) * bonus.fireMult * mb.fireMult,
-        spread: (gun ? gun.spread : spec.spread) * bonus.spreadMult * mb.spreadMult,
+        spread: (gun ? gun.spread : spec.spread) * bonus.spreadMult * mb.spreadMult * (has("matchammo") ? 0.7 : 1),
         dmgMult: mb.dmgMult * (1 + 0.08 * (upg.marksmanship ?? 0)),
-        healMult: mb.healMult * (has("aidbag") ? 1.3 : 1),
+        healMult: mb.healMult * (has("aidbag") ? 1.3 : 1) * (has("surgical") ? 1.5 : 1),
         bulletSpeed: gun ? gun.bulletSpeed : spec.bulletSpeed,
         isStatic: false,
         vehicle: false, counterAttack: false, aggressive: false,
@@ -3646,7 +3691,7 @@ export class GameEngine {
         magSize,
         mag: magSize,
         reloadT: 0,
-        reloadTime: (gun ? gun.reloadTime : spec.reloadTime) * Math.pow(0.88, upg.steady ?? 0),
+        reloadTime: (gun ? gun.reloadTime : spec.reloadTime) * Math.pow(0.88, upg.steady ?? 0) * (has("barrel") ? 0.7 : 1),
         reloadTotal: 0,
         altMagSize: spec.sidearm?.magSize ?? 0,
         altMag: spec.sidearm?.magSize ?? 0,
@@ -3659,7 +3704,7 @@ export class GameEngine {
         moraleRegenMul: (has("canteen") ? 1.6 : 1) * (has("jeepcap") ? 1.3 : 1),
         coverMul: has("entrench") ? 1.15 : 1,
         suppressMul: has("pilecap") ? 0.85 : 1,
-        spotMul: has("nethelmet") ? 0.85 : 1,
+        spotMul: (has("nethelmet") ? 0.85 : 1) * (has("ghillie") ? 0.7 : 1),
         hasDressing: has("dressing"),
         turret: 0,
         kills: 0,
@@ -4799,7 +4844,7 @@ export class GameEngine {
           const spotFactor = !isEnemyPrey
             ? 1
             : this.reconHidden(prey)
-              ? RECON_SPOT_FACTOR
+              ? this.hideFactor(prey)
               : this.concealedTarget(prey)
                 ? CONCEAL_SPOT_FACTOR
                 : 1;
@@ -5193,7 +5238,10 @@ export class GameEngine {
           const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
           u.cooldown = interval;
           u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
-          this.spawnBullet(u, ms.x, ms.y, u.spread * (u.pinned ? 1.5 : 1), u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
+          if (!this.trySatchel(u, ms.x, ms.y)) {
+            const close = u.equipment.includes("bayonet") && clickD <= 70 ? 1.35 : 1;
+            this.spawnBullet(u, ms.x, ms.y, u.spread * (u.pinned ? 1.5 : 1), u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14);
+          }
         }
       }
 
@@ -5458,7 +5506,7 @@ export class GameEngine {
       // nobody else's. A hidden spotter (0.55x) is harder to
       // pick out than a merely prone or in-foliage man (0.7x).
       const cap = (this.reconHidden(e)
-        ? range * RECON_SPOT_FACTOR
+        ? range * this.hideFactor(e)
         : this.concealedTarget(e)
           ? range * CONCEAL_SPOT_FACTOR
           : range * 1.05) * e.spotMul;
@@ -5802,8 +5850,36 @@ export class GameEngine {
     }
   }
 
+  /** The Satchel Charge (AT class item): once a battle, an AT
+   * man close to an enemy vehicle hurls the satchel instead of
+   * firing a rocket — one heavy explosive, gone for the battle
+   * (the item itself stays his until he falls). Shared by the
+   * auto fire branch and the leader's manual clicks. */
+  private trySatchel(u: Unit, tx: number, ty: number): boolean {
+    if (u.type !== "at" || u.satchelUsed || !u.equipment.includes("satchel")) return false;
+    const victim = this.units.find(
+      (v) => v.alive && v.vehicle && v.side !== u.side && dist(tx, ty, v.x, v.y) <= 45,
+    );
+    if (!victim || dist(u.x, u.y, victim.x, victim.y) > 170) return false;
+    u.satchelUsed = true;
+    u.shootT = 0.16;
+    u.lastShotT = this.elapsed;
+    this.projectiles.push({
+      x: u.x, y: u.y, sx: u.x, sy: u.y, tx: victim.x, ty: victim.y, t: 0,
+      dur: Math.max(0.5, dist(u.x, u.y, victim.x, victim.y) / 380),
+      side: u.side, dmg: 260, aoe: 70, kind: "grenade", sourceType: "grenade",
+      killerId: u.id, smokeT: 0,
+    });
+    this.pushLog(`${u.name} hurls the satchel charge!`, "info");
+    this.dirty = true;
+    return true;
+  }
+
   private fireAt(u: Unit, target: Unit, moving: boolean) {
     const lead = moving ? 1.6 : u.pinned ? 1.5 : 1;
+    // A satchel man meeting armour up close throws the charge,
+    // not a rocket (once a battle).
+    if (target.vehicle && this.trySatchel(u, target.x, target.y)) return;
     // A man with a sidearm works it on infantry (Josh,
     // 2026-11-13): the AT man's bazooka only ever fires at
     // vehicles; a man on foot gets the trench gun, on the
@@ -5817,7 +5893,10 @@ export class GameEngine {
     }
     // A deployed bipod shoots tighter (Josh, 2026-11-13).
     const bipod = this.deployedBipod(u) ? MG_BIPOD_SPREAD_MULT : 1;
-    this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod, u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
+    // Fixed Bayonet (rifleman class item): inside 70 his fire
+    // hits 35% harder — the steel makes a man bold up close.
+    const close = u.equipment.includes("bayonet") && dist(u.x, u.y, target.x, target.y) <= 70 ? 1.35 : 1;
+    this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod, u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14);
   }
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number, alt = false, bulletSpeed?: number, source?: string) {
@@ -5956,6 +6035,12 @@ export class GameEngine {
     const armor = this.armorClass(u);
     if (armor === "tank" && !ARMOR_SOURCES.has(sourceType)) return;
     if (armor === "halftrack" && !ARMOR_SOURCES.has(sourceType)) dmg = Math.floor(dmg / 2);
+    // Shaped Charge Rounds (AT class item): his rockets bite
+    // armour 40% harder, against any vehicle he hits.
+    if (u.vehicle && sourceType === "at" && killerId != null) {
+      const killer = this.unitById(killerId);
+      if (killer && killer.equipment.includes("shaped")) dmg *= 1.4;
+    }
     // A Recon's mark: the squad's fire on a marked man runs
     // heavier, and the first hit on an ambush mark springs it
     // hardest of all, once.
@@ -7552,6 +7637,107 @@ export class GameEngine {
       if (gear.includes("batteries") && this.isRadioman(u)) {
         ctx.fillStyle = "#B8BFA8";
         ctx.fillRect(fx + (flip ? 4 : -4) * PX - PX, top + 6 * PX, PX * 2, PX);
+      }
+      // Class items (Josh, 2026-11-13): each drawn on its man
+      // like the rest of his carried gear.
+      if (gear.includes("bayonet")) {
+        ctx.fillStyle = "#C8CCC0";
+        ctx.fillRect(fx + fdir * 6 * PX - PX, top + 6 * PX, PX * 2, PX);
+      }
+      if (gear.includes("grenades")) {
+        ctx.fillStyle = "#4A5232";
+        ctx.fillRect(fx + fdir * 2 * PX - PX, top + 7 * PX, PX, PX * 2);
+        ctx.fillRect(fx + fdir * 3 * PX - PX, top + 8 * PX, PX, PX * 2);
+        ctx.fillStyle = "#2E3324";
+        ctx.fillRect(fx + fdir * 2 * PX - PX, top + 7 * PX, PX, PX);
+        ctx.fillRect(fx + fdir * 3 * PX - PX, top + 8 * PX, PX, PX);
+      }
+      if (gear.includes("surgical")) {
+        ctx.fillStyle = "#E8E6DA";
+        ctx.fillRect(fx + fdir * 4 * PX, top + 8 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#A0302A";
+        ctx.fillRect(fx + fdir * 4 * PX, top + 8 * PX, PX, PX);
+      }
+      if (gear.includes("morphine")) {
+        ctx.fillStyle = "#D8D6C8";
+        ctx.fillRect(fx - fdir * 3 * PX, top + 10 * PX, PX * 2, PX);
+        ctx.fillStyle = "#A0302A";
+        ctx.fillRect(fx - fdir * 3 * PX, top + 10 * PX, PX, PX);
+      }
+      if (gear.includes("barrel")) {
+        ctx.fillStyle = "#3E3E38";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 5 * PX, PX * 3, PX);
+        ctx.fillStyle = "#5E6058";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 5 * PX, PX, PX);
+      }
+      if (gear.includes("bearerbox")) {
+        ctx.fillStyle = "#5E4630";
+        ctx.fillRect(fx + fdir * 3 * PX, top + 10 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#B8BFA8";
+        ctx.fillRect(fx + fdir * 3 * PX, top + 10 * PX, PX * 2, PX);
+      }
+      if (gear.includes("ghillie")) {
+        ctx.fillStyle = "#4A5232";
+        ctx.fillRect(fx - 2 * PX, top + 2 * PX, PX, PX);
+        ctx.fillRect(fx + PX, top + 3 * PX, PX, PX);
+        ctx.fillRect(fx - 3 * PX, top + 5 * PX, PX, PX);
+        ctx.fillStyle = "#6B7A3A";
+        ctx.fillRect(fx, top + 2 * PX, PX, PX);
+        ctx.fillRect(fx + 2 * PX, top + 4 * PX, PX, PX);
+        ctx.fillRect(fx - PX, top + 5 * PX, PX, PX);
+      }
+      if (gear.includes("matchammo")) {
+        ctx.fillStyle = "#8A6D2F";
+        ctx.fillRect(fx + fdir * 2 * PX - PX, top + 6 * PX, PX, PX);
+        ctx.fillRect(fx - PX, top + 7 * PX, PX, PX);
+        ctx.fillRect(fx - fdir * 2 * PX - PX, top + 8 * PX, PX, PX);
+      }
+      if (gear.includes("shaped")) {
+        ctx.fillStyle = "#A0522D";
+        ctx.fillRect(fx - fdir * 4 * PX, top + 5 * PX, PX, PX * 2);
+      }
+      if (gear.includes("satchel")) {
+        ctx.fillStyle = "#4C4A38";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 6 * PX, PX * 3, PX * 3);
+        ctx.fillStyle = "#2E2C20";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 7 * PX, PX * 3, PX);
+      }
+      if (gear.includes("antenna") && this.isRadioman(u)) {
+        ctx.fillStyle = "#1E1E14";
+        ctx.fillRect(fx + (flip ? 4 : -4) * PX - PX, top + 2 * PX, PX, PX * 4);
+        ctx.fillStyle = "#8B8F82";
+        ctx.fillRect(fx + (flip ? 4 : -4) * PX - PX, top + PX, PX, PX);
+      }
+      if (gear.includes("codebook")) {
+        ctx.fillStyle = "#5A2E2E";
+        ctx.fillRect(fx + fdir * 3 * PX, top + 10 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#D8D6C8";
+        ctx.fillRect(fx + fdir * 3 * PX + PX, top + 10 * PX, PX, PX);
+      }
+      if (gear.includes("camonet")) {
+        ctx.fillStyle = "#2E3324";
+        ctx.fillRect(fx - 2 * PX, top + 2 * PX, PX * 4, PX);
+        ctx.fillRect(fx - PX, top + 3 * PX, PX, PX);
+        ctx.fillStyle = "#4A5232";
+        ctx.fillRect(fx + PX, top + 3 * PX, PX, PX);
+        ctx.fillRect(fx - 2 * PX, top + 4 * PX, PX, PX);
+      }
+      if (gear.includes("flares")) {
+        ctx.fillStyle = "#A0302A";
+        ctx.fillRect(fx + fdir * 4 * PX, top + 9 * PX, PX, PX * 2);
+        ctx.fillStyle = "#D8D6C8";
+        ctx.fillRect(fx + fdir * 4 * PX, top + 9 * PX, PX, PX);
+      }
+      if (gear.includes("probekit")) {
+        ctx.fillStyle = "#8B8F82";
+        ctx.fillRect(fx + fdir * 5 * PX, top + 8 * PX, PX, PX);
+        ctx.fillRect(fx + fdir * 6 * PX, top + 9 * PX, PX, PX);
+        ctx.fillStyle = "#C0392B";
+        ctx.fillRect(fx + fdir * 6 * PX, top + 8 * PX, PX, PX);
+      }
+      if (gear.includes("toolroll")) {
+        ctx.fillStyle = "#6B5A34";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 6 * PX, PX * 3, PX);
       }
     }
 

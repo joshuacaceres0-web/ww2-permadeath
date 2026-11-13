@@ -68,6 +68,27 @@ ITEMS = {
     "hbtcap": {"price": 75, "restrict": ["engineer"], "weight": 1},
     # Off-duty wear: cheap, and lost like everything else.
     "garrisoncap": {"price": 25, "restrict": None, "weight": 2},
+    # Class items (Josh, 2026-11-13): two per hireable class,
+    # locked to that class alone, priced with the rare pieces.
+    # Their effects live in the engine, tied to each class's
+    # real systems (the rifleman's frag, the MG's barrage,
+    # the engineer's mine work, and so on).
+    "bayonet": {"price": 75, "restrict": ["rifleman"], "weight": 1},
+    "grenades": {"price": 75, "restrict": ["rifleman"], "weight": 1},
+    "surgical": {"price": 75, "restrict": ["medic"], "weight": 1},
+    "morphine": {"price": 75, "restrict": ["medic"], "weight": 1},
+    "barrel": {"price": 75, "restrict": ["mg"], "weight": 1},
+    "bearerbox": {"price": 75, "restrict": ["mg"], "weight": 1},
+    "ghillie": {"price": 75, "restrict": ["sniper"], "weight": 1},
+    "matchammo": {"price": 75, "restrict": ["sniper"], "weight": 1},
+    "shaped": {"price": 75, "restrict": ["at"], "weight": 1},
+    "satchel": {"price": 75, "restrict": ["at"], "weight": 1},
+    "antenna": {"price": 75, "restrict": ["radioman"], "weight": 1},
+    "codebook": {"price": 75, "restrict": ["radioman"], "weight": 1},
+    "camonet": {"price": 75, "restrict": ["recon"], "weight": 1},
+    "flares": {"price": 75, "restrict": ["recon"], "weight": 1},
+    "probekit": {"price": 75, "restrict": ["engineer"], "weight": 1},
+    "toolroll": {"price": 75, "restrict": ["engineer"], "weight": 1},
     # Guns: LOOT ONLY (price 0 = never sold; the shop refuses
     # them). Weights keep them uncommon inside an item roll,
     # and the rarest gun (the FG42) is the rarest find of all.

@@ -532,6 +532,27 @@ export const ITEM_DEFS: ItemDef[] = [
   { id: "trench97", label: "M97 Trench Gun", blurb: "The trench broom as a man's main gun: devastating inside a room's length, nothing beyond it.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 0.7, kind: "gun" },
   { id: "bar", label: "BAR M1918", blurb: "The automatic rifle: long bursts at rifle ranges, and a slow, heavy reload.", price: 0, restrict: ["mg"], weight: 0.5, kind: "gun" },
   { id: "fg42", label: "Captured FG42", blurb: "The paratroopers' prize: full power automatic fire at rifle reach. The rarest find in the war.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 0.3, kind: "gun" },
+  // Class items (Josh, 2026-11-13): two per hireable class,
+  // locked to that class alone, each tied to the job the class
+  // does in battle. They share the same two equip slots as
+  // everything else: gear, headgear, guns, class pieces, one
+  // pool of two. Prices and weights mirror the backend.
+  { id: "bayonet", label: "Fixed Bayonet", blurb: "Fixed steel: inside 70 his shots hit 35% harder.", price: 75, restrict: ["rifleman"], weight: 1, kind: "gear" },
+  { id: "grenades", label: "Grenade Bandolier", blurb: "A bandolier of frags: his grenade hits harder and wider, and the next one comes 40% sooner.", price: 75, restrict: ["rifleman"], weight: 1, kind: "gear" },
+  { id: "surgical", label: "Surgical Kit", blurb: "A real surgical kit: his healing is half again as strong.", price: 75, restrict: ["medic"], weight: 1, kind: "gear" },
+  { id: "morphine", label: "Morphine Syrettes", blurb: "Syrettes in the aid pouch: a man he patches up gains 20 morale, and a broken man he treats steadies.", price: 75, restrict: ["medic"], weight: 1, kind: "gear" },
+  { id: "barrel", label: "Spare Barrel", blurb: "Swapped hot under fire: his barrage runs 24 rounds and his belt reloads 30% faster.", price: 75, restrict: ["mg"], weight: 1, kind: "gear" },
+  { id: "bearerbox", label: "Ammo Bearer Box", blurb: "An ammo bearer's box at his hip: his belt holds half again as much.", price: 75, restrict: ["mg"], weight: 1, kind: "gear" },
+  { id: "ghillie", label: "Ghillie Wrap", blurb: "A full ghillie wrap: the enemy picks him up at 30% shorter range again.", price: 75, restrict: ["sniper"], weight: 1, kind: "gear" },
+  { id: "matchammo", label: "Match Ammunition", blurb: "Hand loaded match rounds: +40 range, and his shots group a third tighter.", price: 75, restrict: ["sniper"], weight: 1, kind: "gear" },
+  { id: "shaped", label: "Shaped Charge Rounds", blurb: "Shaped charge warheads: his rockets bite armor 40% harder.", price: 75, restrict: ["at"], weight: 1, kind: "gear" },
+  { id: "satchel", label: "Satchel Charge", blurb: "Once a battle, close to an enemy vehicle, he throws the satchel instead of a rocket: 260 damage in one bang.", price: 75, restrict: ["at"], weight: 1, kind: "gear" },
+  { id: "antenna", label: "Long Range Antenna", blurb: "The tall antenna: support answers come 25% sooner.", price: 75, restrict: ["radioman"], weight: 1, kind: "gear" },
+  { id: "codebook", label: "Code Book", blurb: "The squad code book: the first paid radio call of every battle costs nothing.", price: 75, restrict: ["radioman"], weight: 1, kind: "gear" },
+  { id: "camonet", label: "Camouflage Net", blurb: "A net over his hide: in foliage he is spotted at barely a third of the usual range.", price: 75, restrict: ["recon"], weight: 1, kind: "gear" },
+  { id: "flares", label: "Signal Flares", blurb: "His marks burn longer: Mark Target lasts 16 seconds instead of 10.", price: 75, restrict: ["recon"], weight: 1, kind: "gear" },
+  { id: "probekit", label: "Mine Probe Kit", blurb: "Probes and flags: he finds mines at 120 instead of 70, and clears them in 2.5 seconds.", price: 75, restrict: ["engineer"], weight: 1, kind: "gear" },
+  { id: "toolroll", label: "Tool Roll", blurb: "A full tool roll: the cover he digs stands at 150 health.", price: 75, restrict: ["engineer"], weight: 1, kind: "gear" },
 ];
 
 /** Looted guns (Josh, 2026-11-13): found, never sold, and a
@@ -562,6 +583,13 @@ export const GUN_DEFS: Record<string, GunDef> = {
   fg42: { dmg: 14, range: 330, magSize: 20, reloadTime: 2.6, fireInterval: 0.12, spread: 0.05, bulletSpeed: 760, sprite: "fg42" },
 };
 export const ITEM_BY_ID: Record<string, ItemDef> = Object.fromEntries(ITEM_DEFS.map((d) => [d.id, d]));
+
+/** The class-locked items: exactly one class may carry each. */
+export const CLASS_ITEM_IDS = new Set([
+  "bayonet", "grenades", "surgical", "morphine", "barrel", "bearerbox",
+  "ghillie", "matchammo", "shaped", "satchel", "antenna", "codebook",
+  "camonet", "flares", "probekit", "toolroll",
+]);
 
 /** The weighted stores roll for a battlefield crate, mirroring
  * the backend's victory-award roll (commons 3, the rest 1-2). */

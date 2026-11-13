@@ -9,7 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
-import { EQUIP_SLOTS, GUN_DEFS, ITEM_BY_ID, ITEM_DEFS, RANKS, UNIT_TYPES, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS, isCowardQuirk, levelBonus } from "@/game/data";
+import { CLASS_ITEM_IDS, EQUIP_SLOTS, GUN_DEFS, ITEM_BY_ID, ITEM_DEFS, RANKS, UNIT_TYPES, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS, isCowardQuirk, levelBonus } from "@/game/data";
 
 const gunLine = (id: string) => {
   const g = GUN_DEFS[id];
@@ -266,8 +266,12 @@ export default function Barracks() {
                 <div key={d.id} className="flex flex-col border border-[#2E3628] bg-[#22271E] p-2.5" data-testid={`store-item-${d.id}`}>
                   <div className="flex items-start justify-between gap-2">
                     <p className="font-mono text-xs font-semibold text-[#EDEDE2]">{d.label}</p>
-                    <Badge variant="outline" className="shrink-0 border-[#5C4A1E] font-mono text-[9px] text-[#E5A93C]">
-                      {d.kind === "gun" ? "GUN" : d.kind === "headgear" ? "HEADGEAR" : "GEAR"}
+                    <Badge
+                      variant="outline"
+                      className={`shrink-0 font-mono text-[9px] ${CLASS_ITEM_IDS.has(d.id) ? "border-[#3E5A74] text-[#7FB2D9]" : "border-[#5C4A1E] text-[#E5A93C]"}`}
+                      data-testid={CLASS_ITEM_IDS.has(d.id) ? `class-lock-${d.id}` : undefined}
+                    >
+                      {d.kind === "gun" ? "GUN" : d.kind === "headgear" ? "HEADGEAR" : CLASS_ITEM_IDS.has(d.id) ? `${UNIT_TYPES[d.restrict![0]].label.toUpperCase()} CLASS` : "GEAR"}
                     </Badge>
                   </div>
                   <p className="mt-1 flex-1 font-mono text-[10px] leading-relaxed text-[#A2B29A]">{d.blurb}</p>

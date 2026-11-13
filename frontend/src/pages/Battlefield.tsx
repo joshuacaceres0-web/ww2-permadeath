@@ -183,18 +183,24 @@ export default function Battlefield() {
   // discounted RP on the backend, then fire the call. The backend is
   // the money — it checks the radio is up and deducts the RP — and
   // the engine is the rules (level, cooldown, once-per-battle).
+  // Fire a support call in the engine; shared by the paid path
+  // and the code book's free one.
+  const fireSupport = (kind: RadioSupportKind): boolean => {
+    const e = engineRef.current;
+    if (!e) return false;
+    if (kind === "artillery") return e.callArtillery();
+    if (kind === "supply") return e.callSupplyDrop();
+    if (kind === "recon") return e.callRecon();
+    if (kind === "mortar") return e.callMortarStrike();
+    if (kind === "smoke") return e.callSmokeScreen();
+    return e.callTank();
+  };
+
   const radioSupport = useMutation({
     mutationFn: (kind: RadioSupportKind) =>
       apiPost<{ kind: string; cost: number; requisition: number }>("/battle/radio-support", { mission_id: mission?.id, kind }),
     onSuccess: (res) => {
-      const e = engineRef.current;
-      if (!e) return;
-      if (res.kind === "artillery") e.callArtillery();
-      else if (res.kind === "supply") e.callSupplyDrop();
-      else if (res.kind === "recon") e.callRecon();
-      else if (res.kind === "mortar") e.callMortarStrike();
-      else if (res.kind === "smoke") e.callSmokeScreen();
-      else e.callTank();
+      fireSupport(res.kind as RadioSupportKind);
       qc.setQueryData<GameState>(["state"], (old) => (old ? { ...old, requisition: res.requisition } : old));
       toast.success(`${res.kind} called in — ${res.cost} RP spent (${res.requisition} RP left)`);
     },
@@ -204,6 +210,15 @@ export default function Battlefield() {
   const callSupport = (kind: RadioSupportKind) => {
     const e = engineRef.current;
     if (!e || !e.canSupport(kind)) return;
+    // The Code Book (radioman class item): the first paid call
+    // of the battle is covered — no backend charge at all. If
+    // the covered call cannot fire after all, the book keeps
+    // its page for the next one.
+    if (e.codeBookCovers()) {
+      if (fireSupport(kind)) toast.success(`${kind} called in — the code book covered it (0 RP)`);
+      else e.refundFreeCall();
+      return;
+    }
     if ((state?.requisition ?? 0) < (hud?.supportCost?.[kind] ?? 0)) return;
     radioSupport.mutate(kind);
   };

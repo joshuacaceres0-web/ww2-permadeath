@@ -277,3 +277,48 @@ def test_fallen_man_takes_his_gun_out_of_the_game(client: httpx.Client):
     assert "thompson" in result["gear_lost"], result
     after = _state(client)["inventory"].get("thompson", 0)
     assert after == before - 1, "the equipped gun left stores when issued and never came back"
+
+
+
+def test_class_items_refuse_the_wrong_class(client: httpx.Client):
+    """Class items (Josh, 2026-11-13): locked to their class,
+    refused on the wrong man with the reason named — never a
+    silent failure. The restriction is checked before stores,
+    so the refusal reads the same whether or not one is owned."""
+    # Top the squad's RP up so the buy below is never the story.
+    frank = _man(client, "Frank Hayes")
+    _file_battle(client, "barracks-class-0", victory=True,
+                 survivors=[{"soldier_id": frank["id"], "kills": 5}])
+    chester = _man(client, "Chester Pruitt")  # medic
+    r = client.post("/squad/equip", json={"soldier_id": chester["id"], "item": "bayonet"})
+    assert r.status_code == 400 and "rifleman" in r.json()["detail"], r.text
+    r = client.post("/squad/equip", json={"soldier_id": frank["id"], "item": "surgical"})
+    assert r.status_code == 400 and "medic" in r.json()["detail"], r.text
+    # The right class takes it.
+    leroy = _man(client, "Leroy Novak")  # rifleman
+    assert client.post("/inventory/buy", json={"item": "bayonet"}).status_code == 200
+    r = client.post("/squad/equip", json={"soldier_id": leroy["id"], "item": "bayonet"})
+    assert r.status_code == 200, r.text
+    assert "bayonet" in r.json()["equipment"]
+
+
+def test_class_item_loot_lands_and_dies_with_its_man(client: httpx.Client):
+    """A looted class item lands in stores like any item, and
+    the death rule covers it exactly: Leroy falls carrying the
+    bayonet from the test above and it is lost with him."""
+    leroy = _man(client, "Leroy Novak")
+    result = _file_battle(
+        client, "barracks-class-1", victory=False,
+        survivors=[{"soldier_id": leroy["id"], "kills": 0}],
+        loot_item="toolroll",
+    )
+    assert ("toolroll", "loot") in {(g["item"], g["source"]) for g in result["items_gained"]}
+    assert _state(client)["inventory"].get("toolroll", 0) >= 1
+
+    bayonets_before = _state(client)["inventory"].get("bayonet", 0)
+    result = _file_battle(
+        client, "barracks-class-2", victory=False,
+        fallen=[{"soldier_id": leroy["id"], "kills": 2, "cause": "rifle fire"}],
+    )
+    assert "bayonet" in result["gear_lost"], result
+    assert _state(client)["inventory"].get("bayonet", 0) == bayonets_before
