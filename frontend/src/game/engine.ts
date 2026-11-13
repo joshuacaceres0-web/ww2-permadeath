@@ -779,10 +779,11 @@ export class GameEngine {
   /** Beach only: the hedgehog blockers, cached for the obstacle
    * belt slowdown in moveToward. */
   private hedgehogs: Blocker[] = [];
-  /** Beach only: Tellermines in the sand (x 300-780), laid in
-   * setup. An armed mine under a landing-force man's feet goes
-   * off once. Drawn small and dark — you find them by stepping
-   * on them, or by watching where the sand is marked. */
+  /** Tellermines, laid in setup: in the beach sand (x 300-780)
+   * and in the airborne landing fields (x 480-1560). An armed
+   * mine under an allied man's feet goes off once; the axis
+   * never triggers its own fields. Drawn small and dark — you
+   * find them by stepping on them, or by spotting the marks. */
   private mines: { x: number; y: number; armed: boolean }[] = [];
   private corpses: Corpse[] = [];
   private speed = 1; // Settings: game speed multiplier
@@ -1035,6 +1036,20 @@ export class GameEngine {
         const my = 60 + rng() * (MAP_H - 120);
         if (Math.abs(my - roadYAt(mx)) < 46) continue;
         if (this.hedgehogs.some((h) => dist(mx, my, h.x, h.y) < 34)) continue;
+        if (this.mines.some((m) => dist(mx, my, m.x, m.y) < 52)) continue;
+        this.mines.push({ x: mx, y: my, armed: true });
+      }
+    } else if (kind === "airborne") {
+      // Mines for the airborne fields too (Josh: both missions,
+      // 2026-11-12): anti-landing mines sown in the fields around
+      // the drop zone, x 480-1560, that the paratroopers cross to
+      // reach their ambush positions. The road stays clear, so
+      // the convoy still rolls, and the convoy and its escort
+      // never trigger them — same rule as the beach.
+      for (let i = 0; i < 60 && this.mines.length < 18; i++) {
+        const mx = 480 + rng() * 1080;
+        const my = 60 + rng() * (MAP_H - 120);
+        if (Math.abs(my - roadYAt(mx)) < 46) continue;
         if (this.mines.some((m) => dist(mx, my, m.x, m.y) < 52)) continue;
         this.mines.push({ x: mx, y: my, armed: true });
       }
@@ -3389,8 +3404,16 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && !u.broken && this.los(u, focus)) {
-        const interval = u.fireInterval * aura;
+      } else if (u.cooldown <= 0 && focus && d <= u.range && (!u.pinned || u.cover) && !u.broken && this.los(u, focus)) {
+        // A pinned man in the open keeps his head down and cannot
+        // fire. A pinned man IN COVER still shoots back, at a
+        // slower rate: before this, rounds stopped by his cover
+        // fed his suppression (0.7x) far faster than it decayed
+        // (9/s), so a man in an indestructible 0.95 trench pinned
+        // at 55 and never fired again, while 95% of frontal
+        // rounds stopped at the wall — the trench locked both
+        // ways and read as frozen (Josh's playtest, 2026-11-12).
+        const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1);
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
       }
@@ -3437,6 +3460,18 @@ export class GameEngine {
           break;
         }
         for (const bl of this.blockers) {
+          // A trench is dug in, not built up: rounds fly in and
+          // out of it, and the cover roll does the protecting.
+          // This sweep originally killed every bullet entering a
+          // trench blocker's r 14 circle — a man seated inside
+          // (the garrison stands 8 from the spot, inside the
+          // circle) could never be hit from either side, and his
+          // own rounds toward the enemy died in the wall. That
+          // was the trench freeze Josh hit in play (2026-11-12).
+          // buildBlockedGrid and resolveCollisions already skip
+          // trenches for the same reason; the bullet sweep had
+          // been missed.
+          if (bl.kind === "trench") continue;
           if (dist(b.x, b.y, bl.x, bl.y) < bl.r) {
             this.puff(b.x, b.y);
             dead = true;
@@ -3458,7 +3493,12 @@ export class GameEngine {
             if (c && Math.random() < c.q) {
               this.puff(b.x, b.y);
               this.damageCover(c, b.dmg);
-              u.suppression = Math.min(100, u.suppression + b.suppress * 0.7);
+              // Heavy cover (a trench, a building, a pillbox:
+              // q 0.9+) earns the man behind it real shelter: a
+              // stopped round rattles him at half the usual rate,
+              // so a dug-in man can recover nerve between bursts
+              // instead of pinning forever. Light cover keeps 0.7x.
+              u.suppression = Math.min(100, u.suppression + b.suppress * (c.q >= 0.9 ? 0.35 : 0.7));
               dead = true;
               break;
             }
@@ -4068,6 +4108,16 @@ export class GameEngine {
     for (const c of this.covers) {
       if (dist(tx, ty, c.x, c.y) > c.r + UNIT_R + 18) continue;
       if (dist(c.x, c.y, tx, ty) >= dist(c.x, c.y, ox, oy)) continue;
+      // The cover must actually lie BETWEEN shooter and target:
+      // nearer the shooter than the target is. Without this, a
+      // man seated just inside his cover's circle (a trench
+      // garrison man stands 8 east of the spot, inside its r 14)
+      // kept the full 0.95 even against shots from directly
+      // behind him — the circle extends a few units past him, so
+      // the projection test alone found "cover" on a rear shot.
+      // Flank fire now hits a dug-in man normally, exactly like
+      // it does a man beside a sandbag (Josh, 2026-11-12).
+      if (dist(ox, oy, c.x, c.y) >= dist(ox, oy, tx, ty)) continue;
       const dx = tx - ox;
       const dy = ty - oy;
       const len2 = dx * dx + dy * dy;
