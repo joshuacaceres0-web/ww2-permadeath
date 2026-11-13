@@ -162,7 +162,9 @@ describe("wave 1 garrisons in the first trench line", () => {
 
   it("a wave 1 man in the trench has trench cover, the best cover in the game", { timeout: 30000 }, async () => {
     const e = await makeEngine("dday");
-    step(e, 1);
+    // The boat intro runs for the first seconds now; step past
+    // it so the cover pass has run on the garrison.
+    step(e, 8);
     const foe = e.units.find((u) => u.side === "axis" && u.alive && !u.isStatic && u.enemyType === "volks")!;
     expect(foe.cover, "trench garrison man has no cover").not.toBeNull();
     expect(foe.cover!.kind).toBe("trench");

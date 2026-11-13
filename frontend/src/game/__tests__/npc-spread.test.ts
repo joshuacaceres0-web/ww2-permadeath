@@ -110,9 +110,13 @@ async function blobDisperses(mission: typeof OVERLORD | typeof CHATEAU) {
     begin: () => void;
     update: (dt: number) => void;
     units: U[];
+    introT: number;
   };
   engine.setup(mission as never, SQUAD as never, 0, "");
   engine.begin();
+  // On the beach the men are in Higgins boats at first; play the
+  // landing out before forming the blob (a no-op elsewhere).
+  for (let s = 0; s < 60 * 12 && engine.introT >= 0; s++) engine.update(1 / 60);
   const blob = engine.units.filter((u) => u.side === "allies" && u.npc && u.type === "rifleman").slice(0, 6);
   expect(blob).toHaveLength(6);
   // A tight 3x2 blob in the open, 8 units apart.

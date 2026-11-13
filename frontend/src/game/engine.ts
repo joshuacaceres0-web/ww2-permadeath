@@ -202,6 +202,17 @@ interface Unit {
    * west along the road until first contact; see the convoy
    * branch in the movement chain. */
   convoy?: boolean;
+  /** Beach landing intro: the man is still inside his Higgins
+   * boat. Hidden, harmless, and not yet ashore; landX/landY are
+   * where he comes ashore when his boat's ramp drops. */
+  embarked?: boolean;
+  landX?: number;
+  landY?: number;
+  /** Airborne intro: when this man's jump starts (seconds into
+   * the intro, keyed to the C-47 passing his x) and how long he
+   * hangs under canopy. */
+  dropStart?: number;
+  dropDur?: number;
   orders: Order[];
   attackId: number | null;
   targetId: number | null;
@@ -354,6 +365,18 @@ interface Projectile {
    * (about a second before impact; the only warning a mortar
    * round gives now). */
   whistled?: boolean;
+}
+
+interface Boat {
+  x: number;
+  y: number;
+  men: Unit[];
+  /** How many of her men are ashore so far. */
+  out: number;
+  /** Seconds since the bow reached the shoreline (ramp timing). */
+  timer: number;
+  /** Disembark clock: a man every 0.22s once the ramp is down. */
+  releaseT: number;
 }
 
 interface Particle {
@@ -803,6 +826,17 @@ export class GameEngine {
    * first contact with the paratroopers. The march ends, the
    * trucks halt, and the escort deploys to fight. */
   private convoyContact = false;
+  /** Intro sequences (Josh, 2026-11-12): the Higgins boat
+   * landing on the beach and the C-47 drop on the airborne
+   * variant. Drawn in the game's own art, a few seconds long,
+   * then control passes to the player. introT counts seconds
+   * since begin(); -1 means no intro is running. While an intro
+   * runs, update() advances only the intro: no combat, no
+   * movement AI, no replay frames. */
+  private boats: Boat[] = [];
+  private introKind: "boats" | "drop" | null = null;
+  private introT = -1;
+  private dropEnd = 0;
   private terrain: HTMLCanvasElement | null = null;
   private tctx: CanvasRenderingContext2D | null = null;
   private fog: HTMLCanvasElement | null = null;
@@ -1032,7 +1066,7 @@ export class GameEngine {
     this.mines = [];
     if (kind === "beach") {
       for (let i = 0; i < 60 && this.mines.length < 24; i++) {
-        const mx = 300 + rng() * 480;
+        const mx = 320 + rng() * 460;
         const my = 60 + rng() * (MAP_H - 120);
         if (Math.abs(my - roadYAt(mx)) < 46) continue;
         if (this.hedgehogs.some((h) => dist(mx, my, h.x, h.y) < 34)) continue;
@@ -1085,6 +1119,48 @@ export class GameEngine {
     const npcAllies = mission.terrain === "dday" ? 32 : 12;
     this.spawnNpcAllies(npcAllies, rng);
     this.spawnWave(0);
+    // Intro sequences: built here, run by update() after begin().
+    this.boats = [];
+    this.introKind = null;
+    this.introT = -1;
+    if (kind === "beach") {
+      // The landing: the squad rides its own boat, the 32 NPCs
+      // ride in sticks of 8 — 5 boats, spread down the coast by
+      // where their men were headed, never one clump. Landing
+      // spots sit on the sand just east of the waterline (268-
+      // 292), west of the mine band (which now starts at 320).
+      const alliesNow = this.units.filter((u) => u.side === "allies");
+      const groups: Unit[][] = [alliesNow.filter((u) => !u.npc)];
+      const npcList = alliesNow.filter((u) => u.npc);
+      for (let i = 0; i < npcList.length; i += 8) groups.push(npcList.slice(i, i + 8));
+      this.boats = groups
+        .filter((g) => g.length > 0)
+        .map((men) => {
+          const y = men.reduce((s, u) => s + u.y, 0) / men.length;
+          men.forEach((u, idx) => {
+            u.embarked = true;
+            u.landX = 268 + rng() * 24;
+            // Spread wide along the shore: a stick strung over
+            // ~240 of beach, not a knot at the ramp — a knot is
+            // a mortar target and walks into one MG lane.
+            u.landY = Math.max(40, Math.min(MAP_H - 40, y + (idx - (men.length - 1) / 2) * 34 + (rng() - 0.5) * 36));
+          });
+          return { x: 26, y, men, out: 0, timer: 0, releaseT: 0 };
+        });
+      this.introKind = "boats";
+    } else if (kind === "airborne") {
+      // The drop: the C-47 crosses west to east at 314/s; a man
+      // exits as it passes his x and hangs under canopy for
+      // about 1.3s. His spawn position is his landing spot.
+      this.dropEnd = 0;
+      for (const u of this.units) {
+        if (u.side !== "allies") continue;
+        u.dropStart = (u.x + 80) / 314;
+        u.dropDur = 1.25 + rng() * 0.3;
+        this.dropEnd = Math.max(this.dropEnd, u.dropStart + u.dropDur);
+      }
+      this.introKind = "drop";
+    }
     this.recomputeFog();
     this.resize();
     this.dirty = true;
@@ -1097,6 +1173,7 @@ export class GameEngine {
   begin() {
     if (this.phase !== "briefing") return;
     this.phase = "battle";
+    if (this.introKind) this.introT = 0;
     this.dirty = true;
     this.pushLog("Contact! Weapons free — good hunting.", "info");
     if (this.radioLive()) {
@@ -2740,8 +2817,68 @@ export class GameEngine {
     return this.units.filter((u) => u.side === "axis" && u.alive).length;
   }
 
+  /** Advance the intro sequences. Boats: approach at 70/s to
+   * the shoreline, ramp down (0.6s), then a man every 0.22s out
+   * of the bow, wading to his landing spot. Drop: nothing moves
+   * but the clock — a man is down when his dropStart + dropDur
+   * passes. Either way the intro ends into normal battle, with
+   * a 12s hard cap so a stuck walker can never soft-lock it. */
+  private advanceIntro(dt: number) {
+    this.introT += dt;
+    if (this.introKind === "boats") {
+      let done = true;
+      for (const b of this.boats) {
+        if (b.x < 208) {
+          b.x = Math.min(208, b.x + 70 * dt);
+          done = false;
+          continue;
+        }
+        b.timer += dt;
+        if (b.timer > 0.6 && b.out < b.men.length) {
+          b.releaseT += dt;
+          while (b.releaseT >= 0.22 && b.out < b.men.length) {
+            b.releaseT -= 0.22;
+            const man = b.men[b.out];
+            b.out++;
+            man.embarked = false;
+            man.x = b.x + 58;
+            man.y = b.y + ((b.out % 3) - 1) * 8;
+          }
+        }
+        if (b.out < b.men.length) done = false;
+      }
+      // Men ashore wade to their landing spots.
+      for (const u of this.units) {
+        if (u.side !== "allies" || u.embarked || u.landX === undefined) continue;
+        if (dist(u.x, u.y, u.landX, u.landY ?? u.y) > 8) {
+          this.moveToward(u, u.landX, u.landY ?? u.y, dt, 1.15);
+          done = false;
+        }
+      }
+      if (done || this.introT >= 12) {
+        for (const u of this.units) {
+          if (u.embarked) {
+            u.embarked = false;
+            u.x = u.landX ?? u.x;
+            u.y = u.landY ?? u.y;
+          }
+        }
+        this.introT = -1;
+      }
+    } else if (this.introKind === "drop") {
+      if (this.introT >= this.dropEnd + 0.1 || this.introT >= 12) this.introT = -1;
+    }
+  }
+
   private update(dt: number) {
     if (this.phase !== "battle" || this.paused) return;
+    // The intro runs first and alone: enemies frozen, no combat,
+    // no replay frames — the battle starts when it ends.
+    if (this.introT >= 0) {
+      this.advanceIntro(dt);
+      this.dirty = true;
+      return;
+    }
     this.elapsed += dt;
     this.replayT += dt;
     if (this.replayT >= 0.5) {
@@ -4489,6 +4626,7 @@ export class GameEngine {
 
     this.drawCrates(ctx);
     this.drawMines(ctx);
+    this.drawBoats(ctx);
 
     // Fallen bodies stay where they dropped.
     for (const c of this.corpses) {
@@ -4564,6 +4702,7 @@ export class GameEngine {
       .filter((u) => (u.alive || (u.deathT !== undefined && u.deathT < 1)) && (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]))
       .sort((a, b) => a.y - b.y);
     for (const u of drawList) this.drawUnit(ctx, u);
+    this.drawPlane(ctx);
 
     // Bullets: a hot pixel with a two-pixel fading trail.
     for (const b of this.bullets) {
@@ -4687,6 +4826,62 @@ export class GameEngine {
     }
   }
 
+  /** The Higgins boats, top-down in the game's own palette:
+   * a steel hull, a darker troop well with helmet dots for the
+   * men still aboard, the bow ramp up while she runs in and
+   * dropped once she grounds, and a foam wake astern while she
+   * moves. */
+  private drawBoats(ctx: CanvasRenderingContext2D) {
+    for (const b of this.boats) {
+      const fx = snap(b.x);
+      const fy = snap(b.y);
+      const grounded = b.x >= 208;
+      if (!grounded) {
+        ctx.fillStyle = "rgba(230,238,235,0.35)";
+        ctx.fillRect(fx - 44, fy - 9, 16, 3);
+        ctx.fillRect(fx - 38, fy + 6, 12, 3);
+      }
+      ctx.fillStyle = "#22282E";
+      ctx.fillRect(fx - 30, fy - 13, 62, 26);
+      ctx.fillStyle = "#3A4148";
+      ctx.fillRect(fx - 28, fy - 11, 58, 22);
+      ctx.fillStyle = "#272D33";
+      ctx.fillRect(fx - 22, fy - 8, 40, 16);
+      // Helmet dots for the men still in the well.
+      ctx.fillStyle = "#55663A";
+      const aboard = b.men.length - b.out;
+      for (let i = 0; i < Math.min(aboard, 8); i++) {
+        ctx.fillRect(fx - 18 + (i % 4) * 9, fy - 5 + Math.floor(i / 4) * 8, 5, 5);
+      }
+      // The coxswain's post at the stern.
+      ctx.fillStyle = "#4A545E";
+      ctx.fillRect(fx - 27, fy - 3, 5, 6);
+      // Bow ramp: up while running in, dropped to the sand once grounded.
+      ctx.fillStyle = "#4A545E";
+      if (grounded) ctx.fillRect(fx + 30, fy - 10, 16, 20);
+      else ctx.fillRect(fx + 28, fy - 11, 4, 22);
+    }
+  }
+
+  /** The C-47 on its drop run: a dark silhouette crossing west
+   * to east over the drop zone while the sticks exit. One pass,
+   * a soft shadow under her, gone when the last man is down. */
+  private drawPlane(ctx: CanvasRenderingContext2D) {
+    if (this.introKind !== "drop" || this.introT < 0) return;
+    const px = snap(-80 + 314 * this.introT);
+    const py = snap(240);
+    ctx.fillStyle = "rgba(0,0,0,0.18)";
+    ctx.fillRect(px - 40 + 14, py - 6 + 18, 88, 10);
+    ctx.fillStyle = "#33393B";
+    ctx.fillRect(px - 46, py - 7, 92, 14); // fuselage
+    ctx.fillRect(px + 6, py - 32, 15, 64); // wing
+    ctx.fillRect(px - 46, py - 16, 10, 32); // tail
+    ctx.fillStyle = "#222628";
+    ctx.fillRect(px + 34, py - 5, 10, 10); // nose glasshouse shadow
+    ctx.fillStyle = "#4A5152";
+    ctx.fillRect(px - 20, py - 7, 60, 3); // spine highlight
+  }
+
   /** Beach mines, drawn as what they are: a small dark disc in
    * the sand with a pressure plate on top. Easy to miss at a
    * glance, which is the point — but they are on the map to be
@@ -4758,6 +4953,41 @@ export class GameEngine {
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {
     // A deserter has left the field: nothing to draw, and no corpse.
     if (u.fled) return;
+    // Still inside his Higgins boat: the boat sprite carries him.
+    if (u.embarked) return;
+    if (this.introKind === "drop" && this.introT >= 0 && u.side === "allies" && u.dropStart !== undefined) {
+      if (this.introT < u.dropStart) return; // still inside the C-47
+      if (this.introT < u.dropStart + (u.dropDur ?? 1.3)) {
+        // Under canopy: a simple falling man — helmet, body, and
+        // the round chute over him with its shroud lines. Drawn
+        // in the game's palette, no imported art.
+        const fx = snap(u.x);
+        const fy = snap(u.y);
+        ctx.fillStyle = "rgba(0,0,0,0.25)";
+        ctx.fillRect(fx - 8, fy + 10, 16, 3);
+        ctx.fillStyle = "#4A5A2E";
+        ctx.fillRect(fx - 2, fy - 2, 4, 8);
+        ctx.fillStyle = "#3A4526";
+        ctx.fillRect(fx - 3, fy - 5, 6, 4);
+        ctx.strokeStyle = "rgba(230,225,205,0.8)";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(fx - 11, fy - 12);
+        ctx.lineTo(fx - 1, fy - 3);
+        ctx.moveTo(fx + 11, fy - 12);
+        ctx.lineTo(fx + 1, fy - 3);
+        ctx.moveTo(fx, fy - 14);
+        ctx.lineTo(fx, fy - 4);
+        ctx.stroke();
+        ctx.fillStyle = "#CFC8B0";
+        ctx.beginPath();
+        ctx.arc(fx, fy - 11, 11, Math.PI, 0);
+        ctx.fill();
+        ctx.fillStyle = "#B8B198";
+        ctx.fillRect(fx - 11, fy - 12, 22, 2);
+        return;
+      }
+    }
     if (u.vehicle && u.enemyType === "truck") {
       // The convoy truck: cab at the front (the way it faces),
       // canvas-covered bed behind, wheels as dark blocks. No

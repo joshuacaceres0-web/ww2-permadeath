@@ -124,6 +124,10 @@ describe("beach obstacles", () => {
   it("a mine goes off under a landing-force man, once, and never under a defender", async () => {
     const { engine } = await makeEngine();
     engine.begin();
+    // The Higgins boat intro runs first now; play it out so the
+    // men are ashore and the battle clock is running.
+    const intro = engine as unknown as { introT: number };
+    for (let s = 0; s < 60 * 12 && intro.introT >= 0; s++) engine.update(1 / 60);
     const [m1, m2] = engine.mines;
     const npc = engine.units.find((u) => u.side === "allies" && u.npc)!;
     const volks = engine.units.find((u) => u.enemyType === "volks")!;

@@ -112,7 +112,14 @@ type Engine = {
   units: U[];
   covers: CoverT[];
   bullets: Array<{ killerId: number | null }>;
+  introT: number;
 };
+
+/** The beach opens with the boat landing now; play it out so
+ * the measurements below run on the live battle. */
+function playIntro(e: Engine) {
+  for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
+}
 
 async function makeEngine() {
   const { GameEngine } = await loadEngine();
@@ -126,6 +133,7 @@ describe("trench combat", () => {
   it("a pinned garrison man in a trench still shoots back", async () => {
     const e = await makeEngine();
     e.begin();
+    playIntro(e);
     const volks = e.units.find((u) => u.trenchHold && u.enemyType === "volks")!;
     const ally = e.units.find((u) => u.side === "allies" && !u.npc && u.type === "rifleman")!;
     ally.x = volks.x - 120;
@@ -151,6 +159,7 @@ describe("trench combat", () => {
   it("a squad man seated in a trench walks out when ordered", async () => {
     const e = await makeEngine();
     e.begin();
+    playIntro(e);
     const man = e.units.filter((u) => u.side === "allies" && !u.npc)[1];
     // Second trench line (x 2600), away from the wave 1 garrison.
     const spot = e.covers
@@ -169,6 +178,7 @@ describe("trench combat", () => {
   async function shotLoss(mode: "frontal" | "open" | "flank", seconds = 5): Promise<number> {
     const e = await makeEngine();
     e.begin();
+    playIntro(e);
     const target = e.units.find((u) => u.trenchHold && u.enemyType === "volks")!;
     const shooter = e.units.find((u) => u.side === "allies" && !u.npc && u.type === "mg")!;
     if (mode === "open") {
@@ -203,9 +213,9 @@ describe("trench combat", () => {
 
   it("frontal fire on a trench is reduced but real; flank fire is full", async () => {
     const open = await shotLoss("open");
-    // Frontal runs longer: at a 5% leak rate a 5s window can
-    // honestly roll zero hits; 14s makes the statistics settle.
-    const frontal = await shotLoss("frontal", 14);
+    // Frontal runs longer: at a 5% leak rate a short window can
+    // honestly roll zero hits; 20s makes the statistics settle.
+    const frontal = await shotLoss("frontal", 20);
     const flank = await shotLoss("flank");
     expect(open).toBeGreaterThan(40);
     expect(frontal).toBeGreaterThan(0);

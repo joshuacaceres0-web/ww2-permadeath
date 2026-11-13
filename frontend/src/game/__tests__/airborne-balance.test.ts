@@ -102,6 +102,7 @@ async function makeEngine(variant: string) {
     update: (dt: number) => void;
     units: U[];
     convoyContact: boolean;
+    introT: number;
   };
   engine.setup(OVERLORD_W1 as never, SQUAD as never, 0, variant);
   return engine;
@@ -131,6 +132,9 @@ describe("airborne variant: drop zone and ambush convoy", () => {
   it("the convoy rolls west on the road until first contact", async () => {
     const e = await makeEngine("airborne");
     e.begin();
+    // The drop intro runs first; the convoy's march is measured
+    // once the battle clock starts.
+    for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
     const trucks = e.units.filter((u) => u.enemyType === "truck");
     const x0 = trucks.map((t) => t.x);
     for (let s = 0; s < 60 * 3; s++) e.update(1 / 60);
@@ -141,6 +145,7 @@ describe("airborne variant: drop zone and ambush convoy", () => {
   it("on contact the trucks halt and stay halted", async () => {
     const e = await makeEngine("airborne");
     e.begin();
+    for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
     const truck = e.units.filter((u) => u.enemyType === "truck")[0];
     const man = e.units.filter((u) => u.side === "allies" && !u.npc)[0];
     man.x = truck.x - 100;
