@@ -2,6 +2,12 @@
 // same code works in dev (Vite proxies /api → :8001) and behind a single origin in prod.
 const BASE = "/api";
 
+// Standalone builds (itch): VITE_LOCAL_SAVE=1 at build time swaps
+// the server for the local save backend in ./localBackend — the
+// campaign then lives in the player's own browser storage and no
+// request ever leaves the device. Normal builds never load it.
+const LOCAL = import.meta.env.VITE_LOCAL_SAVE === "1";
+
 // Fields are declared, not constructor parameter properties: tsconfig sets
 // erasableSyntaxOnly, which rejects `constructor(readonly status: number)`.
 export class ApiError extends Error {
@@ -19,6 +25,10 @@ export class ApiError extends Error {
 type JsonBody = unknown;
 
 async function request<T>(method: string, path: string, body?: JsonBody): Promise<T> {
+  if (LOCAL) {
+    const { localRequest } = await import("./localBackend");
+    return localRequest<T>(method, path, body);
+  }
   // Auth rides the httpOnly session cookie automatically — never add auth headers here.
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -53,4 +63,24 @@ export function saveId(): string {
   } catch {
     return "main";
   }
+}
+
+/**
+ * The pagehide battle filing (Battlefield's retreat beacon): a
+ * fire-and-forget POST of the battle report. Behind the server it
+ * is the same fetch it always was; in a local build it files into
+ * the browser save instead, so a closed tab still counts.
+ */
+export function fileBattleBeacon(body: JsonBody): Promise<unknown> {
+  if (LOCAL) {
+    return import("./localBackend").then(({ localRequest }) =>
+      localRequest("POST", "/battle/complete", body).catch(() => undefined),
+    );
+  }
+  return fetch(`${BASE}/battle/complete`, {
+    method: "POST",
+    keepalive: true,
+    headers: { "Content-Type": "application/json", "X-Save-Id": saveId() },
+    body: JSON.stringify(body),
+  });
 }

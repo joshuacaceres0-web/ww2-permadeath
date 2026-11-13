@@ -13,7 +13,7 @@ import ReinforceMenu, { REINFORCEMENTS } from "@/components/game/ReinforceMenu";
 import { PANEL, PANEL_BTN, PANEL_BTN_ACTIVE, PANEL_LABEL, PANEL_REST, PANEL_SOLID } from "@/components/game/panel";
 import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
-import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
+import { ApiError, apiGet, apiPost, fileBattleBeacon } from "@/lib/api";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type RadioSupportKind, type Variant } from "@/game/engine";
 import { ITEM_BY_ID, UNIT_TYPES, KILL_RP, battleReward, isCowardQuirk } from "@/game/data";
@@ -270,12 +270,7 @@ export default function Battlefield() {
       eng.retreat();
       const r = eng.getReport();
       if (!r) return;
-      void fetch("/api/battle/complete", {
-        method: "POST",
-        keepalive: true,
-        headers: { "Content-Type": "application/json", "X-Save-Id": saveId() },
-        body: JSON.stringify(reportBody(r, battleIdRef.current)),
-      }).then(() => {
+      void fileBattleBeacon(reportBody(r, battleIdRef.current)).then(() => {
         qc.invalidateQueries({ queryKey: ["state"] });
         qc.invalidateQueries({ queryKey: ["squad"] });
         qc.invalidateQueries({ queryKey: ["memorial"] });
