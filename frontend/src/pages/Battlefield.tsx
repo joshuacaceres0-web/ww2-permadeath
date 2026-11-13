@@ -14,6 +14,7 @@ import { PANEL, PANEL_BTN, PANEL_BTN_ACTIVE, PANEL_LABEL, PANEL_REST, PANEL_SOLI
 import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
 import { ApiError, apiGet, apiPost, fileBattleBeacon } from "@/lib/api";
+import { loadSettings, resolveTouchControls } from "@/lib/settings";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type RadioSupportKind, type Variant } from "@/game/engine";
 import { ITEM_BY_ID, UNIT_TYPES, KILL_RP, battleReward, isCowardQuirk } from "@/game/data";
@@ -87,8 +88,13 @@ export default function Battlefield() {
     setEscConfirm(null);
     if (resume) engineRef.current?.setPaused(false);
   };
+  // The Settings CONTROLS pick (auto / phone / computer) decides
+  // which control set this battle shows, so touch and desktop
+  // controls never mix on one screen. Auto keeps the old guess.
   const [touch] = useState(
-    () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
+    () =>
+      typeof window !== "undefined" &&
+      resolveTouchControls(loadSettings().controls, window.matchMedia("(pointer: coarse)").matches, window.innerWidth < 1024)
   );
 
   // Phones play the battle sideways: try to lock landscape, otherwise ask them to rotate.
@@ -104,18 +110,39 @@ export default function Battlefield() {
       if (document.fullscreenElement) void document.exitFullscreen().catch(() => {});
     };
   }, []);
-  const goLandscape = () => {
-    if (!touch) return;
+  // Fullscreen takeover: one request path for the rotate prompt,
+  // BEGIN THE ASSAULT and the FULLSCREEN button. On touch it also
+  // tries the landscape lock. iPhone Safari refuses element
+  // fullscreen (no lock either) — the catch keeps it a quiet no-op
+  // there, and the rotate prompt / home-screen app covers it.
+  const [isFs, setIsFs] = useState(false);
+  useEffect(() => {
+    const on = () => setIsFs(!!document.fullscreenElement);
+    document.addEventListener("fullscreenchange", on);
+    return () => document.removeEventListener("fullscreenchange", on);
+  }, []);
+  const enterFullscreen = () => {
     const el = document.documentElement;
     const lock = () => {
       const o = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
       return o?.lock ? o.lock("landscape") : Promise.reject(new Error("no lock"));
     };
     (el.requestFullscreen ? el.requestFullscreen() : Promise.resolve())
-      .then(lock)
+      .then(() => (touch ? lock() : undefined))
       .catch(() => {
         /* iOS / desktop: no orientation lock — the rotate prompt covers it */
       });
+  };
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen().catch(() => {});
+      return;
+    }
+    enterFullscreen();
+  };
+  const goLandscape = () => {
+    if (!touch) return;
+    enterFullscreen();
   };
 
   const { data: state } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: 2 });
@@ -472,6 +499,15 @@ export default function Battlefield() {
           </button>
         )}
         {!fullMap && !hud?.briefing && hud?.state === "active" && (
+          <button
+            data-testid="fullscreen-btn"
+            onClick={toggleFullscreen}
+            className={`absolute right-2 z-20 px-3 py-2 font-mono text-[11px] tracking-wider text-[#E3E7DC] ${touch ? "top-14" : "top-2"} ${PANEL} ${PANEL_REST}`}
+          >
+            {isFs ? "⛶ EXIT FULLSCREEN" : "⛶ FULLSCREEN"}
+          </button>
+        )}
+        {!touch && !fullMap && !hud?.briefing && hud?.state === "active" && (
           <div className={`absolute bottom-2 right-2 z-20 flex flex-col gap-1.5 p-1.5 ${PANEL} ${PANEL_REST}`} data-testid="battle-controls">
             <div className="flex items-center gap-1" data-testid="order-controls" title="Squad orders: your men follow the leader under the order given">
               {([
@@ -657,9 +693,19 @@ export default function Battlefield() {
               <div className="mt-4 border border-[#E5A93C]/50 bg-[#3A2B0E]/40 px-3 py-2" data-testid="leader-pick">
                 <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#E5A93C]">Team leader — pick who you drive</p>
                 <p className="mt-1 font-mono text-[11px] leading-relaxed text-[#A2B29A]">
-                  You control the leader: WASD moves him, left click shoots, right click (or Q) uses his
-                  ability. The rest of the squad follows him under your orders: 1 ATTACK, 2 DEFEND,
-                  3 FORM UP, with F for formation. If he falls, the next most experienced man takes over.
+                  {touch ? (
+                    <>
+                      You control the leader: the left stick moves him, the FIRE ring shoots, ABILITY uses
+                      his ability. The rest of the squad follows him under your orders: ATTACK, DEFEND,
+                      FORM UP, and the formation button. If he falls, the next most experienced man takes over.
+                    </>
+                  ) : (
+                    <>
+                      You control the leader: WASD moves him, left click shoots, right click (or Q) uses his
+                      ability. The rest of the squad follows him under your orders: 1 ATTACK, 2 DEFEND,
+                      3 FORM UP, with F for formation. If he falls, the next most experienced man takes over.
+                    </>
+                  )}
                 </p>
               </div>
               <div className="mt-3 grid grid-cols-2 gap-1.5">

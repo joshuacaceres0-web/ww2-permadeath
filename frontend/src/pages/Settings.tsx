@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import { buttonVariants } from "@/components/ui/button";
-import { DEFAULT_SETTINGS, loadSettings, saveSettings, type GameSpeed, type Settings as S, type ShakeLevel } from "@/lib/settings";
+import { DEFAULT_SETTINGS, loadSettings, saveSettings, type ControlsMode, type GameSpeed, type Settings as S, type ShakeLevel } from "@/lib/settings";
 import { menuSfx, onMenuClick, setSfxMuted, setSfxVolume, sfx } from "@/game/sfx";
 import { setMusicEnabled, setMusicMuted, setMusicVolume, useMusic } from "@/game/music";
 
@@ -16,6 +16,11 @@ const SHAKES: Array<{ v: ShakeLevel; label: string }> = [
   { v: "off", label: "OFF" },
   { v: "low", label: "LOW" },
   { v: "full", label: "FULL" },
+];
+const CONTROLS: Array<{ v: ControlsMode; label: string }> = [
+  { v: "auto", label: "AUTO" },
+  { v: "phone", label: "PHONE" },
+  { v: "computer", label: "COMPUTER" },
 ];
 
 function Choice<T extends string | number>({ name, value, options, onPick }: { name: string; value: T; options: Array<{ v: T; label: string }>; onPick: (v: T) => void }) {
@@ -64,6 +69,16 @@ export default function Settings() {
         <p className="mt-2 font-mono text-sm text-[#A2B29A]">Saved on this device. Your campaign is not affected.</p>
 
         <section className="mt-6 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
+          <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">CONTROLS</h2>
+          <p className="font-mono text-sm text-[#8D9A83]">
+            What you are playing on. PHONE shows the touch sticks and buttons only, COMPUTER shows the mouse
+            and keyboard controls only, so the two never mix on one screen. AUTO picks by your screen, like
+            the game does now.
+          </p>
+          <Choice name="controls" value={s.controls} options={CONTROLS} onPick={(v) => update({ controls: v })} />
+        </section>
+
+        <section className="mt-4 space-y-3 border border-[#2E3628] bg-[#1A1D17] p-5">
           <h2 className="font-[Silkscreen] text-sm text-[#F0F5EB]">GAME SPEED</h2>
           <p className="font-mono text-sm text-[#8D9A83]">How fast battles run. Pause still works at any speed.</p>
           <Choice name="speed" value={s.speed} options={SPEEDS} onPick={(v) => update({ speed: v })} />
