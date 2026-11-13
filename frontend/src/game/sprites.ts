@@ -454,12 +454,34 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
 
 const cache = new Map<string, HTMLCanvasElement>();
 
+/** Carried-gear treatments painted over the base sprite
+ * (Barracks update): the ghillie wrap changes the man's whole
+ * silhouette and colour; the camouflage net is the same idea,
+ * lighter — a drape and a few leaves over his own colours. */
+export type SpriteFx = "ghillie" | "net";
+
+const GHILLIE_SHAG: Array<[number, number, string]> = [
+  [6, 0, "#6B7A3A"], [3, 1, "#4A5232"], [9, 1, "#55603A"], [12, 2, "#3E4A2A"],
+  [2, 3, "#6B7A3A"], [13, 3, "#4A5232"], [1, 6, "#55603A"], [14, 6, "#3E4A2A"],
+  [2, 8, "#6B7A3A"], [13, 8, "#55603A"], [1, 9, "#3E4A2A"], [14, 10, "#4A5232"],
+  [3, 11, "#55603A"], [12, 12, "#6B7A3A"], [5, 7, "#77823F"], [8, 9, "#6B7A3A"],
+  [6, 11, "#4A5232"], [10, 7, "#55603A"], [7, 4, "#3E4A2A"], [11, 5, "#6B7A3A"],
+];
+const NET_DRAPE: Array<[number, number, string]> = [
+  [4, 2, "#2E3324"], [7, 1, "#2E3324"], [10, 2, "#2E3324"], [5, 3, "#2E3324"],
+  [11, 3, "#2E3324"], [2, 6, "#2E3324"], [13, 6, "#2E3324"], [6, 7, "#4A5232"],
+  [9, 8, "#55603A"], [3, 4, "#4A5232"],
+];
+
 /** Cached sprite canvas (SPR_W x SPR_H) with a dark 1px outline; `flip` faces left. */
-export function sprite(palKey: string, pose: Pose, weapon: Weapon, head: Head, flip: boolean): HTMLCanvasElement {
-  const key = `${palKey}|${pose}|${weapon}|${head}|${flip ? 1 : 0}`;
+export function sprite(palKey: string, pose: Pose, weapon: Weapon, head: Head, flip: boolean, fx?: SpriteFx): HTMLCanvasElement {
+  const key = `${palKey}|${pose}|${weapon}|${head}|${flip ? 1 : 0}|${fx ?? ""}`;
   const hit = cache.get(key);
   if (hit) return hit;
-  const pal = PAL[palKey] ?? PAL.us;
+  const basePal = PAL[palKey] ?? PAL.us;
+  const pal = fx === "ghillie"
+    ? { ...basePal, uni: "#55603A", uniDark: "#3E4A2A", pants: "#4A5232", pantsDark: "#37402A", helmet: "#4A5232", helmetHi: "#6B7A3A" }
+    : basePal;
   const c = document.createElement("canvas");
   c.width = SPR_W;
   c.height = SPR_H;
@@ -475,6 +497,10 @@ export function sprite(palKey: string, pose: Pose, weapon: Weapon, head: Head, f
     weapon,
     head
   );
+  // The carried-gear treatment draws over the painted man,
+  // through the same flip-aware pen, before the outline pass.
+  if (fx === "ghillie") for (const [x, y, col] of GHILLIE_SHAG) { g.fillStyle = col; g.fillRect(flip ? SPR_W - 1 - x : x, y, 1, 1); }
+  if (fx === "net") for (const [x, y, col] of NET_DRAPE) { g.fillStyle = col; g.fillRect(flip ? SPR_W - 1 - x : x, y, 1, 1); }
   // Outline pass: classic dark 1px rim around every opaque pixel.
   const img = g.getImageData(0, 0, SPR_W, SPR_H);
   const d = img.data;

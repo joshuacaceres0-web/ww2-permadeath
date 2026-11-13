@@ -29,7 +29,7 @@ function paint(grid: Grid, rows: number[], c0: number, c1: number, color: string
   for (const r of rows) for (let c = c0; c <= c1; c++) grid[r][c] = color;
 }
 
-function buildGrid(seed: number, type: UnitTypeId, level: number, gearHead: string | null = null): Grid {
+function buildGrid(seed: number, type: UnitTypeId, level: number, gearHead: string | null = null, gear: string[] = []): Grid {
   const rnd = rngFrom(seed);
   const pick = <T,>(arr: T[]) => arr[Math.floor(rnd() * arr.length)];
   const g: Grid = Array.from({ length: 16 }, () => Array<string | null>(16).fill(null));
@@ -167,6 +167,37 @@ function buildGrid(seed: number, type: UnitTypeId, level: number, gearHead: stri
     paint(g, [3], 5, 9, "#5A5A3A");
   }
 
+  // Carried gear on the bust: what he wears in the field
+  // shows on his portrait too, chest up — the same look in
+  // both places.
+  if (gear.includes("ghillie")) {
+    // The wrap swallows the bust: foliage over the helmet and
+    // shoulders, the uniform gone mottled.
+    for (const [r, c, col] of [[2, 5, "#4A5232"], [2, 8, "#6B7A3A"], [3, 6, "#55603A"], [3, 10, "#4A5232"], [4, 4, "#6B7A3A"], [4, 11, "#3E4A2A"], [5, 3, "#55603A"], [5, 12, "#6B7A3A"], [13, 3, "#55603A"], [13, 12, "#4A5232"], [14, 5, "#6B7A3A"], [14, 10, "#3E4A2A"], [13, 7, "#4A5232"], [14, 8, "#55603A"]] as Array<[number, number, string]>) g[r][c] = col;
+  }
+  if (gear.includes("camonet")) {
+    for (const [r, c] of [[2, 6], [2, 9], [3, 5], [3, 11], [4, 4], [13, 2], [13, 13]] as Array<[number, number]>) g[r][c] = "#2E3324";
+    g[13][6] = "#4A5232";
+    g[14][11] = "#55603A";
+  }
+  if (gear.includes("ammo")) {
+    // The pouches' strap across his chest.
+    g[13][4] = "#3A3428";
+    g[14][6] = "#3A3428";
+    g[15][8] = "#3A3428";
+    g[13][5] = "#6B5A34";
+    g[14][7] = "#6B5A34";
+  }
+  if (gear.includes("binoculars")) {
+    g[14][7] = "#1E1E14";
+    g[14][8] = "#1E1E14";
+    g[15][7] = "#1E1E14";
+    g[15][8] = "#5E6B5A";
+  }
+  if (gear.includes("charm")) {
+    g[12][8] = "#E5C558"; // the charm at his throat
+  }
+
   // Rank stripes on the shoulder — one per two promotions, gold.
   const stripes = Math.min(3, Math.ceil(level / 2));
   for (let i = 0; i < stripes; i++) {
@@ -206,7 +237,8 @@ const HEADGEAR_ITEMS = ["nethelmet", "parahelmet", "jeepcap", "pilecap", "hbtcap
 
 export default function Portrait({ seed, type, level = 0, size = 56, fallen = false, className = "", testid, equipment }: Props) {
   const gearHead = equipment?.find((i) => HEADGEAR_ITEMS.includes(i)) ?? null;
-  const grid = useMemo(() => buildGrid(seed, type, level, gearHead), [seed, type, level, gearHead]);
+  const gearKey = (equipment ?? []).join(",");
+  const grid = useMemo(() => buildGrid(seed, type, level, gearHead, equipment ?? []), [seed, type, level, gearHead, gearKey]);
   return (
     <svg
       data-testid={testid}

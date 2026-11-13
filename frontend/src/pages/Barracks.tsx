@@ -460,7 +460,10 @@ function Dossier({
           <div className="space-y-1">
             {(s.equipment ?? []).map((item) => (
               <div key={item} className="flex items-center justify-between gap-2 border border-[#5C4A1E] bg-[#2A2210] px-2 py-1 font-mono text-[11px]" data-testid={`carried-${item}`}>
-                <span className="text-[#FFD97D]">{ITEM_BY_ID[item]?.label ?? item}</span>
+                <span className="text-[#FFD97D]">
+                  {ITEM_BY_ID[item]?.label ?? item}
+                  {GUN_DEFS[item] ? <span className="text-[#F0EBD8]"> · {gunLine(item)}</span> : null}
+                </span>
                 <Button
                   data-testid={`unequip-btn-${item}`}
                   variant="outline"

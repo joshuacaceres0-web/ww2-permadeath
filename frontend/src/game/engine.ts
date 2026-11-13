@@ -90,7 +90,7 @@ interface Corpse {
 }
 
 // Sprite look for each unit: palette, headgear, weapon.
-function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean; equipment?: string[] }): { pal: string; head: Head; weapon: Weapon } {
+export function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean; equipment?: string[] }): { pal: string; head: Head; weapon: Weapon; fx?: "ghillie" | "net" } {
   if (u.side === "allies") {
     let weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", recon: "smg", engineer: "rifle", tank: "none" } as const)[u.type];
     let head: Head = u.type === "medic" ? "us-medic" : "us";
@@ -109,7 +109,13 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
       const carriedGun = gear.find((id) => id in GUN_DEFS);
       if (carriedGun) weapon = GUN_DEFS[carriedGun].sprite;
     }
-    return { pal: u.npc ? "usNpc" : "us", head, weapon };
+    // The two silhouette treatments (Barracks class items): a
+    // ghillie wrap remakes the man, a camouflage net drapes
+    // him lighter. The painter owns both (sprites.ts SpriteFx).
+    const fx = !u.npc && u.equipment?.includes("ghillie") ? "ghillie" as const
+      : !u.npc && u.equipment?.includes("camonet") ? "net" as const
+      : undefined;
+    return { pal: u.npc ? "usNpc" : "us", head, weapon, fx };
   }
   switch (u.enemyType) {
     case "volks": return { pal: "volks", head: "cap", weapon: "rifle" };
@@ -6491,7 +6497,7 @@ export class GameEngine {
           x: u.x,
           y: u.y,
           axis: u.side === "axis",
-          img: sprite(look.pal, "dead", look.weapon, look.head, Math.cos(u.facing) < 0),
+          img: sprite(look.pal, "dead", look.weapon, look.head, Math.cos(u.facing) < 0, look.fx),
         });
       }
     }
@@ -7558,7 +7564,7 @@ export class GameEngine {
       }
     }
 
-    const img = sprite(look.pal, pose, look.weapon, look.head, flip);
+    const img = sprite(look.pal, pose, look.weapon, look.head, flip, look.fx);
     const ax = flip ? img.width - 1 - FEET_X : FEET_X;
     const top = feetY - SPR_H * PX + bob;
     ctx.drawImage(img, fx - ax * PX, top, img.width * PX, img.height * PX);
@@ -7676,16 +7682,6 @@ export class GameEngine {
         ctx.fillStyle = "#B8BFA8";
         ctx.fillRect(fx + fdir * 3 * PX, top + 10 * PX, PX * 2, PX);
       }
-      if (gear.includes("ghillie")) {
-        ctx.fillStyle = "#4A5232";
-        ctx.fillRect(fx - 2 * PX, top + 2 * PX, PX, PX);
-        ctx.fillRect(fx + PX, top + 3 * PX, PX, PX);
-        ctx.fillRect(fx - 3 * PX, top + 5 * PX, PX, PX);
-        ctx.fillStyle = "#6B7A3A";
-        ctx.fillRect(fx, top + 2 * PX, PX, PX);
-        ctx.fillRect(fx + 2 * PX, top + 4 * PX, PX, PX);
-        ctx.fillRect(fx - PX, top + 5 * PX, PX, PX);
-      }
       if (gear.includes("matchammo")) {
         ctx.fillStyle = "#8A6D2F";
         ctx.fillRect(fx + fdir * 2 * PX - PX, top + 6 * PX, PX, PX);
@@ -7713,14 +7709,6 @@ export class GameEngine {
         ctx.fillRect(fx + fdir * 3 * PX, top + 10 * PX, PX * 2, PX * 2);
         ctx.fillStyle = "#D8D6C8";
         ctx.fillRect(fx + fdir * 3 * PX + PX, top + 10 * PX, PX, PX);
-      }
-      if (gear.includes("camonet")) {
-        ctx.fillStyle = "#2E3324";
-        ctx.fillRect(fx - 2 * PX, top + 2 * PX, PX * 4, PX);
-        ctx.fillRect(fx - PX, top + 3 * PX, PX, PX);
-        ctx.fillStyle = "#4A5232";
-        ctx.fillRect(fx + PX, top + 3 * PX, PX, PX);
-        ctx.fillRect(fx - 2 * PX, top + 4 * PX, PX, PX);
       }
       if (gear.includes("flares")) {
         ctx.fillStyle = "#A0302A";
