@@ -1,7 +1,7 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
 // fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
 
-import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, ITEM_BY_ID, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus, rollCrateItem } from "./data";
+import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, GUN_DEFS, ITEM_BY_ID, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus, rollCrateItem } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
 import { setSfxMuted, setSfxVolume, sfx, whistleSfx } from "./sfx";
@@ -106,9 +106,8 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
       else if (gear.includes("jeepcap")) head = "us-jeep";
       else if (gear.includes("pilecap")) head = "us-pile";
       else if (gear.includes("hbtcap")) head = "us-hbt";
-      if (gear.includes("thompson")) weapon = "thompson";
-      else if (gear.includes("springfield")) weapon = "springfield";
-      else if (gear.includes("mp40")) weapon = "mp40";
+      const carriedGun = gear.find((id) => id in GUN_DEFS);
+      if (carriedGun) weapon = GUN_DEFS[carriedGun].sprite;
     }
     return { pal: u.npc ? "usNpc" : "us", head, weapon };
   }
@@ -3589,18 +3588,18 @@ export class GameEngine {
       // eyes +25 vision; the paratrooper helmet +12 HP, the
       // binoculars +60 vision, extra ammo pouches half again
       // the magazine (never on a one-shot tube like the
-      // bazooka), the aid bag +30% healing; and a carried gun
-      // reshapes his weapon: Thompson faster and harder up
-      // close for a shorter reach, Springfield longer and
-      // heavier, the captured MP40 harder and tighter.
+      // bazooka), the aid bag +30% healing. A carried gun
+      // REPLACES his class weapon (Josh, 2026-11-13): damage,
+      // range, magazine, reload, fire rate, spread and bullet
+      // speed all come from the gun's own line in GUN_DEFS;
+      // the man's own bonuses (level, medals, upgrades) still
+      // ride on top, and his class abilities are untouched.
       const upg = s.upgrades ?? {};
       const gear = s.equipment ?? [];
       const has = (id: string) => gear.includes(id);
-      const gunDmg = has("thompson") ? 2 : has("springfield") ? 5 : has("mp40") ? 3 : 0;
-      const gunRange = has("thompson") ? -Math.round(spec.range * 0.2) : has("springfield") ? 60 : 0;
-      const gunFireMult = has("thompson") ? 0.55 : 1;
-      const gunSpreadMult = has("mp40") ? 0.8 : 1;
-      const magSize = spec.magSize >= 5 && has("ammo") ? Math.ceil(spec.magSize * 1.5) : spec.magSize;
+      const gun = GUN_DEFS[gear.find((id) => id in GUN_DEFS) ?? ""];
+      const baseMag = gun ? gun.magSize : spec.magSize;
+      const magSize = baseMag >= 5 && has("ammo") ? Math.ceil(baseMag * 1.5) : baseMag;
       const buildHp = spec.hp + mb.hp + 12 * (upg.toughness ?? 0) + (has("parahelmet") ? 12 : 0);
       this.units.push({
         id: this.nextId++,
@@ -3623,14 +3622,14 @@ export class GameEngine {
         hp: buildHp,
         maxHp: buildHp,
         speed: spec.speed * (1 + 0.06 * (upg.legs ?? 0)),
-        range: spec.range + gunRange,
+        range: gun ? gun.range : spec.range,
         vision: spec.vision + mb.vision + 25 * (upg.eyes ?? 0) + (has("binoculars") ? 60 : 0),
-        dmg: spec.dmg + gunDmg,
-        fireInterval: spec.fireInterval * bonus.fireMult * mb.fireMult * gunFireMult,
-        spread: spec.spread * bonus.spreadMult * mb.spreadMult * gunSpreadMult,
+        dmg: gun ? gun.dmg : spec.dmg,
+        fireInterval: (gun ? gun.fireInterval : spec.fireInterval) * bonus.fireMult * mb.fireMult,
+        spread: (gun ? gun.spread : spec.spread) * bonus.spreadMult * mb.spreadMult,
         dmgMult: mb.dmgMult * (1 + 0.08 * (upg.marksmanship ?? 0)),
         healMult: mb.healMult * (has("aidbag") ? 1.3 : 1),
-        bulletSpeed: spec.bulletSpeed,
+        bulletSpeed: gun ? gun.bulletSpeed : spec.bulletSpeed,
         isStatic: false,
         vehicle: false, counterAttack: false, aggressive: false,
         orders: [],
@@ -3647,7 +3646,7 @@ export class GameEngine {
         magSize,
         mag: magSize,
         reloadT: 0,
-        reloadTime: spec.reloadTime * Math.pow(0.88, upg.steady ?? 0),
+        reloadTime: (gun ? gun.reloadTime : spec.reloadTime) * Math.pow(0.88, upg.steady ?? 0),
         reloadTotal: 0,
         altMagSize: spec.sidearm?.magSize ?? 0,
         altMag: spec.sidearm?.magSize ?? 0,
@@ -7561,7 +7560,7 @@ export class GameEngine {
     // Muzzle flash on the first frames of a shot.
     if ((u.shootT ?? 0) > 0.08 && look.weapon !== "mortar" && look.weapon !== "none") {
       const crouch = pose === "crouch" || pose === "prone";
-      const reach = look.weapon === "sniper" || look.weapon === "springfield" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
+      const reach = look.weapon === "sniper" || look.weapon === "springfield" || look.weapon === "bar" || look.weapon === "fg42" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
       const wy = look.weapon === "bazooka" ? 4 + (crouch ? 0 : 1) : look.weapon === "flak" ? 6 : 6 + (crouch ? 3 : 0);
       const mx = fx + (flip ? -1 : 1) * (reach - FEET_X + (flip ? 1 : 0)) * PX - (flip ? PX : 0);
       const my = top + wy * PX;

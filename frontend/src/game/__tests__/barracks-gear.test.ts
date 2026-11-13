@@ -9,7 +9,9 @@
  *    hands shorten his reload; legs raise his speed; extra
  *    ammo pouches grow his magazine (never a one-shot tube);
  *    the aid bag strengthens a medic's healing.
- *  - a carried gun reshapes his weapon (Thompson faster and
+ *  - a carried (looted) gun REPLACES his class weapon with
+ *    its own full stat line, and unequipping restores the
+ *    class weapon (Thompson faster and
  *    shorter, Springfield longer and heavier, MP40 tighter).
  *  - the field dressing knits him back up after quiet seconds.
  *  - the lucky charm turns a killing hit aside, sometimes:
@@ -19,6 +21,7 @@
  *    report, alongside its RP.
  */
 import { describe, expect, it } from "vitest";
+import { GUN_DEFS, UNIT_TYPES } from "../data";
 
 function stubBrowser() {
   const grad = { addColorStop: () => {} };
@@ -98,26 +101,49 @@ describe("barracks upgrades and gear in the build", () => {
     expect(unitOf(e, "atman").magSize).toBe(1);
   });
 
-  it("carried guns reshape the weapon", async () => {
+  it("a looted gun replaces the class weapon with its own full stat line", async () => {
     const e = await build([
       man("plain", "rifleman"),
       man("tommy", "rifleman", { equipment: ["thompson"] }),
       man("glass", "sniper", { equipment: ["springfield"] }),
-      man("plainS", "sniper"),
-      man("cap", "rifleman", { equipment: ["mp40"] }),
+      man("doc", "medic", { equipment: ["fg42"] }),
+      man("gunner", "mg", { equipment: ["bar", "ammo"] }),
     ]);
-    const plain = unitOf(e, "plain");
+    const gun = GUN_DEFS.thompson;
     const tommy = unitOf(e, "tommy");
-    expect(tommy.fireInterval).toBeCloseTo(plain.fireInterval * 0.55, 5);
-    expect(tommy.dmg).toBe(plain.dmg + 2);
-    expect(tommy.range).toBeLessThan(plain.range);
+    // The whole line is the gun's, not the Garand's: damage,
+    // range, magazine, reload and bullet speed read off it.
+    expect(tommy.dmg).toBe(gun.dmg);
+    expect(tommy.range).toBe(gun.range);
+    expect(tommy.magSize).toBe(gun.magSize);
+    expect(tommy.reloadTime).toBeCloseTo(gun.reloadTime, 5);
+    expect(tommy.bulletSpeed).toBe(gun.bulletSpeed);
+    expect(tommy.fireInterval).toBeCloseTo(gun.fireInterval, 5);
+    // The scoped bolt gun outranges everything else he could carry.
     const glass = unitOf(e, "glass");
-    const plainS = unitOf(e, "plainS");
-    expect(glass.range).toBe(plainS.range + 60);
-    expect(glass.dmg).toBe(plainS.dmg + 5);
-    const cap = unitOf(e, "cap");
-    expect(cap.dmg).toBe(plain.dmg + 3);
-    expect(cap.spread).toBeCloseTo(plain.spread * 0.8, 5);
+    expect(glass.range).toBe(GUN_DEFS.springfield.range);
+    expect(glass.dmg).toBe(GUN_DEFS.springfield.dmg);
+    // A medic with a captured FG42 fires the FG42 — and is
+    // still the medic (his class and its work are untouched).
+    const doc = unitOf(e, "doc");
+    expect(doc.dmg).toBe(GUN_DEFS.fg42.dmg);
+    expect(doc.range).toBe(GUN_DEFS.fg42.range);
+    expect(doc.type).toBe("medic");
+    // Pouches grow a carried gun's magazine too (BAR 20 -> 30).
+    expect(unitOf(e, "gunner").magSize).toBe(30);
+  });
+
+  it("unequipping restores the class weapon", async () => {
+    const armed = await build([man("solo", "rifleman", { equipment: ["thompson"] })]);
+    const bare = await build([man("solo", "rifleman")]);
+    const spec = UNIT_TYPES.rifleman;
+    expect(unitOf(armed, "solo").dmg).toBe(GUN_DEFS.thompson.dmg);
+    const restored = unitOf(bare, "solo");
+    expect(restored.dmg).toBe(spec.dmg);
+    expect(restored.range).toBe(spec.range);
+    expect(restored.magSize).toBe(spec.magSize);
+    expect(restored.reloadTime).toBeCloseTo(spec.reloadTime, 5);
+    expect(restored.bulletSpeed).toBe(spec.bulletSpeed);
   });
 
   it("the dressing knits a quiet man back toward 60%", async () => {

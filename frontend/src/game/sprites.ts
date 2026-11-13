@@ -9,7 +9,7 @@ export const SPR_H = 14;
 export const FEET_X = 5;
 
 export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "prone" | "proneA" | "proneB";
-export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none" | "thompson" | "springfield" | "mp40";
+export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none" | "thompson" | "springfield" | "mp40" | "carbine" | "trench" | "bar" | "fg42";
 export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer" | "us-net" | "us-para" | "us-jeep" | "us-pile" | "us-hbt";
 
 export interface Palette {
@@ -137,6 +137,18 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
     } else if (weapon === "mp40") {
       for (let x = 11; x <= 14; x++) px(x, 9, "#2A2A26");
       px(12, 10, "#2A2A26"); // stick magazine
+    } else if (weapon === "carbine") {
+      for (let x = 11; x <= 14; x++) px(x, 9, x <= 12 ? WOOD : METAL);
+      px(12, 10, METAL);
+    } else if (weapon === "trench") {
+      for (let x = 11; x <= 13; x++) { px(x, 9, METAL); px(x, 10, "#3E3E38"); }
+    } else if (weapon === "bar") {
+      for (let x = 11; x <= 15; x++) px(x, 9, METAL);
+      px(12, 8, "#24231E"); // top magazine
+      px(14, 10, METAL); // bipod leg
+    } else if (weapon === "fg42") {
+      for (let x = 11; x <= 15; x++) px(x, 9, "#33322C");
+      px(12, 10, "#24231E"); // side magazine
     } else if (weapon === "bazooka") {
       for (let x = 10; x <= 14; x++) {
         px(x, 8, "#4A5234");
@@ -350,6 +362,36 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
       W(8, wy + 2, "#2A2A26");
       W(5, wy, METAL); // folded stock
       W(6, wy + 1, "#2A2A26");
+      arm();
+      break;
+    case "carbine":
+      for (let x = 7; x <= 11; x++) W(x, wy, x <= 8 ? WOOD : METAL);
+      W(9, wy + 1, METAL); // the slim 15-round magazine
+      W(5, wy + 1, WOOD);
+      W(6, wy + 1, WOOD);
+      arm();
+      break;
+    case "trench":
+      for (let x = 7; x <= 10; x++) { W(x, wy, METAL); W(x, wy + 1, "#3E3E38"); } // fat barrel and heat shield
+      W(8, wy + 2, WOOD); // the pump
+      W(5, wy, WOOD);
+      W(6, wy, WOOD);
+      arm();
+      break;
+    case "bar":
+      for (let x = 6; x <= 15; x++) W(x, wy, x <= 8 ? WOOD : METAL);
+      W(15, wy, METAL_HI);
+      W(9, wy - 1, "#24231E"); // the top magazine
+      W(10, wy - 1, "#24231E");
+      W(13, wy + 1, METAL); // bipod leg folded down
+      arm();
+      break;
+    case "fg42":
+      for (let x = 6; x <= 14; x++) W(x, wy, "#33322C");
+      W(14, wy, METAL_HI); // muzzle brake
+      W(9, wy + 1, "#24231E"); // side magazine, angled down
+      W(9, wy + 2, "#24231E");
+      W(5, wy, WOOD);
       arm();
       break;
     case "bazooka": {

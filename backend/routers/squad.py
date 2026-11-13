@@ -7,7 +7,7 @@ from models.models import BuyItemIn, EquipIn, GameStateOut, HireIn, SoldierOut, 
 from lib.db import db
 from lib.save import S, save_lock
 from lib.gen import make_soldier
-from lib.items import EQUIP_SLOTS, ITEMS, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS
+from lib.items import EQUIP_SLOTS, GUNS, HEADGEAR, ITEMS, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS
 from lib.state import commander_info, get_state, soldier_out, state_out
 
 router = APIRouter()
@@ -101,6 +101,10 @@ async def equip_item(input: EquipIn):
         equipment = list(doc.get("equipment") or [])
         if input.item in equipment:
             raise HTTPException(status_code=400, detail="He already carries one")
+        if input.item in GUNS and any(x in GUNS for x in equipment):
+            raise HTTPException(status_code=400, detail="He already carries a gun. One weapon at a time.")
+        if input.item in HEADGEAR and any(x in HEADGEAR for x in equipment):
+            raise HTTPException(status_code=400, detail="He already wears headgear. One head, one cover.")
         if len(equipment) >= EQUIP_SLOTS:
             raise HTTPException(status_code=400, detail="Both of his slots are full")
         state = await get_state()
@@ -141,6 +145,8 @@ async def buy_item(input: BuyItemIn):
             raise HTTPException(status_code=400, detail="Unknown item")
         state = await get_state()
         price = ITEMS[input.item]["price"]
+        if input.item in GUNS:
+            raise HTTPException(status_code=400, detail="Guns are found on the battlefield, not sold.")
         if state["requisition"] < price:
             raise HTTPException(status_code=402, detail="Insufficient requisition points")
         inventory = dict(state.get("inventory") or {})

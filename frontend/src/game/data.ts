@@ -525,10 +525,42 @@ export const ITEM_DEFS: ItemDef[] = [
   { id: "pilecap", label: "M1943 Pile Cap", blurb: "Ear flaps down against the din: suppression builds 15% slower.", price: 75, weight: 1, kind: "headgear" },
   { id: "hbtcap", label: "HBT Fatigue Cap", blurb: "Working wear: the cover he digs is half again as strong.", price: 75, restrict: ["engineer"], weight: 1, kind: "headgear" },
   { id: "garrisoncap", label: "Garrison Cap", blurb: "Off duty only: he wears it in the Barracks and takes his M1 into battle. No combat effect.", price: 25, weight: 2, kind: "headgear" },
-  { id: "thompson", label: "M1A1 Thompson", blurb: "A chopper for close work: fires 45% faster, +2 damage, a shorter reach.", price: 100, restrict: ["rifleman", "medic", "radioman", "recon", "engineer"], weight: 1, kind: "gun" },
-  { id: "springfield", label: "Scoped Springfield", blurb: "+60 range, +5 damage through the glass.", price: 100, restrict: ["sniper", "recon"], weight: 1, kind: "gun" },
-  { id: "mp40", label: "Captured MP40", blurb: "Their iron, turned around: +3 damage, tighter spread.", price: 100, restrict: ["rifleman", "medic", "radioman", "recon", "engineer", "sniper"], weight: 1, kind: "gun" },
+  { id: "thompson", label: "Thompson M1928", blurb: "The drum fed chopper: a hose of fire up close, and not much past it.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 1, kind: "gun" },
+  { id: "mp40", label: "Captured MP40", blurb: "Their iron, turned around: steady, honest automatic fire.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 1, kind: "gun" },
+  { id: "carbine", label: "M1A1 Carbine", blurb: "The folding stock carbine: light, quick and handy at honest ranges.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 1, kind: "gun" },
+  { id: "springfield", label: "Springfield M1903 (Scoped)", blurb: "A bolt gun with glass: it reaches past everything else on the field, one slow heavy shot at a time.", price: 0, restrict: ["sniper", "recon"], weight: 0.7, kind: "gun" },
+  { id: "trench97", label: "M97 Trench Gun", blurb: "The trench broom as a man's main gun: devastating inside a room's length, nothing beyond it.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 0.7, kind: "gun" },
+  { id: "bar", label: "BAR M1918", blurb: "The automatic rifle: long bursts at rifle ranges, and a slow, heavy reload.", price: 0, restrict: ["mg"], weight: 0.5, kind: "gun" },
+  { id: "fg42", label: "Captured FG42", blurb: "The paratroopers' prize: full power automatic fire at rifle reach. The rarest find in the war.", price: 0, restrict: ["rifleman", "medic", "mg", "sniper", "radioman", "recon", "engineer"], weight: 0.3, kind: "gun" },
 ];
+
+/** Looted guns (Josh, 2026-11-13): found, never sold, and a
+ * carried gun REPLACES the man's class weapon with its own full
+ * stat line — damage, range, magazine and reload (the reloading
+ * system's numbers), fire rate, spread, bullet speed. `sprite`
+ * names the drawn weapon variant in sprites.ts. The AT man never
+ * appears in a gun restriction list: he keeps his bazooka and
+ * trench gun split and does not trade it away. */
+export interface GunDef {
+  dmg: number;
+  range: number;
+  magSize: number;
+  reloadTime: number;
+  fireInterval: number;
+  spread: number;
+  bulletSpeed: number;
+  sprite: "thompson" | "mp40" | "carbine" | "springfield" | "trench" | "bar" | "fg42";
+}
+
+export const GUN_DEFS: Record<string, GunDef> = {
+  thompson: { dmg: 11, range: 150, magSize: 50, reloadTime: 3.2, fireInterval: 0.11, spread: 0.1, bulletSpeed: 560, sprite: "thompson" },
+  mp40: { dmg: 9, range: 185, magSize: 32, reloadTime: 2.0, fireInterval: 0.13, spread: 0.055, bulletSpeed: 560, sprite: "mp40" },
+  carbine: { dmg: 10, range: 230, magSize: 15, reloadTime: 1.6, fireInterval: 0.32, spread: 0.045, bulletSpeed: 640, sprite: "carbine" },
+  springfield: { dmg: 34, range: 520, magSize: 5, reloadTime: 2.8, fireInterval: 1.6, spread: 0.012, bulletSpeed: 900, sprite: "springfield" },
+  trench97: { dmg: 30, range: 110, magSize: 5, reloadTime: 2.2, fireInterval: 0.9, spread: 0.09, bulletSpeed: 540, sprite: "trench" },
+  bar: { dmg: 13, range: 300, magSize: 20, reloadTime: 3.4, fireInterval: 0.14, spread: 0.07, bulletSpeed: 720, sprite: "bar" },
+  fg42: { dmg: 14, range: 330, magSize: 20, reloadTime: 2.6, fireInterval: 0.12, spread: 0.05, bulletSpeed: 760, sprite: "fg42" },
+};
 export const ITEM_BY_ID: Record<string, ItemDef> = Object.fromEntries(ITEM_DEFS.map((d) => [d.id, d]));
 
 /** The weighted stores roll for a battlefield crate, mirroring

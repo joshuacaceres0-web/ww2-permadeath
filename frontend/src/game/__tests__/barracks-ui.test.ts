@@ -10,6 +10,7 @@
  */
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { GUN_DEFS, ITEM_DEFS } from "../data";
 
 const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), "utf8");
 
@@ -45,6 +46,21 @@ describe("barracks update UI", () => {
     const src = read("../sprites.ts");
     for (const head of ["us-net", "us-para", "us-jeep", "us-pile", "us-hbt"]) expect(src).toContain(head);
     for (const gun of ["thompson", "springfield", "mp40"]) expect(src).toContain(`case "${gun}"`);
+  });
+
+  it("guns are found only, carry stat lines, and never fit the AT man", () => {
+    const src = read("../../pages/Barracks.tsx");
+    expect(src).toContain("found-only-");
+    expect(src).toContain("gun-stats-");
+    expect(src).toContain("Guns are loot only");
+    const sprites = read("../sprites.ts");
+    for (const w of ["carbine", "trench", "bar", "fg42"]) expect(sprites).toContain(`case "${w}"`);
+    // The AT man keeps his bazooka split: no gun fits him.
+    for (const d of ITEM_DEFS.filter((x) => x.kind === "gun")) {
+      expect(d.restrict).not.toContain("at");
+      expect(GUN_DEFS[d.id]).toBeDefined();
+    }
+    expect(Object.keys(GUN_DEFS)).toHaveLength(7);
   });
 
   it("the portrait draws earned headgear, garrison cap included", () => {

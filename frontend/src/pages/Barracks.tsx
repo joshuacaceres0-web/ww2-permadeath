@@ -9,7 +9,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
-import { EQUIP_SLOTS, ITEM_BY_ID, ITEM_DEFS, RANKS, UNIT_TYPES, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS, isCowardQuirk, levelBonus } from "@/game/data";
+import { EQUIP_SLOTS, GUN_DEFS, ITEM_BY_ID, ITEM_DEFS, RANKS, UNIT_TYPES, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS, isCowardQuirk, levelBonus } from "@/game/data";
+
+const gunLine = (id: string) => {
+  const g = GUN_DEFS[id];
+  return g ? `DMG ${g.dmg} · RNG ${g.range} · MAG ${g.magSize} · RLD ${g.reloadTime}s` : null;
+};
 import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
 import { useMusic } from "@/game/music";
@@ -247,7 +252,7 @@ export default function Barracks() {
             </span>
           </CardTitle>
           <p className="font-mono text-[10px] leading-relaxed text-[#8D9A83]">
-            Gear, earned headgear and guns. Found in battlefield crates and awarded for victories, or bought with requisition.
+            Gear and earned headgear: found in battlefield crates, awarded for victories, or bought with requisition. Guns are loot only, found and never sold, and a carried gun replaces a man's class weapon while he has it.
             Open a man's dossier to issue him up to {EQUIP_SLOTS} pieces. Stores belong to the squad: what sits here survives.
             What a man carries into battle is lost with him if he falls — his gear, his upgrades, all of it.
           </p>
@@ -266,6 +271,9 @@ export default function Barracks() {
                     </Badge>
                   </div>
                   <p className="mt-1 flex-1 font-mono text-[10px] leading-relaxed text-[#A2B29A]">{d.blurb}</p>
+                  {gunLine(d.id) && (
+                    <p className="mt-1 font-mono text-[10px] text-[#E5A93C]" data-testid={`gun-stats-${d.id}`}>{gunLine(d.id)}</p>
+                  )}
                   {d.restrict && (
                     <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.15em] text-[#75826F]">
                       {d.restrict.map((t) => UNIT_TYPES[t].label).join(" / ")} only
@@ -275,16 +283,22 @@ export default function Barracks() {
                     <span className="font-mono text-[10px] text-[#8D9A83]" data-testid={`store-count-${d.id}`}>
                       IN STORES: <span className={count > 0 ? "text-[#5EB872]" : "text-[#75826F]"}>{count}</span>
                     </span>
-                    <Button
-                      data-testid={`buy-btn-${d.id}`}
-                      variant={affordable ? "default" : "outline"}
-                      size="xs"
-                      className="font-mono text-[10px]"
-                      disabled={!affordable || buyItem.isPending}
-                      onClick={() => buyItem.mutate(d.id)}
-                    >
-                      BUY — {d.price} RP
-                    </Button>
+                    {d.kind === "gun" ? (
+                      <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-[#C68B45]" data-testid={`found-only-${d.id}`}>
+                        Found only
+                      </span>
+                    ) : (
+                      <Button
+                        data-testid={`buy-btn-${d.id}`}
+                        variant={affordable ? "default" : "outline"}
+                        size="xs"
+                        className="font-mono text-[10px]"
+                        disabled={!affordable || buyItem.isPending}
+                        onClick={() => buyItem.mutate(d.id)}
+                      >
+                        BUY — {d.price} RP
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
@@ -467,11 +481,14 @@ function Dossier({
               const carried = (s.equipment ?? []).includes(d.id);
               const restricted = d.restrict ? !d.restrict.includes(s.type) : false;
               const full = (s.equipment?.length ?? 0) >= EQUIP_SLOTS;
-              const reason = carried ? "Carried" : restricted ? `${d.restrict!.map((t) => UNIT_TYPES[t].label).join(" / ")} only` : full ? "Slots full" : null;
+              const gunClash = d.kind === "gun" && (s.equipment ?? []).some((x) => ITEM_BY_ID[x]?.kind === "gun");
+              const headClash = d.kind === "headgear" && (s.equipment ?? []).some((x) => ITEM_BY_ID[x]?.kind === "headgear");
+              const reason = carried ? "Carried" : restricted ? `${d.restrict!.map((t) => UNIT_TYPES[t].label).join(" / ")} only` : gunClash ? "Carries a gun" : headClash ? "Wears headgear" : full ? "Slots full" : null;
               return (
                 <div key={d.id} className="flex items-center justify-between gap-2 font-mono text-[11px]">
                   <span className="min-w-0 truncate text-[#E3E7DC]">
                     {d.label} <span className="text-[#75826F]">× {inventory[d.id]}</span>
+                    {gunLine(d.id) && <span className="block text-[9px] text-[#8D9A83]">{gunLine(d.id)}</span>}
                   </span>
                   <Button
                     data-testid={`equip-btn-${d.id}`}
