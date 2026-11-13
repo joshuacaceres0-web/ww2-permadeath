@@ -419,6 +419,12 @@ interface Blocker {
   y: number;
   r: number;
   kind?: BlockerKind;
+  /** Which placed object this circle belongs to (one ruin, one
+   * building, one hedgerow line). Circles of the SAME object
+   * are meant to touch (a wall is a row of circles); circles
+   * of DIFFERENT objects must never overlap (Josh, 2026-11-12:
+   * ruins and houses sat on top of other objects). */
+  obj?: number;
 }
 
 export interface HudUnit {
@@ -5661,6 +5667,7 @@ export class GameEngine {
 
 type Ctx = CanvasRenderingContext2D;
 let COVERS: Cover[] = []; // filled by buildTerrain's helpers
+let OBJ_SEQ = 0; // object ids for blockers, reset per terrain build
 
 // Scorch + torn burlap on a damaged piece of cover (painted into the terrain layer).
 function paintWear(ctx: Ctx, c: Cover) {
@@ -5717,6 +5724,7 @@ function drawSandbags(ctx: Ctx, x: number, y: number, _ang: number, n = 5) {
 }
 
 function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () => number) {
+  const obj = ++OBJ_SEQ;
   // Broken stone walls (block) with rubble around (cover).
   ctx.fillStyle = "rgba(0,0,0,0.35)";
   ctx.fillRect(x - 46, y - 40, 104, 92);
@@ -5737,7 +5745,7 @@ function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () =
     for (let t = 6; t < len; t += 12) {
       const bx = ww > wh ? wx + t : wx + ww / 2;
       const by = ww > wh ? wy + wh / 2 : wy + t;
-      blockers.push({ x: bx, y: by, r: 7, kind: "ruin" });
+      blockers.push({ x: bx, y: by, r: 7, kind: "ruin", obj });
       COVERS.push({ x: bx, y: by, r: 7, q: 0.8, q0: 0.8, type: "heavy", hp: 400, maxHp: 400 });
     }
   }
@@ -5748,6 +5756,7 @@ function drawRuin(ctx: Ctx, blockers: Blocker[], x: number, y: number, rng: () =
 }
 
 function drawTrench(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: number, y1: number, gaps: number[], rng: () => number) {
+  const obj = ++OBJ_SEQ;
   const len = Math.hypot(x1 - x0, y1 - y0);
   const dx = (x1 - x0) / len;
   const dy = (y1 - y0) / len;
@@ -5795,7 +5804,7 @@ function drawTrench(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: n
     for (let t = a + 10; t < b; t += 22) {
       const cx = x0 + dx * t;
       const cy = y0 + dy * t;
-      blockers.push({ x: cx, y: cy, r: 14, kind: "trench" });
+      blockers.push({ x: cx, y: cy, r: 14, kind: "trench", obj });
       COVERS.push({ x: cx, y: cy, r: 14, q: 0.95, q0: 0.95, type: "heavy", kind: "trench" });
     }
   }
@@ -5847,20 +5856,34 @@ function drawWreck(ctx: Ctx, blockers: Blocker[], x: number, y: number, ang: num
   ctx.arc(10, 8, 9, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
+  const obj = ++OBJ_SEQ;
   for (const t of [-24, 0, 24]) {
     const bx = x + Math.cos(ang) * t;
     const by = y + Math.sin(ang) * t;
-    blockers.push({ x: bx, y: by, r: 22, kind: "wreck" });
+    blockers.push({ x: bx, y: by, r: 22, kind: "wreck", obj });
     COVERS.push({ x: bx, y: by, r: 22, q: 0.85, q0: 0.85, type: "heavy", hp: 500, maxHp: 500 });
   }
 }
 
 // Scatter a mixed cover field between x0..x1 — both sides use it.
-function coverField(ctx: Ctx, blockers: Blocker[], rng: () => number, x0: number, x1: number, n: number) {
+function coverField(
+  ctx: Ctx,
+  blockers: Blocker[],
+  rng: () => number,
+  x0: number,
+  x1: number,
+  n: number,
+  gate?: { check: (x: number, y: number, r: number) => boolean; add: (x: number, y: number, r: number) => void },
+) {
   for (let i = 0; i < n; i++) {
     const x = x0 + rng() * (x1 - x0);
     const y = 90 + rng() * (MAP_H - 180);
     const r = rng();
+    // The footprint of what this roll would place (a ruin is
+    // 100 wide: its center can clear a blocker while its walls
+    // land on it — the registry check uses the whole shape).
+    const footprint = r < 0.35 ? 26 : r < 0.6 ? 62 : r < 0.82 ? 24 : 44;
+    if (gate && !gate.check(x, y, footprint)) continue;
     // Do not scatter cover on top of an existing blocker: a wreck or
     // ruin landing against a building leaves a gap too narrow for a
     // unit to pass, and a unit ordered through it wedges in the pocket
@@ -5871,6 +5894,7 @@ function coverField(ctx: Ctx, blockers: Blocker[], rng: () => number, x0: number
     else if (r < 0.6) drawRuin(ctx, blockers, x, y, rng);
     else if (r < 0.82) drawCrates(ctx, blockers, x, y);
     else drawWreck(ctx, blockers, x, y, rng() * Math.PI);
+    if (gate) gate.add(x, y, footprint);
   }
 }
 
@@ -5895,6 +5919,7 @@ function drawBush(ctx: Ctx, x: number, y: number, r: number, rng: () => number) 
 }
 
 function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: number, y1: number, gaps: number[], rng: () => number) {
+  const obj = ++OBJ_SEQ;
   const len = Math.hypot(x1 - x0, y1 - y0);
   const GAP = 120;
   for (let t = 0; t <= len; t += 30) {
@@ -5903,7 +5928,7 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
     const x = x0 + (x1 - x0) * f + (rng() - 0.5) * 6;
     const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
     drawBush(ctx, x, y, 17, rng);
-    blockers.push({ x, y, r: 16, kind: "hedgerow" });
+    blockers.push({ x, y, r: 16, kind: "hedgerow", obj });
     COVERS.push({ x, y, r: 16, q: 0.45, q0: 0.45, type: "light", hp: 120, maxHp: 120 });
   }
   // Worn dirt marks the gaps so the player sees where to go.
@@ -5916,6 +5941,7 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
 }
 
 function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number, snow: boolean) {
+  const obj = ++OBJ_SEQ;
   ctx.fillStyle = "rgba(6,10,6,0.55)";
   ctx.beginPath();
   ctx.ellipse(x + 6, y + 7, r, r * 0.8, 0, 0, Math.PI * 2);
@@ -5930,11 +5956,12 @@ function drawTree(ctx: Ctx, blockers: Blocker[], x: number, y: number, r: number
     ctx.stroke();
     ctx.fillStyle = snow ? "#C9D2CC" : "#2D5222";
   }
-  blockers.push({ x, y, r: r * 0.75, kind: "tree" });
+  blockers.push({ x, y, r: r * 0.75, kind: "tree", obj });
   COVERS.push({ x, y, r: r * 0.75, q: 0.6, q0: 0.6, type: "light", hp: 150, maxHp: 150 });
 }
 
 function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: number, h: number) {
+  const obj = ++OBJ_SEQ;
   ctx.fillStyle = "rgba(0,0,0,0.45)";
   ctx.fillRect(x + 8, y + 8, w, h);
   ctx.fillStyle = "#5A3A2A";
@@ -5952,12 +5979,13 @@ function drawBuilding(ctx: Ctx, blockers: Blocker[], x: number, y: number, w: nu
   // Cover the footprint with blocker circles.
   const r = Math.min(w, h) / 2;
   for (let bx = x + r; bx <= x + w - r + 1; bx += r) for (let by = y + r; by <= y + h - r + 1; by += r) {
-    blockers.push({ x: bx, y: by, r: r * 1.05, kind: "building" });
+    blockers.push({ x: bx, y: by, r: r * 1.05, kind: "building", obj });
     COVERS.push({ x: bx, y: by, r: r * 1.05, q: 0.9, q0: 0.9, type: "heavy" }); // stone walls: no hp, indestructible
   }
 }
 
 function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
+  const obj = ++OBJ_SEQ;
   ctx.strokeStyle = "#2A2A26";
   ctx.lineWidth = 4;
   ctx.beginPath();
@@ -5971,11 +5999,50 @@ function drawHedgehog(ctx: Ctx, blockers: Blocker[], x: number, y: number) {
   ctx.strokeStyle = "#6A6A60";
   ctx.lineWidth = 1.5;
   ctx.stroke();
-  blockers.push({ x, y, r: 11, kind: "hedgehog" });
+  blockers.push({ x, y, r: 11, kind: "hedgehog", obj });
 }
 
 function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElement; blockers: Blocker[]; covers: Cover[] } {
   COVERS = [];
+  OBJ_SEQ = 0;
+  // Footprint registry for the no-overlap rule (Josh,
+  // 2026-11-12): every placed object registers a circle; a new
+  // object is only placed where its circle clears every
+  // registered one by GAP, so objects sit apart with room for
+  // a man to pass and nothing stacks or intersects. The total
+  // amount of cover is unchanged: placements retry and shift
+  // rather than thin out.
+  const GAP = 12;
+  const placed: Array<{ x: number; y: number; r: number }> = [];
+  const clearOf = (x: number, y: number, r: number) =>
+    placed.every((p) => Math.hypot(p.x - x, p.y - y) >= p.r + r + GAP);
+  const register = (x: number, y: number, r: number) => {
+    placed.push({ x, y, r });
+  };
+  const registerLine = (x0: number, y0: number, x1: number, y1: number, r: number) => {
+    const len = Math.hypot(x1 - x0, y1 - y0);
+    const n = Math.max(1, Math.ceil(len / 40));
+    for (let i = 0; i <= n; i++) register(x0 + ((x1 - x0) * i) / n, y0 + ((y1 - y0) * i) / n, r);
+  };
+  // Try a random spot in a band until one is clear.
+  const scatterClear = (
+    x0: number,
+    x1: number,
+    y0: number,
+    y1: number,
+    r: number,
+    tries = 10,
+    reject?: (x: number, y: number) => boolean,
+  ) => {
+    for (let t = 0; t < tries; t++) {
+      const x = x0 + rng() * (x1 - x0);
+      const y = y0 + rng() * (y1 - y0);
+      if (reject && reject(x, y)) continue;
+      if (clearOf(x, y, r)) return { x, y };
+    }
+    return null;
+  };
+  const gate = { check: clearOf, add: register };
   const canvas = document.createElement("canvas");
   canvas.width = MAP_W;
   canvas.height = MAP_H;
@@ -6043,13 +6110,19 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.fillRect(800, 0, 40, MAP_H); // shingle
     // The shingle bank: a long low wall of stones to hide behind.
     for (let y = 30; y < MAP_H; y += 26) COVERS.push({ x: 820, y, r: 14, q: 0.6, q0: 0.6, type: "light", hp: 150, maxHp: 150 });
+    // The fixed defense lines register their footprints first,
+    // so the random hedgehogs and scatter keep off them.
+    for (const lx of [1000, 1700, 2500, 3300]) registerLine(lx, 0, lx, MAP_H, 22);
+    for (const lx of [1400, 2600, 3400]) registerLine(lx, 80, lx, MAP_H - 80, 18);
+    for (const py of [MAP_H * 0.32, MAP_H * 0.68]) register(1105, py, 32);
     for (let i = 0; i < 34; i++) {
-      const hx = 380 + rng() * 380;
-      const hy = 40 + rng() * (MAP_H - 80);
-      drawHedgehog(ctx, blockers, hx, hy);
-      COVERS.push({ x: hx, y: hy, r: 11, q: 0.35, q0: 0.35, type: "light", hp: 80, maxHp: 80 });
+      const spot = scatterClear(380, 760, 40, MAP_H - 40, 14);
+      if (!spot) continue;
+      register(spot.x, spot.y, 14);
+      drawHedgehog(ctx, blockers, spot.x, spot.y);
+      COVERS.push({ x: spot.x, y: spot.y, r: 11, q: 0.35, q0: 0.35, type: "light", hp: 80, maxHp: 80 });
     }
-    coverField(ctx, blockers, rng, 1100, 3900, 20);
+    coverField(ctx, blockers, rng, 1100, 3900, 20, gate);
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 1950, y, 0, 6); // German trench line
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 2750, y, 0, 6); // second trench line, eastern ground
     for (const y of [MAP_H * 0.2, MAP_H * 0.5, MAP_H * 0.8]) drawSandbags(ctx, 3550, y, 0, 6); // third trench line, new eastern ground
@@ -6073,34 +6146,65 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
       ctx.strokeRect(1080, py - 22, 50, 44);
       ctx.fillStyle = "#1A1A18";
       ctx.fillRect(1080, py - 4, 8, 8);
-      blockers.push({ x: 1105, y: py, r: 26, kind: "pillbox" });
+      blockers.push({ x: 1105, y: py, r: 26, kind: "pillbox", obj: ++OBJ_SEQ });
       COVERS.push({ x: 1105, y: py, r: 26, q: 0.9, q0: 0.9, type: "heavy" }); // concrete: no hp, indestructible
     }
   } else if (kind === "airborne" || kind === "bocage") {
     road(MAP_H / 2);
+    for (const x of [620, 1120, 1620, 2050, 2600, 3400]) registerLine(x, 30, x, MAP_H - 30, 22);
+    for (const y of [430, 920]) {
+      for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030], [2140, 2580], [2940, 3380]]) registerLine(a, y, b, y, 22);
+    }
+    for (const lx of [1400, 2400, 3400]) registerLine(lx, 60, lx, MAP_H - 60, 18);
+    register(1760 + 80, 560 + 55, 97); // the church footprint
     for (const x of [620, 1120, 1620, 2050, 2600, 3400]) hedgerow(ctx, blockers, x, 30, x, MAP_H - 30, gapPick(3), rng);
     for (const y of [430, 920]) {
       for (const [a, b] of [[640, 1100], [1140, 1600], [1640, 2030], [2140, 2580], [2940, 3380]]) hedgerow(ctx, blockers, a, y, b, y, [0.5], rng);
     }
-    for (let i = 0; i < 12; i++) drawTree(ctx, blockers, 700 + rng() * 3200, 60 + rng() * (MAP_H - 120), 18 + rng() * 10, false);
+    for (let i = 0; i < 12; i++) {
+      const r = 18 + rng() * 10;
+      const spot = scatterClear(700, 3900, 60, MAP_H - 60, r);
+      if (!spot) continue;
+      register(spot.x, spot.y, r);
+      drawTree(ctx, blockers, spot.x, spot.y, r, false);
+    }
     drawBuilding(ctx, blockers, 1760, 560, 160, 110); // Norman church
     drawTrench(ctx, blockers, 1400, 60, 1400, MAP_H - 60, [0.5], rng);
     drawTrench(ctx, blockers, 2400, 60, 2400, MAP_H - 60, [0.3, 0.65], rng);
     drawTrench(ctx, blockers, 3400, 60, 3400, MAP_H - 60, [0.3, 0.65], rng);
-    coverField(ctx, blockers, rng, 300, 3900, 24);
+    coverField(ctx, blockers, rng, 300, 3900, 24, gate);
     if (kind === "airborne") {
       ctx.fillStyle = "rgba(10,16,34,0.38)"; // night drop
       ctx.fillRect(0, 0, MAP_W, MAP_H);
     }
   } else if (kind === "town") {
     road(MAP_H / 2);
+    // The trench lines and the west hedgerow are fixed: their
+    // footprints register before any building or ruin is set.
+    registerLine(400, 40, 400, MAP_H - 40, 22);
+    for (const lx of [900, 2700, 3500]) registerLine(lx, 80, lx, MAP_H - 80, 18);
     for (let i = 0; i < 15; i++) {
       const w = 110 + rng() * 90;
       const h = 90 + rng() * 60;
       const bx = 520 + (i % 5) * 620 + rng() * 80;
       const by = 80 + Math.floor(i / 5) * 430 + rng() * 60;
       if (Math.abs(by + h / 2 - MAP_H / 2) < 110) continue; // keep the main street open
-      drawBuilding(ctx, blockers, bx, by, w, h);
+      // Shift the building within its plot until its footprint
+      // clears everything placed so far (Josh: houses sat on
+      // ruins, trenches, and each other). The grid is sparse,
+      // a short search always finds a clear spot nearby.
+      const R = Math.hypot(w, h) / 2;
+      let px = bx;
+      let py = by;
+      for (const [ox, oy] of [[0, 0], [80, 0], [-80, 0], [160, 0], [-160, 0], [0, 80], [80, 80], [-80, 80], [0, -80], [160, 80], [-160, 80]] as Array<[number, number]>) {
+        if (clearOf(bx + ox + w / 2, by + oy + h / 2, R)) {
+          px = bx + ox;
+          py = by + oy;
+          break;
+        }
+      }
+      register(px + w / 2, py + h / 2, R);
+      drawBuilding(ctx, blockers, px, py, w, h);
     }
     hedgerow(ctx, blockers, 400, 40, 400, MAP_H - 40, gapPick(3), rng);
     // Trenches in the gaps between building columns; the gap at 0.5
@@ -6108,20 +6212,52 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     drawTrench(ctx, blockers, 900, 80, 900, MAP_H - 80, [0.5], rng);
     drawTrench(ctx, blockers, 2700, 80, 2700, MAP_H - 80, [0.35, 0.7], rng);
     drawTrench(ctx, blockers, 3500, 80, 3500, MAP_H - 80, [0.35, 0.7], rng);
-    for (let i = 0; i < 12; i++) drawRuin(ctx, blockers, 650 + i * 280 + rng() * 60, MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60), rng);
-    coverField(ctx, blockers, rng, 500, 3900, 12);
+    for (let i = 0; i < 12; i++) {
+      const rx0 = 650 + i * 280 + rng() * 60;
+      const ry = MAP_H / 2 + (i % 2 ? -1 : 1) * (150 + rng() * 60);
+      // Same rule for the ruins along the street: slide along
+      // the lane (and a step off it if the lane is blocked)
+      // until the footprint is clear.
+      let rx = rx0;
+      let ryy = ry;
+      let found = false;
+      for (const oy of [0, 90, -90]) {
+        for (const ox of [0, 70, -70, 140, -140, 210, -210, 280, -280]) {
+          if (clearOf(rx0 + ox, ry + oy, 62)) {
+            rx = rx0 + ox;
+            ryy = ry + oy;
+            found = true;
+            break;
+          }
+        }
+        if (found) break;
+      }
+      register(rx, ryy, 62);
+      drawRuin(ctx, blockers, rx, ryy, rng);
+    }
+    coverField(ctx, blockers, rng, 500, 3900, 12, gate);
   } else if (kind === "causeway") {
     ctx.fillStyle = "#16252A";
     ctx.fillRect(0, 0, MAP_W, MAP_H * 0.3);
     ctx.fillRect(0, MAP_H * 0.7, MAP_W, MAP_H * 0.3);
     road(MAP_H / 2);
+    const bushObjA = ++OBJ_SEQ;
+    const bushObjB = ++OBJ_SEQ;
     for (let x = 300; x < MAP_W; x += 44) {
       drawBush(ctx, x, MAP_H * 0.3, 15, rng); // reed banks along the flood
-      blockers.push({ x, y: MAP_H * 0.3, r: 15, kind: "bush" });
+      blockers.push({ x, y: MAP_H * 0.3, r: 15, kind: "bush", obj: bushObjA });
       drawBush(ctx, x + 22, MAP_H * 0.7, 15, rng);
-      blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15, kind: "bush" });
+      blockers.push({ x: x + 22, y: MAP_H * 0.7, r: 15, kind: "bush", obj: bushObjB });
     }
-    for (let i = 0; i < 10; i++) drawTree(ctx, blockers, 600 + rng() * 3300, MAP_H * (0.38 + rng() * 0.24), 16, false);
+    registerLine(800, MAP_H / 2 - 180, 3800, MAP_H / 2 - 180, 18);
+    registerLine(800, MAP_H / 2 + 180, 3800, MAP_H / 2 + 180, 18);
+    for (const [wx, wy] of [[1250, MAP_H * 0.47], [1850, MAP_H * 0.55], [2650, MAP_H * 0.5], [3450, MAP_H * 0.53]] as Array<[number, number]>) register(wx, wy, 44);
+    for (let i = 0; i < 10; i++) {
+      const spot = scatterClear(600, 3900, MAP_H * 0.38, MAP_H * 0.62, 16);
+      if (!spot) continue;
+      register(spot.x, spot.y, 16);
+      drawTree(ctx, blockers, spot.x, spot.y, 16, false);
+    }
     for (let i = 0; i < 14; i++) drawSandbags(ctx, 500 + i * 260, MAP_H * (0.42 + (i % 2) * 0.16), Math.PI / 2, 5);
     drawWreck(ctx, blockers, 1250, MAP_H * 0.47, 0.2);
     drawWreck(ctx, blockers, 1850, MAP_H * 0.55, -0.3);
@@ -6132,13 +6268,19 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     drawTrench(ctx, blockers, 800, MAP_H / 2 + 180, 3800, MAP_H / 2 + 180, [0.5], rng);
   } else if (kind === "forest") {
     road(MAP_H / 2);
-    for (let i = 0; i < 110; i++) {
-      const tx = 320 + rng() * (MAP_W - 360);
-      const ty = rng() * MAP_H;
-      if (Math.abs(ty - MAP_H / 2) < 60) continue;
-      drawTree(ctx, blockers, tx, ty, 16 + rng() * 12, snow);
+    for (const lx of [1500, 2600, 3400]) registerLine(lx, 60, lx, MAP_H - 60, 18);
+    for (const sx of [1900, 2700, 3500]) {
+      register(sx, MAP_H / 2 - 120, 30);
+      register(sx, MAP_H / 2 + 120, 30);
     }
-    coverField(ctx, blockers, rng, 400, 3900, 15);
+    for (let i = 0; i < 110; i++) {
+      const r = 16 + rng() * 12;
+      const spot = scatterClear(320, MAP_W - 40, 0, MAP_H, r, 10, (_x, y) => Math.abs(y - MAP_H / 2) < 60);
+      if (!spot) continue;
+      register(spot.x, spot.y, r);
+      drawTree(ctx, blockers, spot.x, spot.y, r, snow);
+    }
+    coverField(ctx, blockers, rng, 400, 3900, 15, gate);
     drawSandbags(ctx, 1900, MAP_H / 2 - 120, 0, 7); // bunker line
     drawSandbags(ctx, 1900, MAP_H / 2 + 120, 0, 7);
     drawSandbags(ctx, 2700, MAP_H / 2 - 120, 0, 7); // second bunker line, eastern ground
