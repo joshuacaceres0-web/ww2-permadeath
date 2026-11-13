@@ -89,6 +89,7 @@ type U = {
   id: number; side: string; npc: boolean; alive: boolean; vehicle: boolean;
   x: number; y: number; hp: number; maxHp: number; kills: number;
   enemyType: string | null; extracted?: boolean;
+  counterAttack?: boolean; aggressive?: boolean;
   orders: Array<{ x: number; y: number }>;
 };
 type Engine = {
@@ -188,5 +189,41 @@ describe("retreat is a fighting withdrawal", () => {
     expect(e.phase).toBe("over");
     expect(e.battleState).toBe("defeat");
     expect(e.fallen).toHaveLength(1);
+  });
+
+  it("retreating brings enemy flankers in off the north and south edges (Josh, 2026-11-12)", async () => {
+    const e = await makeEngine();
+    e.begin();
+    // Squad deep in the map, so the withdrawal is still under
+    // way when the flankers are due.
+    squadOf(e).forEach((u, i) => { u.x = 1500; u.y = 620 + i * 30; });
+    const axisBefore = e.units.filter((u) => u.side === "axis").length;
+    e.retreat();
+    // Five seconds in: nobody new yet.
+    for (let s = 0; s < 60 * 5; s++) e.update(1 / 60);
+    expect(e.units.filter((u) => u.side === "axis").length).toBe(axisBefore);
+    // Past the 6s mark: six flankers, three a side, off the
+    // north and south edges, flagged to charge.
+    for (let s = 0; s < 60 * 2; s++) e.update(1 / 60);
+    const flankers = e.units.filter((u) => u.side === "axis" && u.counterAttack);
+    expect(flankers).toHaveLength(6);
+    expect(flankers.filter((u) => u.y < 200)).toHaveLength(3);
+    expect(flankers.filter((u) => u.y > 1150)).toHaveLength(3);
+    expect(flankers.every((u) => u.aggressive)).toBe(true);
+    // And they move in on the squad: a north flanker's y grows
+    // well off the edge as he cuts south toward the withdrawal.
+    const north = flankers.find((u) => u.y < 200)!;
+    const y0 = north.y;
+    for (let s = 0; s < 60 * 4; s++) e.update(1 / 60);
+    expect(north.y).toBeGreaterThan(y0 + 80);
+  });
+
+  it("no retreat, no flankers", async () => {
+    const e = await makeEngine();
+    e.begin();
+    const axisBefore = e.units.filter((u) => u.side === "axis").length;
+    for (let s = 0; s < 60 * 12; s++) e.update(1 / 60);
+    expect(e.units.filter((u) => u.side === "axis").length).toBe(axisBefore);
+    expect(e.units.some((u) => u.counterAttack)).toBe(false);
   });
 });

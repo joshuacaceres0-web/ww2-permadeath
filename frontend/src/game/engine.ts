@@ -861,6 +861,11 @@ export class GameEngine {
   /** A fall back is in progress: the squad is withdrawing to
    * the west edge under fire (see retreat()). */
   private retreating = false;
+  /** Retreat flankers (Josh, 2026-11-12): seconds on the battle
+   * clock at which the enemy flanking groups arrive to cut off
+   * a retreat, and whether they have arrived. Set by retreat(). */
+  private flankersAt = 0;
+  private flankersSpawned = false;
   private speed = 1; // Settings: game speed multiplier
   private shakeK = 1; // Settings: screen shake strength
   private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean; t0: number } | null = null;
@@ -878,6 +883,10 @@ export class GameEngine {
    * first contact with the paratroopers. The march ends, the
    * trucks halt, and the escort deploys to fight. */
   private convoyContact = false;
+  /** The convoy halftrack carries a squad in its troop bay:
+   * true once it has unloaded them at first contact (Josh,
+   * 2026-11-12). Once per battle, and only if it lives that long. */
+  private halftrackDropped = false;
   /** Intro sequences (Josh, 2026-11-12): the Higgins boat
    * landing on the beach and the C-47 drop on the airborne
    * variant. Drawn in the game's own art, a few seconds long,
@@ -1076,6 +1085,9 @@ export class GameEngine {
     this.corpses = [];
     this.wrecks = [];
     this.retreating = false;
+    this.flankersAt = 0;
+    this.flankersSpawned = false;
+    this.halftrackDropped = false;
     this.log = [];
     this.selected = [];
     this.teamA = [];
@@ -1676,6 +1688,10 @@ export class GameEngine {
   retreat() {
     if (this.phase !== "battle" || this.battleState !== "active" || this.retreating) return;
     this.retreating = true;
+    // The enemy does not watch a retreat leave: a few seconds
+    // in, flanking groups come in off the north and south edges
+    // to cut the withdrawal off (Josh, 2026-11-12).
+    this.flankersAt = this.elapsed + 6;
     if (this.autoBattle) this.setAutoBattle(false);
     for (const u of this.units) {
       if (u.side !== "allies" || u.npc || !u.alive) continue;
@@ -1828,11 +1844,65 @@ export class GameEngine {
     this.pushLog("Enemy counter-attack — they are coming at us!", "wave");
   }
 
+  /** The halftrack's troop bay (Josh, 2026-11-12): six men ride
+   * in the back of the convoy halftrack — 4 volks and 2
+   * grenadiers. The moment the convoy makes contact they pile
+   * out both sides and deploy around it as its escort. They are
+   * extra men the halftrack was carrying, on top of the 20 foot
+   * in the column. If the halftrack dies on the march, they die
+   * with it: no drop. */
+  private unloadHalftrack() {
+    if (this.halftrackDropped) return;
+    const half = this.units.find((u) => u.alive && u.side === "axis" && u.enemyType === "halftrack");
+    if (!half) return;
+    this.halftrackDropped = true;
+    const rng = Math.random;
+    const types: EnemyTypeId[] = ["volks", "grenadier", "volks", "volks", "grenadier", "volks"];
+    types.forEach((t, i) => {
+      const sideOff = i % 2 === 0 ? -56 : 56;
+      const backOff = (Math.floor(i / 2) - 1) * 36;
+      const u = this.spawnEnemyUnit(t, half.x + backOff, half.y + sideOff, rng, false);
+      u.convoy = true;
+      u.homeX = u.x;
+      u.homeY = u.y;
+    });
+    this.pushLog("The halftrack is unloading troops!", "wave");
+    this.dirty = true;
+  }
+
+  /** Retreat flankers (Josh, 2026-11-12): when the squad falls
+   * back, the enemy sends groups in off the north and south map
+   * edges, level with the withdrawing squad, to cut it off.
+   * Three men a flank (a grenadier between two volks), marked
+   * like a counter-attack so no camp rule holds them: they come
+   * straight at the squad. An ambush force on top of the wave
+   * counts, not drawn from them. Once per retreat. */
+  private spawnFlankers() {
+    const rng = Math.random;
+    const men = this.units.filter((u) => u.side === "allies" && !u.npc && u.alive);
+    const cx = men.length
+      ? Math.max(350, Math.min(MAP_W - 350, men.reduce((s, u) => s + u.x, 0) / men.length))
+      : 400;
+    const types: EnemyTypeId[] = ["volks", "grenadier", "volks"];
+    for (const edgeY of [46, MAP_H - 46]) {
+      types.forEach((t, i) => {
+        const before = this.units.length;
+        this.spawnEnemyUnit(t, cx + (i - 1) * 52 + (rng() * 30 - 15), edgeY, rng);
+        const u = this.units[before];
+        if (u) {
+          u.counterAttack = true;
+          u.aggressive = true;
+        }
+      });
+    }
+    this.pushLog("Enemy flankers — they are cutting off the retreat, north and south!", "wave");
+    this.dirty = true;
+  }
+
   /** The Funker's rally: nearby enemy men recover 15 morale over the
    * radio, on a 20s cooldown — the mirror of the squad radioman's
    * Rally Call. Only fires when somebody nearby actually needs it. */
-  private funkerRally(u: Unit) {
-    if (u.abilityCd > 0 || u.broken) return;
+  private funkerRally(u: Unit) {    if (u.abilityCd > 0 || u.broken) return;
     const low = this.units.filter(
       (a) => a.side === "axis" && a.alive && a.morale < 100 && dist(u.x, u.y, a.x, a.y) <= 150,
     );
@@ -3334,6 +3404,17 @@ export class GameEngine {
         this.spawnCounterAttack();
       }
     }
+    // Retreat flankers: a few seconds into a fall back, enemy
+    // groups arrive off the north and south edges to cut the
+    // squad off (Josh, 2026-11-12). Once, and only while the
+    // battle is still being filed.
+    if (
+      this.retreating && !this.flankersSpawned && this.flankersAt > 0 &&
+      this.elapsed >= this.flankersAt && this.phase === "battle"
+    ) {
+      this.flankersSpawned = true;
+      this.spawnFlankers();
+    }
     // Airborne convoy contact: the march ends the moment the
     // convoy sees the paratroopers, comes under fire, or the
     // paratroopers get close enough for a brush contact.
@@ -3353,7 +3434,10 @@ export class GameEngine {
           }
         }
       }
-      if (this.convoyContact) this.pushLog("Contact! The convoy halts and its escort deploys.", "wave");
+      if (this.convoyContact) {
+        this.pushLog("Contact! The convoy halts and its escort deploys.", "wave");
+        this.unloadHalftrack();
+      }
     }
     // Radio support cooldowns tick down while the battle runs.
     this.artyCd = Math.max(0, this.artyCd - dt);

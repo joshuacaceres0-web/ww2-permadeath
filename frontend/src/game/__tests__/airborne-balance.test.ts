@@ -63,6 +63,7 @@ const loadEngine = async () => {
 };
 
 type U = {
+  id: number;
   side: string; npc: boolean; enemyType: string | null; isStatic: boolean;
   x: number; y: number; convoy?: boolean; alive: boolean; vehicle: boolean;
 };
@@ -168,5 +169,52 @@ describe("airborne variant: drop zone and ambush convoy", () => {
     const statics = e.units.filter((u) => u.side === "axis" && u.isStatic);
     expect(statics.filter((u) => u.enemyType === "mg42")).toHaveLength(9);
     expect(statics.filter((u) => u.enemyType === "mortar")).toHaveLength(3);
+  });
+
+  it("the halftrack unloads six extra troops at first contact (Josh, 2026-11-12)", async () => {
+    const e = await makeEngine("airborne");
+    e.begin();
+    for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
+    const half = e.units.find((u) => u.enemyType === "halftrack")!;
+    expect(half).toBeTruthy();
+    const footBefore = e.units.filter((u) => u.side === "axis" && !u.vehicle).length;
+    // No contact yet: the bay stays shut while the convoy marches.
+    for (let s = 0; s < 60 * 2; s++) e.update(1 / 60);
+    expect(e.units.filter((u) => u.side === "axis" && !u.vehicle).length).toBe(footBefore);
+    // Force contact the same way the halt test does.
+    const beforeIds = new Set(e.units.map((u) => u.id));
+    const man = e.units.filter((u) => u.side === "allies" && !u.npc)[0];
+    man.x = half.x - 100;
+    man.y = half.y;
+    e.update(1 / 60);
+    expect(e.convoyContact).toBe(true);
+    // The dropped six are the only new units, all foot, all
+    // piled out around the halftrack.
+    const dropped = e.units.filter((u) => !beforeIds.has(u.id));
+    expect(dropped).toHaveLength(6);
+    expect(dropped.every((u) => u.side === "axis" && !u.vehicle && u.convoy)).toBe(true);
+    expect(dropped.every((u) => Math.abs(u.x - half.x) <= 60 && Math.abs(u.y - half.y) <= 80)).toBe(true);
+    expect(dropped.filter((u) => u.enemyType === "grenadier")).toHaveLength(2);
+    expect(dropped.filter((u) => u.enemyType === "volks")).toHaveLength(4);
+    // Once only: more updates do not unload a second squad.
+    for (let s = 0; s < 60 * 2; s++) e.update(1 / 60);
+    expect(e.units.filter((u) => u.side === "axis" && !u.vehicle).length).toBe(footBefore + 6);
+  });
+
+  it("a halftrack destroyed on the march drops nobody", async () => {
+    const e = await makeEngine("airborne");
+    e.begin();
+    for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
+    const half = e.units.find((u) => u.enemyType === "halftrack")!;
+    const footBefore = e.units.filter((u) => u.side === "axis" && !u.vehicle).length;
+    half.alive = false;
+    // Contact with the point panzer instead.
+    const panzer = e.units.filter((u) => u.enemyType === "panzer")[0];
+    const man = e.units.filter((u) => u.side === "allies" && !u.npc)[0];
+    man.x = panzer.x - 100;
+    man.y = panzer.y;
+    e.update(1 / 60);
+    expect(e.convoyContact).toBe(true);
+    expect(e.units.filter((u) => u.side === "axis" && !u.vehicle).length).toBe(footBefore);
   });
 });
