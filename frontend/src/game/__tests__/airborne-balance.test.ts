@@ -5,7 +5,7 @@
 // 32 NPC paratroopers scatter across the same zone. Then Josh's
 // redesign the same evening: airborne is an AMBUSH mission. No
 // MG42 nests and no mortars in any wave — wave 1 is an enemy
-// convoy (3 unarmed trucks and their infantry escort) rolling
+// convoy (2 panzers, 1 halftrack, 20 foot troops) rolling
 // slowly west on the road, holding its route until first
 // contact, then halting to fight. The beach keeps every gun.
 import { describe, expect, it } from "vitest";
@@ -64,7 +64,7 @@ const loadEngine = async () => {
 
 type U = {
   side: string; npc: boolean; enemyType: string | null; isStatic: boolean;
-  x: number; y: number; convoy?: boolean; alive: boolean;
+  x: number; y: number; convoy?: boolean; alive: boolean; vehicle: boolean;
 };
 
 const SQUAD = [
@@ -121,12 +121,17 @@ describe("airborne variant: drop zone and ambush convoy", () => {
     const axis = e.units.filter((u) => u.side === "axis");
     expect(axis.filter((u) => u.enemyType === "mg42")).toHaveLength(0);
     expect(axis.filter((u) => u.enemyType === "mortar")).toHaveLength(0);
-    const trucks = axis.filter((u) => u.enemyType === "truck");
-    expect(trucks).toHaveLength(3);
-    for (const t of trucks) expect(t.convoy).toBe(true);
-    // The fixture's 9 infantry (6 volks, 3 grenadiers) ride as escort.
-    const escort = axis.filter((u) => u.convoy && u.enemyType !== "truck");
-    expect(escort).toHaveLength(9);
+    // Josh's convoy spec: no trucks at all — 2 panzers and 1
+    // halftrack on the road, and the foot column topped up to
+    // 20 (the fixture's 9 infantry ride first, 11 more join).
+    expect(axis.filter((u) => u.enemyType === "truck")).toHaveLength(0);
+    const panzers = axis.filter((u) => u.enemyType === "panzer");
+    expect(panzers).toHaveLength(2);
+    const halftracks = axis.filter((u) => u.enemyType === "halftrack");
+    expect(halftracks).toHaveLength(1);
+    for (const v of [...panzers, ...halftracks]) expect(v.convoy).toBe(true);
+    const escort = axis.filter((u) => u.convoy && !u.vehicle);
+    expect(escort).toHaveLength(20);
   });
 
   it("the convoy rolls west on the road until first contact", async () => {
@@ -135,26 +140,27 @@ describe("airborne variant: drop zone and ambush convoy", () => {
     // The drop intro runs first; the convoy's march is measured
     // once the battle clock starts.
     for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
-    const trucks = e.units.filter((u) => u.enemyType === "truck");
-    const x0 = trucks.map((t) => t.x);
+    const vehicles = e.units.filter((u) => u.convoy && u.vehicle);
+    expect(vehicles).toHaveLength(3);
+    const x0 = vehicles.map((t) => t.x);
     for (let s = 0; s < 60 * 3; s++) e.update(1 / 60);
     expect(e.convoyContact).toBe(false);
-    trucks.forEach((t, i) => expect(x0[i] - t.x).toBeGreaterThan(50));
+    vehicles.forEach((t, i) => expect(x0[i] - t.x).toBeGreaterThan(50));
   });
 
-  it("on contact the trucks halt and stay halted", async () => {
+  it("on contact the vehicles halt and stay halted", async () => {
     const e = await makeEngine("airborne");
     e.begin();
     for (let s = 0; s < 60 * 12 && e.introT >= 0; s++) e.update(1 / 60);
-    const truck = e.units.filter((u) => u.enemyType === "truck")[0];
+    const panzer = e.units.filter((u) => u.enemyType === "panzer")[0];
     const man = e.units.filter((u) => u.side === "allies" && !u.npc)[0];
-    man.x = truck.x - 100;
-    man.y = truck.y;
+    man.x = panzer.x - 100;
+    man.y = panzer.y;
     e.update(1 / 60);
     expect(e.convoyContact).toBe(true);
-    const xAtContact = truck.x;
+    const xAtContact = panzer.x;
     for (let s = 0; s < 60 * 2; s++) e.update(1 / 60);
-    expect(Math.abs(truck.x - xAtContact)).toBeLessThan(3);
+    expect(Math.abs(panzer.x - xAtContact)).toBeLessThan(3);
   });
 
   it("the beach landing keeps all 9 MG42 nests and 3 mortars", async () => {

@@ -67,7 +67,7 @@ function UnitCard({
       </div>
       <div className="mt-0.5 h-1 w-full bg-[#121411]" data-testid={`unit-dock-morale-${index}`}>
         <div
-          className={`h-full ${unit.broken ? "bg-[#E24A4A]" : unit.morale > 60 ? "bg-[#7FB069]" : unit.morale > 30 ? "bg-[#E5A93C]" : "bg-[#E24A4A]"}`}
+          className={`h-full ${unit.broken ? "bg-[#3D348B]" : unit.morale > 60 ? "bg-[#56B4E8]" : unit.morale > 30 ? "bg-[#4A6FD4]" : "bg-[#9B59D0]"}`}
           style={{ width: `${unit.alive ? unit.morale : 0}%` }}
         />
       </div>

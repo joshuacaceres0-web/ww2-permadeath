@@ -8,11 +8,15 @@ import type { BattleReplay, ReplayObstacle } from "@/game/engine";
  * game. Drawing every circle separately on the replay map made 169
  * overlapping pairs look like a mess. Merge any same-kind obstacles
  * that touch into one cluster and draw one shape per cluster. */
+// Morale reads BLUE, never the health bar's green/amber/red
+// (Josh, 2026-11-12): azure steady, royal wavering, violet
+// close to breaking, deep indigo broken. The same four values
+// are used on the battlefield and the SquadDock cards.
 export function moraleBarColor(morale: number, broken: boolean): string {
-  if (broken) return "#E24A4A";
-  if (morale > 60) return "#7FB069";
-  if (morale > 30) return "#E5A93C";
-  return "#E24A4A";
+  if (broken) return "#3D348B";
+  if (morale > 60) return "#56B4E8";
+  if (morale > 30) return "#4A6FD4";
+  return "#9B59D0";
 }
 
 export function mergeObstacles(obstacles: ReplayObstacle[]) {
@@ -364,7 +368,7 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
         <span className="text-[#7CFC66]">● Your squad</span> · <span className="text-[#4ECDC4]">● 2nd Platoon</span> ·{" "}
         <span className="text-[#E24A4A]">● Enemy</span> · Faded = dead
         <br />
-        Bars above each man: health on top, morale below it (green holds, amber wavers, red about to break, BROKEN = fell back).{" "}
+        Bars above each man: health on top (green, amber, red), morale below it in blue (azure holds, royal wavers, violet about to break, BROKEN = fell back).{" "}
         <span className="text-[#F0F5EB]">✚ Medic</span> · <span className="text-[#E3E7DC]">┬ Radio man</span> · <span className="text-[#E5A93C]">▣ Supply crate (+25 RP)</span> · <span className="text-[#4ECDC4]">■ Light cover</span> ·{" "}
         <span className="text-[#E5A93C]">■ Heavy cover</span> · <span className="text-[#7A5A2E]">■ Trench, best cover</span> ·{" "}
         <span className="text-[#7CFC66]">○ Healed this frame</span>

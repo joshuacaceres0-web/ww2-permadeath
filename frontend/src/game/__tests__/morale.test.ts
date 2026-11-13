@@ -158,10 +158,10 @@ describe("replay records morale, cover and medics", () => {
 
   it("morale bar colours match the live game", async () => {
     const { moraleBarColor } = await import("../../components/game/ReplayViewer");
-    expect(moraleBarColor(100, false)).toBe("#7FB069");
-    expect(moraleBarColor(50, false)).toBe("#E5A93C");
-    expect(moraleBarColor(20, false)).toBe("#E24A4A");
-    expect(moraleBarColor(90, true)).toBe("#E24A4A");
+    expect(moraleBarColor(100, false)).toBe("#56B4E8");
+    expect(moraleBarColor(50, false)).toBe("#4A6FD4");
+    expect(moraleBarColor(20, false)).toBe("#9B59D0");
+    expect(moraleBarColor(90, true)).toBe("#3D348B");
   }, 30000);
 });
 

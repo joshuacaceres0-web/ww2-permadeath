@@ -221,6 +221,14 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     type: "panzer", label: "Panzer IV Medium Tank", weapon: "75mm KwK 40 cannon", hp: 400, speed: 30, range: 300,
     vision: 240, dmg: 30, fireInterval: 2.0, spread: 0.05, bulletSpeed: 800, vehicle: true, threat: "HIGH",
   },
+  halftrack: {
+    // The airborne convoy's armoured troop carrier (Josh,
+    // 2026-11-12: the convoy is 2 tanks, 1 halftrack, 20 foot).
+    // Half the panzer's hide, faster, and its mounted MG42 makes
+    // it a real gun platform once the ambush is sprung.
+    type: "halftrack", label: "Sd.Kfz. 251 Halftrack", weapon: "MG42 (mounted)", hp: 220, speed: 34, range: 230,
+    vision: 250, dmg: 7, fireInterval: 0.45, spread: 0.09, bulletSpeed: 700, vehicle: true, threat: "HIGH",
+  },
   truck: {
     // The airborne mission's convoy (Josh, 2026-11-12): an
     // unarmed supply truck. It carries no gun and never fires;
@@ -246,6 +254,7 @@ export const CAUSES: Record<string, string> = {
   mortar: "Mortar bombardment",
   mine: "Tellermine blast",
   fallschirmjager: "FG42 fire",
+  halftrack: "Halftrack MG fire",
 };
 
 // Real WWII US Army decorations — mirrors backend/lib/medals.py (codes, criteria).

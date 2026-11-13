@@ -200,12 +200,21 @@ describe("trench combat", () => {
     target.hp = 1000; target.maxHp = 1000;
     const tx = target.x;
     const ty = target.y;
+    const sx = shooter.x;
     for (let s = 0; s < 60 * seconds; s++) {
       // A steady target: re-seat him each tick and keep his nerve
-      // (his return fire is not what this measures).
+      // (his return fire is not what this measures). The shooter
+      // is held steady too: left alone, the trench line's fire
+      // pins him in the open and he stops shooting for long
+      // stretches, which made this measurement swing wildly
+      // between runs. This test measures cover, not nerve.
       target.x = tx; target.y = ty;
       target.suppression = 40;
       target.morale = 100;
+      shooter.x = sx; shooter.y = ty;
+      shooter.suppression = 0;
+      shooter.morale = 100;
+      shooter.pinned = false;
       e.update(1 / 60);
     }
     return 1000 - target.hp;

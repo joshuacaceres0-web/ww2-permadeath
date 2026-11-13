@@ -57,6 +57,20 @@ const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
 const PIXEL_FONT = "24px Silkscreen, monospace";
 const snap = (v: number) => Math.round(v / PX) * PX;
 
+/** A destroyed vehicle stays on the field as a burnt wreck —
+ * never a body (Josh, 2026-11-12). kind is the enemy type for
+ * axis vehicles, "tank" for the player's Sherman. */
+interface Wreck {
+  x: number;
+  y: number;
+  kind: string;
+  flip: boolean;
+  axis: boolean;
+  /** Battle clock at the kill, for embers and smoke that die
+   * down as the wreck cools. */
+  t0: number;
+}
+
 interface Corpse {
   x: number;
   y: number;
@@ -208,11 +222,18 @@ interface Unit {
   embarked?: boolean;
   landX?: number;
   landY?: number;
+  /** Retreat: the man reached the west edge during a fall back
+   * and is out of the battle — alive on the roster, no corpse,
+   * no casualty filing. */
+  extracted?: boolean;
   /** Airborne intro: when this man's jump starts (seconds into
    * the intro, keyed to the C-47 passing his x) and how long he
    * hangs under canopy. */
   dropStart?: number;
   dropDur?: number;
+  /** Airborne intro: set the moment his boots touch, so the
+   * landing dust puffs exactly once. */
+  landed?: boolean;
   orders: Order[];
   attackId: number | null;
   targetId: number | null;
@@ -377,6 +398,8 @@ interface Boat {
   timer: number;
   /** Disembark clock: a man every 0.22s once the ramp is down. */
   releaseT: number;
+  /** Wake foam spawn clock while she is still moving. */
+  wakeT: number;
 }
 
 interface Particle {
@@ -387,7 +410,7 @@ interface Particle {
   life: number;
   max: number;
   size: number;
-  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom";
+  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom" | "foam";
 }
 
 export type BlockerKind = "tree" | "ruin" | "building" | "hedgerow" | "wreck" | "crate" | "hedgehog" | "pillbox" | "bush" | "trench" | "obstacle";
@@ -809,6 +832,10 @@ export class GameEngine {
    * find them by stepping on them, or by spotting the marks. */
   private mines: { x: number; y: number; armed: boolean }[] = [];
   private corpses: Corpse[] = [];
+  private wrecks: Wreck[] = [];
+  /** A fall back is in progress: the squad is withdrawing to
+   * the west edge under fire (see retreat()). */
+  private retreating = false;
   private speed = 1; // Settings: game speed multiplier
   private shakeK = 1; // Settings: screen shake strength
   private touchPan: { x: number; y: number; cx: number; cy: number; moved: boolean; t0: number } | null = null;
@@ -1010,6 +1037,8 @@ export class GameEngine {
     this.crates = [];
     this.lootRp = 0;
     this.corpses = [];
+    this.wrecks = [];
+    this.retreating = false;
     this.log = [];
     this.selected = [];
     this.teamA = [];
@@ -1145,7 +1174,7 @@ export class GameEngine {
             // a mortar target and walks into one MG lane.
             u.landY = Math.max(40, Math.min(MAP_H - 40, y + (idx - (men.length - 1) / 2) * 34 + (rng() - 0.5) * 36));
           });
-          return { x: 26, y, men, out: 0, timer: 0, releaseT: 0 };
+          return { x: 26, y, men, out: 0, timer: 0, releaseT: 0, wakeT: 0 };
         });
       this.introKind = "boats";
     } else if (kind === "airborne") {
@@ -1432,11 +1461,42 @@ export class GameEngine {
     return this.fitWholeMap;
   }
 
+  /** Retreat is a fighting withdrawal now, not an instant
+   * filing (Josh, 2026-11-12: hard to retreat, not instant).
+   * Pressing it starts the fall back: AUTO hands the men back,
+   * every living squad man (and the Sherman) gets a fall-back
+   * order to the west edge, and the battle keeps running —
+   * the enemy keeps shooting, men can be hit, pinned, or break
+   * on the way out. A man who reaches the west edge extracts
+   * (extract()); when every roster man is out, dead, or
+   * deserted, the battle files as a defeat through the usual
+   * path, so kills already made still pay their kill RP and
+   * the mission does not advance. The 2nd Platoon is not
+   * ordered back: they hold where they stand and cover it. */
   retreat() {
-    if (this.phase !== "battle" || this.battleState !== "active") return;
-    this.battleState = "defeat";
-    this.phase = "over";
-    this.pushLog("Squad withdrew from the field. Mission failed.", "lose");
+    if (this.phase !== "battle" || this.battleState !== "active" || this.retreating) return;
+    this.retreating = true;
+    if (this.autoBattle) this.setAutoBattle(false);
+    for (const u of this.units) {
+      if (u.side !== "allies" || u.npc || !u.alive) continue;
+      u.attackId = null;
+      u.chase = [];
+      u.orders = findPath(this.blocked, u.x, u.y, 24, Math.max(60, Math.min(MAP_H - 60, u.y)));
+    }
+    this.pushLog("Fall back! Every man to the west edge — the mission is scrubbed once the squad is out.", "lose");
+    this.dirty = true;
+  }
+
+  /** A man who made it to the west edge during a fall back is
+   * out: off the field, alive on the roster, no corpse and no
+   * casualty filing. */
+  private extract(u: Unit) {
+    u.extracted = true;
+    u.alive = false;
+    u.orders = [];
+    u.chase = [];
+    this.selected = this.selected.filter((id) => id !== u.id);
+    this.pushLog(`${u.name} made it out.`, "info");
     this.dirty = true;
   }
 
@@ -2756,10 +2816,12 @@ export class GameEngine {
           }
           staticCount++;
         } else if (this.variant === "airborne" && index === 0) {
-          // The convoy escort: a loose column around the road in
-          // the east, marching with the trucks until contact.
-          x = 3300 + (mobileCount % 4) * 120 + rng() * 40;
-          y = roadYAt(x) + ((mobileCount % 3) - 1) * 38 + (rng() - 0.5) * 20;
+          // The convoy's foot troops: a loose column flanking
+          // the road in the east, marching with the vehicles
+          // until contact (Josh's convoy: 2 tanks, 1 halftrack,
+          // 20 foot — the top-up and the vehicles spawn below).
+          x = 3380 + (mobileCount % 6) * 64 + rng() * 30;
+          y = roadYAt(x) + (mobileCount % 2 === 0 ? -1 : 1) * (30 + (mobileCount % 3) * 18) + (rng() - 0.5) * 14;
           convoy = true;
         } else if (beach && trenchSpots.length) {
           // Spread along the line: man i takes spot i * spots /
@@ -2787,16 +2849,35 @@ export class GameEngine {
         if (index > 0 && !isStatic) u.aggressive = true;
       }
     }
-    // The airborne convoy itself: 3 unarmed trucks on the road
-    // in the east (Josh, 2026-11-12). They roll west with their
-    // escort until first contact, then halt. The wave is not
-    // cleared until they are destroyed with the escort.
+    // The airborne convoy itself (Josh's spec, 2026-11-12,
+    // replacing the 3 unarmed trucks): 2 panzers and 1 halftrack
+    // on the road with 20 foot troops in the column. The wave's
+    // specs bring the first foot (11 on Overlord: 6 volks, the
+    // funker, the medic, 3 grenadiers); the column is topped up
+    // to 20 here with more volks and grenadiers, then the
+    // vehicles take their places — a panzer on point, the
+    // halftrack in the middle, a panzer on rear guard. They roll
+    // west until first contact, then the foot deploys to fight
+    // and the vehicles halt and engage as gun platforms. The
+    // wave is not cleared until the whole convoy is destroyed.
     if (this.variant === "airborne" && index === 0) {
-      for (let i = 0; i < 3; i++) {
-        const txx = 3520 + i * 190;
-        const t = this.spawnEnemyUnit("truck", txx, roadYAt(txx), rng, false);
-        t.convoy = true;
+      let foot = mobileCount;
+      let extra = 0;
+      while (foot < 20) {
+        const type = extra % 3 === 2 ? "grenadier" : "volks";
+        const x = 3380 + (foot % 6) * 64 + rng() * 30;
+        const y = roadYAt(x) + (foot % 2 === 0 ? -1 : 1) * (30 + (foot % 3) * 18) + (rng() - 0.5) * 14;
+        const u = this.spawnEnemyUnit(type, x, y, rng, false);
+        u.convoy = true;
+        foot++;
+        extra++;
       }
+      const point = this.spawnEnemyUnit("panzer", 3340, roadYAt(3340), rng, false);
+      point.convoy = true;
+      const half = this.spawnEnemyUnit("halftrack", 3580, roadYAt(3580), rng, false);
+      half.convoy = true;
+      const rear = this.spawnEnemyUnit("panzer", 3820, roadYAt(3820), rng, false);
+      rear.convoy = true;
     }
     if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
     this.dirty = true;
@@ -2817,6 +2898,19 @@ export class GameEngine {
     return this.units.filter((u) => u.side === "axis" && u.alive).length;
   }
 
+  private stepParticles(dt: number) {
+    for (let i = this.particles.length - 1; i >= 0; i--) {
+      const p = this.particles[i];
+      p.life -= dt;
+      if (p.life <= 0) {
+        this.particles.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+  }
+
   /** Advance the intro sequences. Boats: approach at 70/s to
    * the shoreline, ramp down (0.6s), then a man every 0.22s out
    * of the bow, wading to his landing spot. Drop: nothing moves
@@ -2825,11 +2919,36 @@ export class GameEngine {
    * a 12s hard cap so a stuck walker can never soft-lock it. */
   private advanceIntro(dt: number) {
     this.introT += dt;
+    // Spray, wake foam and landing dust live on the particle
+    // system, which the main update does not reach while the
+    // intro gate holds — step it here so effects move.
+    this.stepParticles(dt);
     if (this.introKind === "boats") {
       let done = true;
       for (const b of this.boats) {
-        if (b.x < 208) {
-          b.x = Math.min(208, b.x + 70 * dt);
+        if (b.x < 200) {
+          b.x = Math.min(200, b.x + 70 * dt);
+          // Wake foam churned up at the stern while she moves.
+          b.wakeT += dt;
+          while (b.wakeT >= 0.07) {
+            b.wakeT -= 0.07;
+            const side = this.particles.length % 2 === 0 ? -1 : 1;
+            this.particles.push({
+              x: b.x - 46, y: b.y + side * (8 + (this.particles.length % 5)),
+              vx: -26 - (this.particles.length % 3) * 7, vy: side * 6,
+              life: 0.55, max: 0.55, size: 2.6, kind: "foam",
+            });
+          }
+          if (b.x >= 200) {
+            // The bow grounds: a burst of spray at the ramp.
+            for (let k = 0; k < 9; k++) {
+              this.particles.push({
+                x: b.x + 46 + (k % 3) * 3, y: b.y - 12 + k * 3,
+                vx: 14 + (k % 4) * 6, vy: (k - 4) * 5,
+                life: 0.5, max: 0.5, size: 2.8, kind: "foam",
+              });
+            }
+          }
           done = false;
           continue;
         }
@@ -2841,17 +2960,26 @@ export class GameEngine {
             const man = b.men[b.out];
             b.out++;
             man.embarked = false;
-            man.x = b.x + 58;
-            man.y = b.y + ((b.out % 3) - 1) * 8;
+            man.x = b.x + 54;
+            man.y = b.y + ((b.out % 3) - 1) * 9;
           }
         }
         if (b.out < b.men.length) done = false;
       }
-      // Men ashore wade to their landing spots.
+      // Men ashore wade to their landing spots, kicking up spray
+      // in the surf and dust once they are on the sand.
       for (const u of this.units) {
         if (u.side !== "allies" || u.embarked || u.landX === undefined) continue;
         if (dist(u.x, u.y, u.landX, u.landY ?? u.y) > 8) {
           this.moveToward(u, u.landX, u.landY ?? u.y, dt, 1.15);
+          if ((u.id + Math.floor(this.introT * 12)) % 3 === 0) {
+            this.particles.push({
+              x: u.x - 2, y: u.y + 7,
+              vx: -8, vy: 4,
+              life: 0.32, max: 0.32, size: 2.2,
+              kind: u.x < 262 ? "foam" : "dust",
+            });
+          }
           done = false;
         }
       }
@@ -2866,6 +2994,21 @@ export class GameEngine {
         this.introT = -1;
       }
     } else if (this.introKind === "drop") {
+      // Boots on the ground: a puff of dust the moment each man
+      // lands, exactly once.
+      for (const u of this.units) {
+        if (u.side !== "allies" || u.dropStart === undefined || u.landed) continue;
+        if (this.introT >= u.dropStart + (u.dropDur ?? 1.3)) {
+          u.landed = true;
+          for (let k = 0; k < 5; k++) {
+            this.particles.push({
+              x: u.x + (k - 2) * 3, y: u.y + 7,
+              vx: (k - 2) * 9, vy: 3 + (k % 2) * 3,
+              life: 0.5, max: 0.5, size: 2.8, kind: "dust",
+            });
+          }
+        }
+      }
       if (this.introT >= this.dropEnd + 0.1 || this.introT >= 12) this.introT = -1;
     }
   }
@@ -2886,8 +3029,10 @@ export class GameEngine {
       this.recordReplayFrame();
     }
 
-    // Wave / win logic.
-    if (this.enemiesAlive() === 0) {
+    // Wave / win logic. Frozen during a fall back: the squad
+    // is leaving, so clearing the field wins nothing and no
+    // fresh wave pours in behind them.
+    if (this.enemiesAlive() === 0 && !this.retreating) {
       if (this.waveIndex < this.waves.length - 1) {
         if (this.nextWaveT === 0) {
           this.nextWaveT = 4;
@@ -2906,6 +3051,24 @@ export class GameEngine {
         this.dirty = true;
       }
     }
+    // The withdrawal: a squad man who reaches the west edge is
+    // out. When every roster man is out, dead, or deserted,
+    // the battle files as a defeat — the same filing a wipe
+    // takes, so kill RP is paid on the kills already made.
+    if (this.retreating && this.battleState === "active") {
+      for (const u of this.units) {
+        if (u.side === "allies" && !u.npc && !u.vehicle && u.alive && u.x <= 46) this.extract(u);
+      }
+      const roster = this.units.filter((u) => u.side === "allies" && !u.npc && !u.vehicle);
+      if (roster.length > 0 && roster.every((u) => u.extracted || !u.alive)) {
+        this.battleState = "defeat";
+        this.phase = "over";
+        const out = roster.filter((u) => u.extracted).length;
+        this.pushLog(`The squad is out — ${out} of ${roster.length} made it. Mission failed, but they live.`, "lose");
+        this.dirty = true;
+      }
+    }
+
     // Enemy radio call-in: 25s into the wave, the Funker gets one
     // call-in of 2 more men — but only if he is still alive. Kill
     // him first and the wave gets no reinforcements.
@@ -3148,7 +3311,13 @@ export class GameEngine {
           // And only after 2s of flight, so a man who breaks on the
           // deployment line does not vanish before a rally call can
           // reach him.
-          if (u.fleeT >= 2 && (dxEdge <= 150 || dyEdge <= 150)) this.desert(u);
+          if (u.fleeT >= 2 && (dxEdge <= 150 || dyEdge <= 150)) {
+            // Mid-retreat, a squad man bolting for the WEST edge
+            // is doing what the fall back order says: he
+            // extracts. Any other edge is still desertion.
+            if (this.retreating && u.side === "allies" && !u.npc && tx === 0) this.extract(u);
+            else this.desert(u);
+          }
         } else {
           const foe = this.nearestAlly(u);
           if (foe) {
@@ -3691,16 +3860,7 @@ export class GameEngine {
     }
 
     // Particles.
-    for (let i = this.particles.length - 1; i >= 0; i--) {
-      const p = this.particles[i];
-      p.life -= dt;
-      if (p.life <= 0) {
-        this.particles.splice(i, 1);
-        continue;
-      }
-      p.x += p.vx * dt;
-      p.y += p.vy * dt;
-    }
+    this.stepParticles(dt);
 
     // Fog of war recompute, and the cover a unit is actually
     // behind. Directional: the cover must sit on the threat side of
@@ -4097,7 +4257,21 @@ export class GameEngine {
   private kill(u: Unit, sourceType: string, killerId: number | null) {
     u.alive = false;
     u.hp = 0;
-    u.deathT = 0;
+    // A vehicle does not fall down like a man: it blows up and
+    // stays as a burnt wreck (Josh, 2026-11-12). deathT 99
+    // takes it straight out of the dying/corpse path.
+    u.deathT = u.vehicle ? 99 : 0;
+    if (u.vehicle) {
+      this.vehicleBoom(u);
+      this.wrecks.push({
+        x: u.x,
+        y: u.y,
+        kind: u.side === "allies" ? "tank" : (u.enemyType ?? "panzer"),
+        flip: Math.cos(u.facing) < 0,
+        axis: u.side === "axis",
+        t0: this.elapsed,
+      });
+    }
     // Casualty shock: men close by watch a friend die (-8 within
     // 250), the whole side feels it (-2). The shock also holds
     // recovery back for 5s, like being under fire.
@@ -4106,9 +4280,11 @@ export class GameEngine {
       this.moraleLoss(a, dist(u.x, u.y, a.x, a.y) <= 250 ? 8 : 2);
       a.lastHitT = this.elapsed;
     }
-    if (u.side === "allies" && !u.npc) sfx("death");
-    this.corpseFx(u);
-    if (u.side === "allies" && u.npc) {
+    if (u.side === "allies" && !u.npc && !u.vehicle) sfx("death");
+    if (!u.vehicle) this.corpseFx(u);
+    if (u.side === "allies" && u.vehicle) {
+      this.pushLog("The Sherman is knocked out — burning wreck.", "death");
+    } else if (u.side === "allies" && u.npc) {
       this.pushLog(`${u.name} of 2nd Platoon is hit.`, "death");
     } else if (u.side === "allies") {
       this.fallen.push({
@@ -4132,7 +4308,10 @@ export class GameEngine {
         if (u.enemyType === "mg42" || u.enemyType === "flak") killer.heavyKills++;
         if (u.enemyType === "officer") killer.officerKills++;
       }
-      this.pushLog(`${ENEMY_TYPES[u.enemyType!].label} neutralized.`, "kill");
+      this.pushLog(
+        u.vehicle ? `${ENEMY_TYPES[u.enemyType!].label} destroyed — burning wreck.` : `${ENEMY_TYPES[u.enemyType!].label} neutralized.`,
+        "kill",
+      );
       if (u.enemyType === "funk" && !this.enemyRadioLive()) {
         this.pushLog("Enemy radio is down — no more enemy call-ins.", "kill");
       }
@@ -4419,6 +4598,37 @@ export class GameEngine {
     });
   }
 
+  /** A vehicle going up: a fireball particle, sparks, smoke
+   * and dust, a kick of screen shake and the boom — then the
+   * wreck (drawn from this.wrecks) is what remains. */
+  private vehicleBoom(u: Unit) {
+    sfx("boom");
+    this.shake = Math.min(12, this.shake + 6);
+    this.particles.push({ x: u.x, y: u.y, vx: 0, vy: 0, life: 0.7, max: 0.7, size: 30, kind: "boom" });
+    for (let k = 0; k < 10; k++) {
+      const a = (k / 10) * Math.PI * 2;
+      this.particles.push({
+        x: u.x, y: u.y,
+        vx: Math.cos(a) * (30 + (k % 3) * 14), vy: Math.sin(a) * (30 + (k % 3) * 14),
+        life: 0.45, max: 0.45, size: 2.4, kind: "spark",
+      });
+    }
+    for (let k = 0; k < 6; k++) {
+      this.particles.push({
+        x: u.x + (k - 3) * 5, y: u.y + ((k % 3) - 1) * 5,
+        vx: (k - 3) * 4, vy: -12 - (k % 3) * 5,
+        life: 1.4, max: 1.4, size: 5, kind: "smoke",
+      });
+    }
+    for (let k = 0; k < 4; k++) {
+      this.particles.push({
+        x: u.x + (k - 2) * 8, y: u.y + 8,
+        vx: (k - 2) * 10, vy: 4,
+        life: 0.6, max: 0.6, size: 3.4, kind: "dust",
+      });
+    }
+  }
+
   private corpseFx(u: Unit) {
     const t = this.tctx;
     if (!t) return;
@@ -4438,6 +4648,10 @@ export class GameEngine {
   private stepDeaths(dt: number) {
     for (const u of this.units) {
       if (u.alive || u.deathT === undefined || u.deathT > 1) continue;
+      if (u.vehicle) {
+        u.deathT = 99; // a wreck, never a corpse
+        continue;
+      }
       u.deathT += dt;
       if (u.deathT >= 0.75) {
         u.deathT = 99;
@@ -4634,6 +4848,9 @@ export class GameEngine {
       ctx.drawImage(c.img, snap(c.x) - FEET_X * PX, snap(c.y + 9) - SPR_H * PX, c.img.width * PX, c.img.height * PX);
     }
 
+    // Burnt vehicle wrecks stay where they blew up.
+    this.drawWrecks(ctx);
+
     // Order lines for the selected squad.
     for (const u of this.units) {
       if (u.side !== "allies" || !u.alive || !this.selected.includes(u.id)) continue;
@@ -4747,6 +4964,9 @@ export class GameEngine {
         case "dust":
           ctx.fillStyle = `rgba(120,110,90,${a * 0.7})`;
           break;
+        case "foam":
+          ctx.fillStyle = `rgba(226,238,234,${a * 0.85})`;
+          break;
         case "smoke":
           ctx.fillStyle = `rgba(70,68,60,${a * 0.5})`;
           break;
@@ -4835,31 +5055,70 @@ export class GameEngine {
     for (const b of this.boats) {
       const fx = snap(b.x);
       const fy = snap(b.y);
-      const grounded = b.x >= 208;
+      const grounded = b.x >= 200;
       if (!grounded) {
-        ctx.fillStyle = "rgba(230,238,235,0.35)";
-        ctx.fillRect(fx - 44, fy - 9, 16, 3);
-        ctx.fillRect(fx - 38, fy + 6, 12, 3);
+        // A real wake: two foam arms trailing in a V astern,
+        // crawling outward as she runs in, plus the churn right
+        // at the stern. Phased by the intro clock so it moves.
+        const phase = (this.introT * 30 + b.y) % 9;
+        ctx.fillStyle = "rgba(226,238,234,0.5)";
+        for (let k = 0; k < 8; k++) {
+          const t = k / 8;
+          const back = 48 + t * 52 + phase;
+          const spread = 8 + t * 30;
+          const w = 9 - k;
+          ctx.fillRect(fx - back, fy - spread, w, 3);
+          ctx.fillRect(fx - back, fy + spread, w, 3);
+        }
+        ctx.fillStyle = "rgba(226,238,234,0.65)";
+        ctx.fillRect(fx - 54 - phase / 2, fy - 10, 8, 4);
+        ctx.fillRect(fx - 54 - phase / 2, fy + 6, 8, 4);
       }
-      ctx.fillStyle = "#22282E";
-      ctx.fillRect(fx - 30, fy - 13, 62, 26);
+      // The hull, properly sized against a man: 96 long, 38 wide.
+      ctx.fillStyle = "#1D2226";
+      ctx.fillRect(fx - 49, fy - 20, 98, 40);
       ctx.fillStyle = "#3A4148";
-      ctx.fillRect(fx - 28, fy - 11, 58, 22);
-      ctx.fillStyle = "#272D33";
-      ctx.fillRect(fx - 22, fy - 8, 40, 16);
-      // Helmet dots for the men still in the well.
-      ctx.fillStyle = "#55663A";
+      ctx.fillRect(fx - 47, fy - 18, 94, 36);
+      ctx.fillStyle = "#454F58";
+      ctx.fillRect(fx - 47, fy - 18, 94, 4);
+      // The troop well, with helmet dots for the men still aboard.
+      ctx.fillStyle = "#23282D";
+      ctx.fillRect(fx - 38, fy - 13, 64, 26);
+      ctx.fillStyle = "#5C6E3E";
       const aboard = b.men.length - b.out;
       for (let i = 0; i < Math.min(aboard, 8); i++) {
-        ctx.fillRect(fx - 18 + (i % 4) * 9, fy - 5 + Math.floor(i / 4) * 8, 5, 5);
+        ctx.fillRect(fx - 32 + (i % 4) * 13, fy - 9 + Math.floor(i / 4) * 12, 8, 8);
       }
-      // The coxswain's post at the stern.
+      // Coxswain's post and the stern deck.
       ctx.fillStyle = "#4A545E";
-      ctx.fillRect(fx - 27, fy - 3, 5, 6);
-      // Bow ramp: up while running in, dropped to the sand once grounded.
-      ctx.fillStyle = "#4A545E";
-      if (grounded) ctx.fillRect(fx + 30, fy - 10, 16, 20);
-      else ctx.fillRect(fx + 28, fy - 11, 4, 22);
+      ctx.fillRect(fx - 46, fy - 5, 7, 10);
+      ctx.fillStyle = "#31383F";
+      ctx.fillRect(fx - 47, fy - 18, 8, 36);
+      // The bow ramp, and you can watch it drop: up it is a
+      // 4-wide plate edge-on at the bow; over 0.6s it tips
+      // forward and flattens onto the sand, growing to its full
+      // 26-long footprint on the ground.
+      const rampT = grounded ? Math.min(1, b.timer / 0.6) : 0;
+      ctx.fillStyle = rampT >= 1 ? "#5A5342" : "#4A545E";
+      ctx.fillRect(fx + 45, fy - 15, 4 + 22 * rampT, 30);
+      if (rampT > 0 && rampT < 1) {
+        ctx.fillStyle = "rgba(226,238,234,0.5)";
+        ctx.fillRect(fx + 47 + 22 * rampT, fy - 13, 3, 26);
+      }
+      ctx.fillStyle = "#2A3036";
+      ctx.fillRect(fx + 45, fy - 15, 4 + 22 * rampT, 3);
+      ctx.fillRect(fx + 45, fy + 12, 4 + 22 * rampT, 3);
+    }
+    // Foam rings at the feet of men still wading ashore.
+    if (this.introKind === "boats" && this.introT >= 0) {
+      ctx.fillStyle = "rgba(226,238,234,0.55)";
+      for (const u of this.units) {
+        if (u.side !== "allies" || u.embarked || u.landX === undefined || !u.alive) continue;
+        if (dist(u.x, u.y, u.landX, u.landY ?? u.y) <= 8) continue;
+        const wob = Math.sin(this.introT * 10 + u.id * 1.7) * 2;
+        ctx.fillRect(snap(u.x) - 7 + wob, snap(u.y) + 8, 5, 2);
+        ctx.fillRect(snap(u.x) + 3 - wob, snap(u.y) + 9, 5, 2);
+      }
     }
   }
 
@@ -4869,17 +5128,127 @@ export class GameEngine {
   private drawPlane(ctx: CanvasRenderingContext2D) {
     if (this.introKind !== "drop" || this.introT < 0) return;
     const px = snap(-80 + 314 * this.introT);
-    const py = snap(240);
-    ctx.fillStyle = "rgba(0,0,0,0.18)";
-    ctx.fillRect(px - 40 + 14, py - 6 + 18, 88, 10);
+    const py = snap(240 + Math.sin(this.introT * 2.6) * 3);
+    // Her shadow on the fields below, offset by her altitude.
+    ctx.fillStyle = "rgba(0,0,0,0.16)";
+    ctx.fillRect(px - 78 + 22, py - 10 + 30, 168, 20);
+    ctx.fillRect(px - 4 + 22, py - 52 + 30, 20, 104);
+    // Wing first, under the fuselage: 118 of span, with the
+    // black and white invasion stripes at the rear of it.
     ctx.fillStyle = "#33393B";
-    ctx.fillRect(px - 46, py - 7, 92, 14); // fuselage
-    ctx.fillRect(px + 6, py - 32, 15, 64); // wing
-    ctx.fillRect(px - 46, py - 16, 10, 32); // tail
-    ctx.fillStyle = "#222628";
-    ctx.fillRect(px + 34, py - 5, 10, 10); // nose glasshouse shadow
+    ctx.fillRect(px - 2, py - 59, 20, 118);
+    ctx.fillStyle = "#CFC8B0";
+    ctx.fillRect(px - 2, py - 59, 7, 118);
+    ctx.fillStyle = "#1E2122";
+    ctx.fillRect(px - 2, py - 40, 7, 20);
+    ctx.fillRect(px - 2, py - 6, 7, 20);
+    ctx.fillRect(px - 2, py + 28, 7, 20);
+    // Engines on the wing, propellers a blurred disc.
+    for (const s of [-1, 1]) {
+      ctx.fillStyle = "#2A2F31";
+      ctx.fillRect(px - 8, py + s * 32 - 6, 34, 12);
+      ctx.fillStyle = "rgba(205,210,205,0.20)";
+      ctx.beginPath();
+      ctx.arc(px + 24, py + s * 32, 15, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#15181A";
+      ctx.fillRect(px + 22, py + s * 32 - 2, 4, 4);
+    }
+    // Fuselage, 170 long, nose east.
+    ctx.fillStyle = "#3A4042";
+    ctx.fillRect(px - 85, py - 11, 170, 22);
     ctx.fillStyle = "#4A5152";
-    ctx.fillRect(px - 20, py - 7, 60, 3); // spine highlight
+    ctx.fillRect(px - 85, py - 11, 170, 5);
+    // Invasion stripes around the rear fuselage.
+    ctx.fillStyle = "#CFC8B0";
+    ctx.fillRect(px - 66, py - 11, 16, 22);
+    ctx.fillStyle = "#1E2122";
+    ctx.fillRect(px - 61, py - 11, 5, 22);
+    ctx.fillRect(px - 53, py - 11, 4, 22);
+    // Tailplane and fin.
+    ctx.fillStyle = "#33393B";
+    ctx.fillRect(px - 85, py - 23, 12, 46);
+    ctx.fillStyle = "#2A2F31";
+    ctx.fillRect(px - 88, py - 3, 8, 6);
+    // Cockpit glass and the open jump door the men pour from.
+    ctx.fillStyle = "#6A7A80";
+    ctx.fillRect(px + 62, py - 7, 14, 14);
+    ctx.fillStyle = "#141617";
+    ctx.fillRect(px - 34, py - 4, 12, 8);
+  }
+
+  /** Burnt wrecks, in the game's palette gone to charcoal:
+   * a scorch mark soaked into the ground, the hull blackened
+   * and slumped, the turret askew on a tank, embers that fade
+   * over the first seconds and a smoke wisp that thins as the
+   * wreck cools. Axis wrecks hide in unexplored fog, like
+   * corpses do. */
+  private drawWrecks(ctx: CanvasRenderingContext2D) {
+    for (const w of this.wrecks) {
+      if (w.axis && !this.explored[this.cellAt(w.x, w.y)]) continue;
+      const fx = snap(w.x);
+      const fy = snap(w.y);
+      const age = this.elapsed - w.t0;
+      // Scorch.
+      ctx.fillStyle = "rgba(12,10,8,0.55)";
+      ctx.fillRect(fx - 26, fy - 12, 52, 24);
+      ctx.fillStyle = "rgba(12,10,8,0.35)";
+      ctx.fillRect(fx - 32, fy - 8, 64, 16);
+      const char1 = "#1B1B15";
+      const char2 = "#26241C";
+      const char3 = "#12120D";
+      if (w.kind === "halftrack") {
+        ctx.fillStyle = char3;
+        ctx.fillRect(fx - 23, fy - 11, 46, 5);
+        ctx.fillRect(fx - 23, fy + 6, 46, 5);
+        ctx.fillStyle = char1;
+        ctx.fillRect(fx - 21, fy - 8, 42, 16);
+        ctx.fillStyle = char3;
+        const bayX = w.flip ? fx - 2 : fx - 19;
+        ctx.fillRect(bayX, fy - 6, 17, 12);
+        ctx.fillStyle = char2;
+        ctx.fillRect(w.flip ? fx - 20 : fx + 14, fy - 6, 6, 12);
+      } else if (w.kind === "truck") {
+        ctx.fillStyle = char3;
+        ctx.fillRect(fx - 20, fy - 10, 40, 5);
+        ctx.fillRect(fx - 20, fy + 5, 40, 5);
+        ctx.fillStyle = char1;
+        ctx.fillRect(w.flip ? fx - 3 : fx - 19, fy - 8, 22, 16);
+        ctx.fillStyle = char2;
+        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 3 : fx - 19) + 4 + r * 7, fy - 8, 2, 16);
+        ctx.fillStyle = char3;
+        ctx.fillRect(w.flip ? fx - 17 : fx + 3, fy - 7, 15, 14);
+      } else {
+        // Panzer or the player's Sherman: same charred shape.
+        ctx.fillStyle = char3;
+        ctx.fillRect(fx - 18, fy - 6, 36, 12);
+        ctx.fillStyle = char1;
+        ctx.fillRect(fx - 15, fy - 9, 30, 10);
+        // Turret knocked askew, hatch blown open, barrel drooped.
+        ctx.fillStyle = char2;
+        ctx.fillRect(fx - 5, fy - 15, 14, 8);
+        ctx.fillStyle = char3;
+        ctx.fillRect(fx - 2, fy - 15, 6, 4);
+        ctx.fillRect(w.flip ? fx - 21 : fx + 8, fy - 8, 13, 2);
+      }
+      // Embers in the first seconds, then just heat shimmer smoke.
+      if (age < 5) {
+        const flick = Math.sin(this.elapsed * 11 + w.x) > -0.2;
+        ctx.fillStyle = flick ? "#E2692E" : "#B34A1F";
+        ctx.fillRect(fx - 6, fy - 3, 3, 3);
+        ctx.fillRect(fx + 5, fy + 2, 2, 2);
+        if (flick) {
+          ctx.fillStyle = "#E5A93C";
+          ctx.fillRect(fx - 1, fy - 6, 2, 2);
+        }
+      }
+      if (age < 22) {
+        const rise = (this.elapsed * 7 + w.x) % 12;
+        ctx.fillStyle = `rgba(70,68,60,${0.34 * (1 - age / 22)})`;
+        ctx.fillRect(fx - 3 - rise / 3, fy - 16 - rise, 6, 4);
+        ctx.fillRect(fx + 2 - rise / 2, fy - 22 - rise * 1.4, 5, 3);
+      }
+    }
   }
 
   /** Beach mines, drawn as what they are: a small dark disc in
@@ -4958,33 +5327,50 @@ export class GameEngine {
     if (this.introKind === "drop" && this.introT >= 0 && u.side === "allies" && u.dropStart !== undefined) {
       if (this.introT < u.dropStart) return; // still inside the C-47
       if (this.introT < u.dropStart + (u.dropDur ?? 1.3)) {
-        // Under canopy: a simple falling man — helmet, body, and
-        // the round chute over him with its shroud lines. Drawn
-        // in the game's palette, no imported art.
-        const fx = snap(u.x);
-        const fy = snap(u.y);
-        ctx.fillStyle = "rgba(0,0,0,0.25)";
-        ctx.fillRect(fx - 8, fy + 10, 16, 3);
+        // Under canopy, with a life to it: the chute snaps open
+        // over the first fifth of the fall, he drifts east and
+        // sways under it, and he sinks from high over his spot
+        // down to the ground, his shadow growing as he comes.
+        // Drawn in the game's palette, no imported art.
+        const dur = u.dropDur ?? 1.3;
+        const fallT = Math.max(0, Math.min(1, (this.introT - u.dropStart) / dur));
+        const open = Math.min(1, fallT / 0.2);
+        const sway = Math.sin(fallT * 5.2 + u.dropStart * 9) * 5.5 * (1 - fallT * 0.45);
+        const sink = 1 - fallT;
+        const fx = snap(u.x + sway + fallT * 10);
+        const fy = snap(u.y - 54 * sink * sink);
+        // His shadow on the ground spot, swelling as he descends.
+        ctx.fillStyle = `rgba(0,0,0,${0.10 + 0.18 * fallT})`;
+        ctx.fillRect(snap(u.x) - 5 - 5 * fallT, snap(u.y) + 9, 10 + 10 * fallT, 3);
+        // The man: helmet, body, legs together for the landing.
         ctx.fillStyle = "#4A5A2E";
-        ctx.fillRect(fx - 2, fy - 2, 4, 8);
+        ctx.fillRect(fx - 2, fy - 2, 5, 8);
         ctx.fillStyle = "#3A4526";
-        ctx.fillRect(fx - 3, fy - 5, 6, 4);
-        ctx.strokeStyle = "rgba(230,225,205,0.8)";
+        ctx.fillRect(fx - 3, fy - 6, 7, 4);
+        ctx.fillStyle = "#2E3620";
+        ctx.fillRect(fx - 2, fy + 6, 2, 4);
+        ctx.fillRect(fx + 1, fy + 6, 2, 4);
+        // Shroud lines fanning from the canopy rim to his shoulders.
+        const r = 14 * open;
+        ctx.strokeStyle = "rgba(230,225,205,0.85)";
         ctx.lineWidth = 1;
         ctx.beginPath();
-        ctx.moveTo(fx - 11, fy - 12);
+        ctx.moveTo(fx - r, fy - 13);
         ctx.lineTo(fx - 1, fy - 3);
-        ctx.moveTo(fx + 11, fy - 12);
-        ctx.lineTo(fx + 1, fy - 3);
-        ctx.moveTo(fx, fy - 14);
+        ctx.moveTo(fx + r, fy - 13);
+        ctx.lineTo(fx + 2, fy - 3);
+        ctx.moveTo(fx, fy - 15);
         ctx.lineTo(fx, fy - 4);
         ctx.stroke();
+        // The canopy: a round dome that breathes a little as it
+        // settles, with its rim band.
+        const breathe = 1 + Math.sin(fallT * 7 + u.dropStart * 5) * 0.04;
         ctx.fillStyle = "#CFC8B0";
         ctx.beginPath();
-        ctx.arc(fx, fy - 11, 11, Math.PI, 0);
+        ctx.arc(fx, fy - 12, Math.max(2, r * breathe), Math.PI, 0);
         ctx.fill();
         ctx.fillStyle = "#B8B198";
-        ctx.fillRect(fx - 11, fy - 12, 22, 2);
+        ctx.fillRect(fx - Math.max(2, r * breathe), fy - 13, Math.max(4, r * breathe * 2), 2);
         return;
       }
     }
@@ -5010,6 +5396,56 @@ export class GameEngine {
       ctx.fillStyle = "#2E3238";
       ctx.fillRect(flip ? cabX + 1 : cabX + 10, fy - 5, 4, 10);
       const w = 36;
+      const pct = Math.max(0, u.hp / u.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
+      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      return;
+    }
+    if (u.vehicle && u.enemyType === "halftrack") {
+      // The Sd.Kfz. 251 halftrack, drawn like the tanks: track
+      // bands with road wheels, a sloped nose at the front (the
+      // way it faces), the open troop bay behind with bench
+      // lines and the crew's helmets, and the mounted MG over
+      // the bay's front edge. German gray-green, health bar
+      // above like the tanks.
+      const fx = snap(u.x);
+      const fy = snap(u.y);
+      const flip = Math.cos(u.facing) < 0;
+      ctx.fillStyle = "#23231C";
+      ctx.fillRect(fx - 23, fy - 11, 46, 5);
+      ctx.fillRect(fx - 23, fy + 6, 46, 5);
+      ctx.fillStyle = "#3B3B30";
+      for (let rwx = -18; rwx <= 18; rwx += 9) {
+        ctx.fillRect(fx + rwx, fy - 10, 4, 3);
+        ctx.fillRect(fx + rwx, fy + 7, 4, 3);
+      }
+      // Hull.
+      ctx.fillStyle = "#4C4F45";
+      ctx.fillRect(fx - 21, fy - 8, 42, 16);
+      // Sloped nose at the front.
+      const noseX = flip ? fx - 21 : fx + 13;
+      ctx.fillStyle = "#565A4C";
+      ctx.fillRect(noseX, fy - 7, 8, 14);
+      ctx.fillStyle = "#2E3238";
+      ctx.fillRect(flip ? noseX + 1 : noseX + 5, fy - 5, 2, 10);
+      // The open troop bay: darker floor, bench lines, helmets.
+      const bayX = flip ? fx - 2 : fx - 19;
+      ctx.fillStyle = "#33362E";
+      ctx.fillRect(bayX, fy - 6, 17, 12);
+      ctx.fillStyle = "#3E4238";
+      ctx.fillRect(bayX + 2, fy - 6, 2, 12);
+      ctx.fillRect(bayX + 13, fy - 6, 2, 12);
+      ctx.fillStyle = "#3A4526";
+      ctx.fillRect(bayX + 5, fy - 4, 4, 4);
+      ctx.fillRect(bayX + 10, fy + 1, 4, 4);
+      // The mounted MG at the bay's front edge.
+      const mgX = flip ? fx - 6 : fx + 2;
+      ctx.fillStyle = "#1E1E14";
+      ctx.fillRect(mgX, fy - 2, 3, 3);
+      ctx.fillRect(flip ? mgX - 7 : mgX + 3, fy - 1, 7, 1);
+      const w = 40;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
       ctx.fillRect(fx - w / 2, fy - 22, w, 4);
@@ -5151,9 +5587,12 @@ export class GameEngine {
       ctx.fillRect(bx, by, on * PX, PX);
     }
 
-    // Morale bar: one row below the health bar. Green holds, amber
-    // wavers, red is about to break. Allies always show it; an enemy
-    // shows it once his nerve starts to slip.
+    // Morale bar: one row below the health bar, in the BLUE
+    // family on purpose (Josh, 2026-11-12) so it can never be
+    // read as health: azure holds, royal blue wavers, violet is
+    // close to breaking, deep indigo once broken (the BROKEN
+    // label above him says the rest). Allies always show it; an
+    // enemy shows it once his nerve starts to slip.
     if (u.morale < 100 || isAlly) {
       const msegs = 8;
       const mpct = Math.max(0, u.morale / 100);
@@ -5162,7 +5601,7 @@ export class GameEngine {
       const mby = headY + PX;
       ctx.fillStyle = "rgba(10,12,8,0.85)";
       ctx.fillRect(mbx - PX, mby - PX, (msegs + 2) * PX, PX * 3);
-      ctx.fillStyle = u.broken ? "#E24A4A" : mpct > 0.6 ? "#7FB069" : mpct > 0.3 ? "#E5A93C" : "#E24A4A";
+      ctx.fillStyle = u.broken ? "#3D348B" : mpct > 0.6 ? "#56B4E8" : mpct > 0.3 ? "#4A6FD4" : "#9B59D0";
       ctx.fillRect(mbx, mby, mon * PX, PX);
     }
 

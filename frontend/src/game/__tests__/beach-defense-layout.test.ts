@@ -145,17 +145,21 @@ describe("Overlord beach layout: grassline, shoreline, scattered east", () => {
   it("the airborne drop gets no gun line at all: the ambush redesign fields the convoy instead", async () => {
     const e = await makeEngine("airborne");
     // Josh, 2026-11-12: the airborne variant loses its MG nests
-    // and mortars entirely. In their place, the convoy: 3 trucks
-    // on the road in the east with their infantry escort around it.
+    // and mortars entirely. In their place, his convoy: 2 panzers
+    // and 1 halftrack on the road, 20 foot troops around them.
     expect(e.units.filter((u) => u.enemyType === "mg42").length).toBe(0);
     expect(e.units.filter((u) => u.enemyType === "mortar").length).toBe(0);
     const trucks = e.units.filter((u) => u.enemyType === "truck");
-    expect(trucks.length).toBe(3);
-    for (const t of trucks) {
+    expect(trucks.length).toBe(0);
+    const vehicles = e.units.filter((u) => u.convoy && u.vehicle);
+    expect(vehicles.length).toBe(3);
+    expect(vehicles.filter((u) => u.enemyType === "panzer").length).toBe(2);
+    expect(vehicles.filter((u) => u.enemyType === "halftrack").length).toBe(1);
+    for (const t of vehicles) {
       expect(t.convoy).toBe(true);
       expect(t.x).toBeGreaterThan(3300);
     }
-    const escort = e.units.filter((u) => u.side === "axis" && u.convoy && u.enemyType !== "truck");
-    expect(escort.length).toBe(11);
+    const escort = e.units.filter((u) => u.side === "axis" && u.convoy && !u.vehicle);
+    expect(escort.length).toBe(20);
   });
 });

@@ -98,6 +98,7 @@ type Engine = {
   boats: Array<{ men: unknown[] }>;
   introKind: string | null;
   introT: number;
+  particles: Array<{ kind: string }>;
 };
 
 async function makeEngine(mission: unknown, variant: string) {
@@ -117,9 +118,13 @@ describe("intro animations", () => {
     expect(allies.length).toBe(37);
     expect(allies.every((u) => u.embarked)).toBe(true);
     e.begin();
+    // A second in, the boats are running in and throwing a wake:
+    // foam particles are in the water behind them.
+    for (let s = 0; s < 60; s++) e.update(1 / 60);
+    expect(e.particles.some((p) => p.kind === "foam")).toBe(true);
     // Two seconds in, the boats are still running in or unloading:
     // nobody has been shot at, because the battle has not started.
-    for (let s = 0; s < 60 * 2; s++) e.update(1 / 60);
+    for (let s = 0; s < 60; s++) e.update(1 / 60);
     expect(e.introT).toBeGreaterThanOrEqual(0);
     expect(e.bullets.length).toBe(0);
     expect(allies.every((u) => u.hp === u.maxHp)).toBe(true);
@@ -144,7 +149,13 @@ describe("intro animations", () => {
     expect(e.introT).toBeGreaterThanOrEqual(0);
     expect(e.bullets.length).toBe(0);
     expect(allies.every((u) => u.hp === u.maxHp)).toBe(true);
-    for (let s = 0; s < 60 * 8 && e.introT >= 0; s++) e.update(1 / 60);
+    // Run past the first landings: boots touching down puff dust.
+    let sawDust = false;
+    for (let s = 0; s < 60 * 8 && e.introT >= 0; s++) {
+      e.update(1 / 60);
+      if (e.particles.some((p) => p.kind === "dust")) sawDust = true;
+    }
+    expect(sawDust).toBe(true);
     expect(e.introT).toBe(-1);
   });
 
