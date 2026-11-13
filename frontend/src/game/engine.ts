@@ -143,6 +143,15 @@ export const RECON_REVEAL_SECONDS = 3;
  * the camp-and-defend spot check alike. A hidden spotter (above)
  * is harder still at 0.55x. */
 export const CONCEAL_SPOT_FACTOR = 0.7;
+/** MG bipod (Josh, 2026-11-13): a prone MG gunner has his gun
+ * deployed on its bipod. He cannot move at all while he is
+ * down — no crawling, no repositioning, the gun stays where it
+ * was planted — and in exchange the deployed gun shoots
+ * further (range x1.25) and tighter (spread x0.55). Standing
+ * up (his suppression falling away) packs the gun up again.
+ * In a retreat he packs up like everyone else and runs. */
+export const MG_BIPOD_RANGE_MULT = 1.25;
+export const MG_BIPOD_SPREAD_MULT = 0.55;
 /** Engineer (Josh, 2026-11-12): the detector finds mines
  * within 70; a revealed mine within reach gets four seconds of
  * still, exposed work to clear; he walks to a revealed mine
@@ -382,6 +391,16 @@ interface Unit {
   reloadT: number;
   reloadTime: number;
   reloadTotal: number;
+  /** The sidearm's own magazine and reload (the AT man's trench
+   * gun): counted separately from the primary, so working the
+   * shotgun never eats a bazooka reload and the bazooka's reload
+   * never silences the shotgun. All zero for men with no
+   * sidearm. */
+  altMagSize: number;
+  altMag: number;
+  altReloadT: number;
+  altReloadTime: number;
+  altReloadTotal: number;
   /** Turret facing for a tank or a halftrack's MG, in
    * radians: it traverses on its own clock, independent of
    * the hull, and the gun only fires when it is lined up. */
@@ -2554,7 +2573,7 @@ export class GameEngine {
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
-        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, turret: 0, kills: 0, alive: true, walk: 0,
+        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, altMagSize: spec.sidearm?.magSize ?? 0, altMag: spec.sidearm?.magSize ?? 0, altReloadT: 0, altReloadTime: spec.sidearm?.reloadTime ?? 0, altReloadTotal: 0, turret: 0, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
         stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
@@ -3386,7 +3405,16 @@ export class GameEngine {
     if (sniperClass && !this.reconPaired(u)) {
       return Math.min(u.range, SNIPER_SOLO_RANGE);
     }
+    if (this.deployedBipod(u)) return u.range * MG_BIPOD_RANGE_MULT;
     return u.range;
+  }
+
+  /** An MG gunner down on his bipod: prone, planted, and not
+   * packing up for a retreat. While this holds he cannot move
+   * and his gun reaches further and tighter (effRange, fireAt,
+   * and the movement gates in moveToward and chaseTo). */
+  deployedBipod(u: Unit): boolean {
+    return u.type === "mg" && u.prone && u.alive && !this.retreating;
   }
 
   /** A spotter concealed in foliage: in the green, and he has
@@ -3409,6 +3437,40 @@ export class GameEngine {
    * precedence where both apply. */
   concealedTarget(u: Unit): boolean {
     return u.alive && !u.vehicle && (u.prone || this.inFoliage(u));
+  }
+
+  /** The sidearm this man carries, if his class has one (the AT
+   * man's trench gun). Only the player's classes carry one. */
+  private sidearmOf(u: Unit) {
+    if (u.side !== "allies") return undefined;
+    return UNIT_TYPES[u.type]?.sidearm;
+  }
+
+  /** The range this man can engage THIS target at. A man with a
+   * sidearm keeps his primary for vehicles — the bazooka only
+   * ever fires at armour (Josh, 2026-11-13) — and infantry is
+   * the sidearm's work, so against a man on foot his reach is
+   * the shotgun's, and he has to close to it. */
+  engageRange(u: Unit, target: Unit | null): number {
+    const s = this.sidearmOf(u);
+    if (s && target && !target.vehicle) return Math.min(this.effRange(u), s.range);
+    return this.effRange(u);
+  }
+
+  /** Whether the weapon this target calls for is ready: the
+   * sidearm answers to its own reload, the primary to its. */
+  private canFire(u: Unit, target: Unit): boolean {
+    const s = this.sidearmOf(u);
+    if (s && !target.vehicle) return u.altReloadT <= 0;
+    return u.reloadT <= 0;
+  }
+
+  /** The leader's click-fire readiness: a man with a sidearm
+   * can answer a click with either weapon, so either reload
+   * finishing is enough; everyone else answers to the one
+   * reload he has. */
+  private manualReady(u: Unit): boolean {
+    return this.sidearmOf(u) ? u.reloadT <= 0 || u.altReloadT <= 0 : u.reloadT <= 0;
   }
 
   // ---------------- spawning ----------------
@@ -3486,6 +3548,11 @@ export class GameEngine {
         reloadT: 0,
         reloadTime: spec.reloadTime,
         reloadTotal: 0,
+        altMagSize: spec.sidearm?.magSize ?? 0,
+        altMag: spec.sidearm?.magSize ?? 0,
+        altReloadT: 0,
+        altReloadTime: spec.sidearm?.reloadTime ?? 0,
+        altReloadTotal: 0,
         turret: 0,
         kills: 0,
         alive: true,
@@ -3571,6 +3638,11 @@ export class GameEngine {
           reloadT: 0,
           reloadTime: def.reloadTime,
           reloadTotal: 0,
+          altMagSize: 0,
+          altMag: 0,
+          altReloadT: 0,
+          altReloadTime: 0,
+          altReloadTotal: 0,
           turret: Math.PI,
           kills: 0,
           alive: true,
@@ -4285,6 +4357,11 @@ export class GameEngine {
         u.reloadT = Math.max(0, u.reloadT - dt);
         if (u.reloadT <= 0) u.mag = u.magSize;
       }
+      // The sidearm reloads on its own clock the same way.
+      if (u.altReloadT > 0) {
+        u.altReloadT = Math.max(0, u.altReloadT - dt);
+        if (u.altReloadT <= 0) u.altMag = u.altMagSize;
+      }
 
       // Morale: pinned men lose nerve fast, heavy suppression wears
       // it down. Out of fire for 5s it comes back, faster beside a
@@ -4436,7 +4513,15 @@ export class GameEngine {
         const o = u.orders[0];
         const od = dist(u.x, u.y, o.x, o.y);
         if (od < 8) u.orders.shift();
-        else {
+        else if (this.deployedBipod(u)) {
+          // Planted on the bipod: the move order is moot. It has
+          // to die here rather than fall through to moveToward —
+          // this branch reports "moving" on the caller's behalf,
+          // and a deployed gunner who reads as moving can never
+          // fire (the prone fire rule needs a still man), which
+          // would leave the deployed gun silent forever.
+          u.orders = [];
+        } else {
           this.moveToward(u, o.x, o.y, dt);
           moving = true;
         }
@@ -4589,7 +4674,7 @@ export class GameEngine {
             } else {
               u.chase = []; // camping: hold position
             }
-          } else if (pd > this.effRange(u) * 0.9 || !this.los(u, prey)) {
+          } else if (pd > this.engageRange(u, prey) * 0.9 || !this.los(u, prey)) {
             moving = this.chaseTo(u, prey.x, prey.y, dt);
           } else {
             // In range with line of sight: the unit stops to fire, so
@@ -4824,7 +4909,7 @@ export class GameEngine {
       // In the AUTO test driver there is no player, so the man
       // picked as leader still dives like everyone else.
       const isPlayerLeader = !this.autoBattle && this.leaderId === u.id;
-      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle && !u.npcFallback && !isPlayerLeader) {
+      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle && !u.npcFallback && !isPlayerLeader && !this.deployedBipod(u)) {
         const underFire = u.pinned || u.suppression >= 35;
         const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
         const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
@@ -4897,7 +4982,7 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && u.reloadT <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus) && (tSpeed === 0 || Math.abs(angDiff(u.turret, Math.atan2(focus.y - u.y, focus.x - u.x))) <= TURRET_FIRE_TOLERANCE)) {
+      } else if (u.cooldown <= 0 && focus && this.canFire(u, focus) && d <= this.engageRange(u, focus) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus) && (tSpeed === 0 || Math.abs(angDiff(u.turret, Math.atan2(focus.y - u.y, focus.x - u.x))) <= TURRET_FIRE_TOLERANCE)) {
         // A pinned man in the open keeps his head down and cannot
         // fire. A pinned man IN COVER still shoots back, at a
         // slower rate: before this, rounds stopped by his cover
@@ -4909,18 +4994,30 @@ export class GameEngine {
         // A prone man fires only when he is still: crawling is
         // both hands and belly on the ground, no shooting on
         // the move (Josh, 2026-11-12).
-        const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
+        const sidearm = this.sidearmOf(u);
+        const baseInterval = sidearm && !focus.vehicle ? sidearm.fireInterval : u.fireInterval;
+        const interval = baseInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
       } else if (
-        u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && u.reloadT <= 0 && this.manualShot &&
+        u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && this.manualReady(u) && this.manualShot &&
         this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed))
       ) {
         // The player clicked open ground: the leader fires at
         // the point itself while the click is fresh. No target,
         // no auto-acquire; the rounds fly and hit what is there.
         const ms = this.manualShot;
-        if (dist(u.x, u.y, ms.x, ms.y) <= u.range) {
+        const s = this.sidearmOf(u);
+        const clickD = dist(u.x, u.y, ms.x, ms.y);
+        if (s) {
+          // An AT leader answers a close click with the trench
+          // gun; the bazooka never fires at bare ground.
+          if (clickD <= s.range && u.altReloadT <= 0) {
+            u.cooldown = s.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
+            u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
+            this.spawnBullet(u, ms.x, ms.y, s.spread * (u.pinned ? 1.5 : 1), s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun");
+          }
+        } else if (clickD <= u.range) {
           const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
           u.cooldown = interval;
           u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
@@ -5213,6 +5310,11 @@ export class GameEngine {
   // chasing after a stuck drop — otherwise it would re-chase the same
   // prey behind the same wall in the very next frame.
   private chaseTo(u: Unit, x: number, y: number, dt: number, speedMult = 1): boolean {
+    // A deployed MG gunner does not move (Josh, 2026-11-13).
+    if (this.deployedBipod(u)) {
+      u.chase = [];
+      return false;
+    }
     if (this.elapsed < u.chaseBanT) {
       u.chase = [];
       return false;
@@ -5317,6 +5419,10 @@ export class GameEngine {
   }
 
   private moveToward(u: Unit, x: number, y: number, dt: number, speedMult = 1) {
+    // A deployed MG gunner does not move (Josh, 2026-11-13):
+    // every order, chase, anchor and key press funnels through
+    // here, and the planted gun answers none of them.
+    if (this.deployedBipod(u)) return;
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
     const sx = u.x;
@@ -5518,19 +5624,43 @@ export class GameEngine {
 
   private fireAt(u: Unit, target: Unit, moving: boolean) {
     const lead = moving ? 1.6 : u.pinned ? 1.5 : 1;
-    this.spawnBullet(u, target.x, target.y, u.spread * lead, u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
+    // A man with a sidearm works it on infantry (Josh,
+    // 2026-11-13): the AT man's bazooka only ever fires at
+    // vehicles; a man on foot gets the trench gun, on the
+    // shotgun's own magazine, reload and damage source (a
+    // "shotgun" source is small arms to the armour rule, never
+    // the bazooka's piercing "at").
+    const s = this.sidearmOf(u);
+    if (s && !target.vehicle) {
+      this.spawnBullet(u, target.x, target.y, s.spread * lead, s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun");
+      return;
+    }
+    // A deployed bipod shoots tighter (Josh, 2026-11-13).
+    const bipod = this.deployedBipod(u) ? MG_BIPOD_SPREAD_MULT : 1;
+    this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod, u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
   }
 
-  private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
+  private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number, alt = false, bulletSpeed?: number, source?: string) {
     // Reloading (Josh, 2026-11-13): no weapon fires mid-reload,
-    // whatever path called for the shot.
-    if (u.reloadT > 0) return;
+    // whatever path called for the shot. A sidearm shot answers
+    // to the sidearm's own reload only: the trench gun works
+    // while the bazooka is being reloaded, and the other way
+    // round.
+    if (alt ? u.altReloadT > 0 : u.reloadT > 0) return;
     u.shootT = 0.16;
     u.lastShotT = this.elapsed;
     // Every shot leaves the magazine. When it runs dry the
     // reload starts on the spot (slower with shaking, pinned
     // hands), and an MG barrage dies with its belt.
-    if (u.magSize > 0) {
+    if (alt) {
+      if (u.altMagSize > 0) {
+        u.altMag -= 1;
+        if (u.altMag <= 0) {
+          u.altReloadTotal = u.altReloadTime * (u.pinned ? RELOAD_PINNED_MULT : 1);
+          u.altReloadT = u.altReloadTotal;
+        }
+      }
+    } else if (u.magSize > 0) {
       u.mag -= 1;
       if (u.mag <= 0) {
         u.burst = 0;
@@ -5552,13 +5682,13 @@ export class GameEngine {
       oy: u.y,
       x: mx,
       y: my,
-      vx: Math.cos(ang) * u.bulletSpeed,
-      vy: Math.sin(ang) * u.bulletSpeed,
+      vx: Math.cos(ang) * (bulletSpeed ?? u.bulletSpeed),
+      vy: Math.sin(ang) * (bulletSpeed ?? u.bulletSpeed),
       side: u.side,
       dmg,
       suppress,
       life: 1.2,
-      sourceType: u.side === "allies" ? u.type : u.enemyType!,
+      sourceType: source ?? (u.side === "allies" ? u.type : u.enemyType!),
       killerId: u.id,
       ally: u.side === "allies",
     });
@@ -6163,7 +6293,7 @@ export class GameEngine {
         pinned: u.pinned,
         morale: Math.round(u.morale),
         broken: u.broken,
-        reloading: u.reloadT > 0,
+        reloading: u.reloadT > 0 || u.altReloadT > 0,
         coward: u.coward,
         abilityCd: u.abilityCd,
         abilityCdMax: UNIT_TYPES[u.type].ability.cd,
@@ -7177,6 +7307,17 @@ export class GameEngine {
     if (u.reloadT > 0 && u.reloadTotal > 0) {
       const rsegs = 8;
       const rpct = Math.max(0, Math.min(1, 1 - u.reloadT / u.reloadTotal));
+      const ron = Math.ceil(rpct * rsegs);
+      const rbx = fx - (rsegs / 2) * PX;
+      const rby = headY + PX * 4;
+      ctx.fillStyle = "rgba(10,12,8,0.85)";
+      ctx.fillRect(rbx - PX, rby - PX, (rsegs + 2) * PX, PX * 3);
+      ctx.fillStyle = "#E5A93C";
+      ctx.fillRect(rbx, rby, ron * PX, PX);
+    } else if (u.altReloadT > 0 && u.altReloadTotal > 0) {
+      // The sidearm's reload shows on the same bar.
+      const rsegs = 8;
+      const rpct = Math.max(0, Math.min(1, 1 - u.altReloadT / u.altReloadTotal));
       const ron = Math.ceil(rpct * rsegs);
       const rbx = fx - (rsegs / 2) * PX;
       const rby = headY + PX * 4;

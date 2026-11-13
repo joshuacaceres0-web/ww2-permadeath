@@ -33,6 +33,24 @@ export interface UnitTypeSpec {
   blurb: string;
   /** A vehicle: no morale, it never breaks or flees. */
   vehicle?: boolean;
+  /** A second weapon for close work (the AT man's trench gun,
+   * 2026-11-13): its own damage, reach, magazine and reload,
+   * carried alongside the primary. The primary stays reserved
+   * for what it was made for — the bazooka only ever fires at
+   * vehicles; infantry is the sidearm's work. */
+  sidearm?: SidearmSpec;
+}
+
+/** A carried second weapon: see UnitTypeSpec.sidearm. */
+export interface SidearmSpec {
+  name: string;
+  dmg: number;
+  fireInterval: number;
+  range: number;
+  magSize: number;
+  reloadTime: number;
+  spread: number;
+  bulletSpeed: number;
 }
 
 export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
@@ -111,7 +129,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     spread: 0.1,
     bulletSpeed: 640,
     ability: { key: "Q", name: "Suppressive Barrage", desc: "Walk 16 rounds across an area — pins everything under them", cd: 14, aim: "ground" },
-    blurb: "Pins the enemy in the dirt so your riflemen can move.",
+    blurb: "Pins the enemy in the dirt so your riflemen can move. Driven prone, his gun deploys on its bipod: longer reach and tighter fire, but he cannot move until he stands.",
   },
   sniper: {
     type: "sniper",
@@ -155,7 +173,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     type: "at",
     label: "AT Specialist",
     role: "Heavy Ordnance",
-    weapon: "M1 Bazooka 60mm",
+    weapon: "M1 Bazooka 60mm + M97 Trench Gun",
     cost: 300,
     hp: 100,
     speed: 46,
@@ -168,7 +186,13 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     spread: 0.03,
     bulletSpeed: 380,
     ability: { key: "Q", name: "Bunker Buster", desc: "Rocket — 80 dmg with a 65px blast on the toughest target", cd: 14, aim: "auto" },
-    blurb: "Emplacements, nests, anything dug in — it stops existing.",
+    // The bazooka is for armour and nothing else (Josh,
+    // 2026-11-13): up close the AT man works a trench gun, and
+    // two shots put a man down (32 a hit against the 60 hp
+    // conscript every wave is built from). Five shells in the
+    // tube, his own reload, independent of the bazooka's.
+    sidearm: { name: "M97 Trench Gun", dmg: 32, fireInterval: 0.9, range: 110, magSize: 5, reloadTime: 2.0, spread: 0.09, bulletSpeed: 540 },
+    blurb: "Emplacements, nests, anything dug in — it stops existing. The bazooka is for tanks only; up close he works a trench gun.",
   },
   recon: {
     type: "recon",
