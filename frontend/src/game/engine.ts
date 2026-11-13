@@ -52,6 +52,17 @@ const NEAR_MISS_BAND = 45;
 // The airborne convoy's road speed: a slow, cautious roll west.
 const CONVOY_SPEED = 26;
 const PAN_SPEED = 900;
+/** Camera follow smoothing (Josh, 2026-11-13): the lock target
+ * never changes — always the leader, no free camera — but the
+ * view eases onto him over a few frames instead of snapping in
+ * one. At a full run (60 units/s) the steady lag is speed ×
+ * tau ≈ 3 units, under one screen pixel (PX = 3), so he still
+ * reads as dead center. A jump farther than the snap distance
+ * (a teleport, a succession across the field, coming back
+ * from the full map) still snaps instantly: the lock never
+ * pans across the map to reach him. */
+const CAM_SMOOTH_TAU = 0.045;
+const CAM_SNAP_DIST = 90;
 const PX = 3; // world units per screen pixel — the whole battlefield renders as chunky pixel art
 const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
 const PIXEL_FONT = "24px Silkscreen, monospace";
@@ -171,7 +182,7 @@ export function radioCost(base: number, radiomanLevel: number): number {
   return Math.max(0, Math.round(base * (1 - RADIO_DISCOUNT_PER_LEVEL * radiomanLevel)));
 }
 /** Cooldowns (seconds left, 0 = ready) for the six menu call-ins. */
-export type SupportCd = { artillery: number; supply: number; recon: number; mortar: number; smoke: number; tank: number };
+export type SupportCd = { artillery: number; supply: number; recon: number; mortar: number; smoke: number; tank: number; rally: number };
 export const RADIO_CALL_LEVEL: Record<RadioCallKind, number> = {
   rally: 1,
   reinforce: 2,
@@ -1452,19 +1463,41 @@ export class GameEngine {
     return L ? { x: L.x, y: L.y } : null;
   }
 
-  /** Hard lock (Josh, 2026-11-12): the battle view re-centers
-   * on the lock target every tick, exactly, with no clamp at
-   * the map edges — centered at all times is the rule, so
-   * near an edge the view shows past the battlefield rather
-   * than let the leader drift off-center. One frame snap, no
-   * follow lag. Full map is the only exception, and update()
-   * only lets it live while the battle is paused. */
-  private lockCamera() {
+  /** Hard lock (Josh, 2026-11-12): the battle view is locked
+   * on the lock target, with no clamp at the map edges —
+   * centered is the rule, so near an edge the view shows past
+   * the battlefield rather than let the leader drift
+   * off-center. Full map is the only exception, and update()
+   * only lets it live while the battle is paused.
+   * Follow feel (Josh, 2026-11-13): the one-frame exact snap
+   * read as clunk in play, worst on diagonals — the leader
+   * moves about a unit a tick while the view can only land on
+   * whole screen pixels (PX = 3), so the snap landed the view
+   * in uneven 3-unit steps, the two axes crossing their pixel
+   * thresholds on different ticks, and every discrete change
+   * in the leader's speed (foliage, the obstacle belt, a pin)
+   * hit the screen undamped. The lock now eases onto the
+   * target with a short exponential damp (CAM_SMOOTH_TAU):
+   * the leader stays effectively centered (a few units of
+   * lag at a full run, under one screen pixel) but the steps
+   * land evenly and speed changes glide. Jumps past
+   * CAM_SNAP_DIST still snap in one tick. */
+  private lockCamera(dt: number) {
     if (this.phase !== "battle" || this.fitWholeMap) return;
     const t = this.cameraTarget();
     if (!t) return;
-    this.cam.x = t.x - this.viewW / 2;
-    this.cam.y = t.y - this.viewH / 2;
+    const tx = t.x - this.viewW / 2;
+    const ty = t.y - this.viewH / 2;
+    const dx = tx - this.cam.x;
+    const dy = ty - this.cam.y;
+    if (dx * dx + dy * dy > CAM_SNAP_DIST * CAM_SNAP_DIST) {
+      this.cam.x = tx;
+      this.cam.y = ty;
+      return;
+    }
+    const k = dt > 0 ? 1 - Math.exp(-dt / CAM_SMOOTH_TAU) : 1;
+    this.cam.x += dx * k;
+    this.cam.y += dy * k;
   }
 
   centerOn(x: number, y: number) {
@@ -2030,6 +2063,42 @@ export class GameEngine {
     if (kind === "mortar") return this.mortarCd <= 0;
     if (kind === "smoke") return this.smokeCd <= 0;
     return !this.tankCalled;
+  }
+
+  /** Rally Call, cast by radioman u: nearby men recover 15
+   * morale, a fleeing man steadies at 65. Only spends the
+   * cooldown when somebody actually needs rallying. Returns
+   * whether the call went out. Shared by the ability drivers
+   * and the radio panel's own RALLY CALL button. */
+  private castRally(u: Unit): boolean {
+    const low = this.units.filter(
+      (a) => a.side === "allies" && a.alive && a.morale < 100 && dist(u.x, u.y, a.x, a.y) <= 150,
+    );
+    if (!low.length) {
+      this.pushLog(`${u.name}: the squad is holding — nobody needs rallying.`, "info");
+      return false;
+    }
+    for (const a of low) {
+      if (a.broken && a.willFlee) a.morale = 65; // steadies a fleeing man
+      else a.morale = Math.min(100, a.morale + 15);
+    }
+    u.abilityCd = UNIT_TYPES[u.type].ability.cd;
+    this.pushLog(`${u.name} rallies the squad on the radio.`, "info");
+    this.dirty = true;
+    return true;
+  }
+
+  /** The radio panel's RALLY CALL (Josh, 2026-11-13): the
+   * player orders the squad radioman to rally now, instead of
+   * waiting for his own driver to pick the moment. Same man,
+   * same cooldown, same 150 ring as the ability — it costs no
+   * RP, so it stays a local call like the ability itself. */
+  callRally(): boolean {
+    if (this.phase !== "battle" || this.battleState !== "active" || this.retreating) return false;
+    if (this.commanderLevel < RADIO_CALL_LEVEL.rally) return false;
+    const u = this.units.find((x) => x.side === "allies" && !x.npc && x.alive && x.type === "radioman");
+    if (!u || u.abilityCd > 0 || u.broken) return false;
+    return this.castRally(u);
   }
 
   /** Radio support lives or dies with the radioman: a living, deployed squad radioman. */
@@ -3068,21 +3137,7 @@ export class GameEngine {
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} patches up ${best.name}.`, "info");
     } else if (u.type === "radioman") {
-      // Rally Call: nearby men recover 15 morale. Only spends the
-      // cooldown when somebody actually needs rallying.
-      const low = this.units.filter(
-        (a) => a.side === "allies" && a.alive && a.morale < 100 && dist(u.x, u.y, a.x, a.y) <= 150,
-      );
-      if (!low.length) {
-        this.pushLog(`${u.name}: the squad is holding — nobody needs rallying.`, "info");
-        return;
-      }
-      for (const a of low) {
-        if (a.broken && a.willFlee) a.morale = 65; // steadies a fleeing man
-        else a.morale = Math.min(100, a.morale + 15);
-      }
-      u.abilityCd = spec.cd;
-      this.pushLog(`${u.name} rallies the squad on the radio.`, "info");
+      this.castRally(u);
     } else if (u.type === "sniper") {
       const t = this.bestTarget(u, (a, b) => a.maxHp - b.maxHp);
       if (!t) {
@@ -3828,7 +3883,7 @@ export class GameEngine {
     // no replay frames — the battle starts when it ends.
     if (this.introT >= 0) {
       this.advanceIntro(dt);
-      this.lockCamera();
+      this.lockCamera(dt);
       this.dirty = true;
       return;
     }
@@ -4948,8 +5003,9 @@ export class GameEngine {
     this.stepDeaths(dt);
     for (const u of this.units) if (u.shootT && u.shootT > 0) u.shootT -= dt;
     // The camera settles last, on wherever the leader ended
-    // the tick: hard lock, every tick (Josh, 2026-11-12).
-    this.lockCamera();
+    // the tick: locked on him, eased (Josh, 2026-11-12 lock;
+    // 2026-11-13 smooth follow).
+    this.lockCamera(dt);
   }
 
   private autoTarget(u: Unit): Unit | null {
@@ -5933,6 +5989,7 @@ export class GameEngine {
         mortar: Math.max(0, Math.ceil(this.mortarCd - 1e-6)),
         smoke: Math.max(0, Math.ceil(this.smokeCd - 1e-6)),
         tank: 0,
+        rally: Math.max(0, Math.ceil((this.units.find((u) => u.side === "allies" && !u.npc && u.alive && u.type === "radioman")?.abilityCd ?? 0) - 1e-6)),
       },
       tankUsed: this.tankCalled,
       supportCost: {

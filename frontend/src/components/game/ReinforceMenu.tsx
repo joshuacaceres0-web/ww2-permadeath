@@ -5,6 +5,11 @@
 // strike 5, smoke screen 6, artillery 7, tank support 8. Every call
 // needs the radio up, and a locked call shows the level it needs.
 // Support is player-called from this menu (AUTO never calls it).
+// The dropdown opens toward the screen (placement prop: the corner
+// cluster sits at the bottom edge, so its menu opens UP — opening
+// down put the whole list off the bottom of the screen, Josh,
+// 2026-11-13) and the calls list scrolls inside it (wheel and
+// touch drag) so every call stays reachable on a short screen.
 import { useState } from "react";
 import { Radio } from "lucide-react";
 import type { ReinforcementKind } from "@/lib/types";
@@ -55,11 +60,23 @@ interface Props {
   reinforceCost: { rifle: number; heavy: number };
   onCall: (kind: ReinforcementKind) => void;
   onSupport: (kind: RadioSupportKind) => void;
+  /** Rally Call: free, local to the radioman's own ability. */
+  onRally: () => void;
+  /** Which way the dropdown opens. The corner cluster hugs the
+   * bottom edge of the screen, so it opens "up"; the touch row
+   * and the Esc menu open "down". */
+  placement?: "up" | "down";
+  /** Which edge of the button the dropdown hangs from. The
+   * touch row sits at the left edge, so it hangs "left". */
+  align?: "left" | "right";
 }
 
-export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, commanderLevel, supportCd, tankUsed, supportCost, reinforceCost, onCall, onSupport }: Props) {
+export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, commanderLevel, supportCd, tankUsed, supportCost, reinforceCost, onCall, onSupport, onRally, placement = "down", align = "right" }: Props) {
   const [open, setOpen] = useState(false);
   const reinforcementsLocked = commanderLevel < RADIO_CALL_LEVEL.reinforce;
+  const rallyLocked = commanderLevel < RADIO_CALL_LEVEL.rally;
+  const rallyCd = supportCd.rally ?? 0;
+  const menuPos = `${placement === "up" ? "bottom-full mb-1" : "top-full mt-1"} ${align === "left" ? "left-0" : "right-0"}`;
   return (
     <div className="relative">
       <button
@@ -75,61 +92,82 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
       {open && !disabled && radioLive && (
         <div
           data-testid="reinforce-menu"
-          className={`absolute right-0 top-full z-30 mt-1 w-64 p-2 ${PANEL_SOLID}`}
+          className={`absolute z-30 flex max-h-[min(72vh,30rem)] w-64 flex-col p-2 ${menuPos} ${PANEL_SOLID}`}
         >
-          <p className={`mb-1.5 ${PANEL_LABEL}`}>
+          <p className={`mb-1.5 shrink-0 ${PANEL_LABEL}`}>
             Radio support · LVL {commanderLevel} · {rp} RP · {left} calls left
           </p>
-          <p className={`mb-1.5 ${PANEL_LABEL}`}>
-            Call 2nd Platoon {reinforcementsLocked ? "· LVL 2 to unlock" : ""}
-          </p>
-          {REINFORCEMENTS.map((r) => (
-            <button
-              key={r.kind}
-              data-testid={`reinforce-${r.kind}`}
-              disabled={pending || rp < reinforceCost[r.kind] || left <= 0 || reinforcementsLocked}
-              onClick={() => {
-                onCall(r.kind);
-                setOpen(false);
-              }}
-              className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#4ECDC4] disabled:opacity-40"
-            >
-              <span>
-                <span className="block font-semibold">{r.label}</span>
-                <span className="block text-[9px] text-[#8D9A83]">{r.men} · AI-controlled</span>
-              </span>
-              <span className="text-[#E5A93C]">{reinforcementsLocked ? "LVL 2" : `${reinforceCost[r.kind]} RP`}</span>
-            </button>
-          ))}
-          <p className={`mb-1.5 mt-2 ${PANEL_LABEL}`}>
-            Radio support · needs a living radioman
-          </p>
-          {RADIO_SUPPORT.map((r) => {
-            const cd = supportCd[r.kind];
-            const cost = supportCost[r.kind];
-            const locked = commanderLevel < r.level;
-            const used = r.once && tankUsed;
-            const broke = rp < cost;
-            const label = locked ? `LVL ${r.level}` : used ? "USED" : r.once ? `${cost} RP` : cd > 0 ? `${cd}s` : `${cost} RP`;
-            return (
+          <div
+            data-testid="reinforce-menu-scroll"
+            className="min-h-0 overflow-y-auto overscroll-contain pr-0.5"
+            style={{ WebkitOverflowScrolling: "touch" }}
+          >
+            <p className={`mb-1.5 ${PANEL_LABEL}`}>
+              Call 2nd Platoon {reinforcementsLocked ? "· LVL 2 to unlock" : ""}
+            </p>
+            {REINFORCEMENTS.map((r) => (
               <button
                 key={r.kind}
-                data-testid={`radio-support-${r.kind}`}
-                disabled={locked || used || cd > 0 || broke}
+                data-testid={`reinforce-${r.kind}`}
+                disabled={pending || rp < reinforceCost[r.kind] || left <= 0 || reinforcementsLocked}
                 onClick={() => {
-                  onSupport(r.kind);
+                  onCall(r.kind);
                   setOpen(false);
                 }}
-                className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#E5A93C] disabled:opacity-40"
+                className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#4ECDC4] disabled:opacity-40"
               >
                 <span>
                   <span className="block font-semibold">{r.label}</span>
-                  <span className="block text-[9px] text-[#8D9A83]">{r.detail}</span>
+                  <span className="block text-[9px] text-[#8D9A83]">{r.men} · AI-controlled</span>
                 </span>
-                <span className="text-[#E5A93C]">{label}</span>
+                <span className="text-[#E5A93C]">{reinforcementsLocked ? "LVL 2" : `${reinforceCost[r.kind]} RP`}</span>
               </button>
-            );
-          })}
+            ))}
+            <p className={`mb-1.5 mt-2 ${PANEL_LABEL}`}>
+              Radio support · needs a living radioman
+            </p>
+            <button
+              data-testid="radio-rally"
+              disabled={rallyLocked || rallyCd > 0}
+              onClick={() => {
+                onRally();
+                setOpen(false);
+              }}
+              className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#E5A93C] disabled:opacity-40"
+            >
+              <span>
+                <span className="block font-semibold">RALLY CALL</span>
+                <span className="block text-[9px] text-[#8D9A83]">Radioman steadies nearby men, +15 morale</span>
+              </span>
+              <span className="text-[#E5A93C]">{rallyLocked ? `LVL ${RADIO_CALL_LEVEL.rally}` : rallyCd > 0 ? `${rallyCd}s` : "FREE"}</span>
+            </button>
+            {RADIO_SUPPORT.map((r) => {
+              const cd = supportCd[r.kind];
+              const cost = supportCost[r.kind];
+              const locked = commanderLevel < r.level;
+              const used = r.once && tankUsed;
+              const broke = rp < cost;
+              const label = locked ? `LVL ${r.level}` : used ? "USED" : r.once ? `${cost} RP` : cd > 0 ? `${cd}s` : `${cost} RP`;
+              return (
+                <button
+                  key={r.kind}
+                  data-testid={`radio-support-${r.kind}`}
+                  disabled={locked || used || cd > 0 || broke}
+                  onClick={() => {
+                    onSupport(r.kind);
+                    setOpen(false);
+                  }}
+                  className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#E5A93C] disabled:opacity-40"
+                >
+                  <span>
+                    <span className="block font-semibold">{r.label}</span>
+                    <span className="block text-[9px] text-[#8D9A83]">{r.detail}</span>
+                  </span>
+                  <span className="text-[#E5A93C]">{label}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>

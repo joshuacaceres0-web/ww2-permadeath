@@ -127,14 +127,19 @@ describe("camera hard lock on the team leader", () => {
     const e = await makeEngine();
     e.begin();
     // Continuous walk east: after every half second the view
-    // center is the leader, not a drift toward him.
+    // center is on the leader. Since the 2026-11-13 smooth
+    // follow the center rides a few units behind him at a
+    // full run (speed × tau ≈ 3, under one screen pixel) —
+    // Josh sanctioned the tiny lag to kill the snap clunk —
+    // so the walking tolerance is 6, while teleports and
+    // successions below still snap to under 2.
     e.keys.add("d");
     for (let chunk = 0; chunk < 16; chunk++) {
       step(e, 0.5);
       const L = leaderOf(e);
       const c = center(e);
-      expect(Math.abs(c.x - L.x)).toBeLessThan(2);
-      expect(Math.abs(c.y - L.y)).toBeLessThan(2);
+      expect(Math.abs(c.x - L.x)).toBeLessThan(6);
+      expect(Math.abs(c.y - L.y)).toBeLessThan(6);
     }
     e.keys.delete("d");
     expect(leaderOf(e).x).toBeGreaterThan(300);

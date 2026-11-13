@@ -275,10 +275,10 @@ describe("radio support", () => {
     expect(e.callRecon()).toBe(false);
   });
 
-  it("the HUD reports all six cooldowns", async () => {
+  it("the HUD reports all seven cooldowns", async () => {
     const { e, hud } = await makeEngine(WITH_RADIO);
     park(e);
-    expect(hud().supportCd).toEqual({ artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 });
+    expect(hud().supportCd).toEqual({ artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0, rally: 0 });
     e.callArtillery();
     expect(hud().supportCd.artillery).toBe(ARTILLERY_CD);
     expect(hud().supportCd.supply).toBe(0);

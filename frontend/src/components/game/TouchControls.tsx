@@ -109,9 +109,15 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
   const eng = () => engineRef.current;
   return (
     <div className="pointer-events-none absolute inset-0 z-20" data-testid="touch-controls">
-      {/* Top-left working row: radio entry, formation cycle, cover */}
+      {/* Top-left working row: radio entry, formation cycle, cover.
+          The overlay root is pointer-events-none, so the radio
+          slot needs its own pointer-events-auto wrapper like the
+          buttons beside it — without it the RADIO button rendered
+          but every tap passed straight through it (Josh,
+          2026-11-13). The wrapper also covers the open dropdown,
+          which hangs inside the slot. */}
       <div className="absolute left-2 top-10 flex items-center gap-1.5">
-        {radioSlot}
+        <div className="pointer-events-auto">{radioSlot}</div>
         <button
           data-testid="touch-formation-btn"
           className={`pointer-events-auto px-2.5 py-2 text-[10px] ${PANEL_BTN} text-[#E3E7DC]!`}
