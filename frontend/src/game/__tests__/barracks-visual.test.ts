@@ -71,7 +71,19 @@ function stubBrowser() {
 stubBrowser();
 
 const loadSprites = async () => (await import("../sprites")) as Any;
-const pixelsOf = (canvas: Any) => canvas.__ctx.pixels as Map<string, string>;
+// Slice 1 paints sprites at SPR_SCALE 2 density: the raw map
+// is keyed in native backing pixels, so fold it back to the
+// logical 16x14 grid this suite asserts on (a sub-pixel detail
+// mark reads as its logical cell's colour, last write wins).
+const pixelsOf = (canvas: Any) => {
+  const raw = canvas.__ctx.pixels as Map<string, string>;
+  const folded = new Map<string, string>();
+  for (const [k, v] of raw) {
+    const [x, y] = k.split(",").map(Number);
+    folded.set(`${Math.floor(x / 2)},${Math.floor(y / 2)}`, v);
+  }
+  return folded;
+};
 const mapKey = (m: Map<string, string>) => [...m.entries()].sort().map(([k, v]) => `${k}:${v}`).join("|");
 const maxX = (m: Map<string, string>) => Math.max(...[...m.keys()].map((k) => Number(k.split(",")[0])));
 

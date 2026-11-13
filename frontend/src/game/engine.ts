@@ -5,7 +5,7 @@ import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, GUN_DEFS, ITEM_BY_ID, LOOT
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
 import { setSfxMuted, setSfxVolume, sfx, whistleSfx } from "./sfx";
-import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
+import { FEET_X, SPR_H, SPR_W, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
 export const MAP_W = 4000;
 export const MAP_H = 1350;
@@ -565,6 +565,10 @@ interface Unit {
   chaseBanT: number;
   // animation
   deathT?: number;
+  /** Battle time of the last prone toggle (Slice 1): the draw
+   * shows the halfway proneDown frame for a beat after it, in
+   * either direction. Visual only. */
+  proneT?: number;
   /** Battle time of death, stamped in kill(). Drives the squad
    * dock order: the fallen collect at the far right in the order
    * they fell (Josh, 2026-11-12). Undefined while alive. */
@@ -1168,6 +1172,9 @@ export class GameEngine {
    * field) and how far it trails the plane ahead, in x. */
   planes: Array<{ lane: number; trail: number }> = [];
   private terrain: HTMLCanvasElement | null = null;
+  /** Terrain kind of the current map ("beach" for Overlord):
+   * the render loop hangs its world life off it (Slice 1). */
+  private terrainKind = "";
   private tctx: CanvasRenderingContext2D | null = null;
   private fog: HTMLCanvasElement | null = null;
   private fogCtx: CanvasRenderingContext2D | null = null;
@@ -1414,6 +1421,7 @@ export class GameEngine {
     const rng = mulberry32(hashStr(mission.id));
     const kind = mission.terrain === "dday" ? (variant === "airborne" ? "airborne" : "beach") : mission.terrain;
     const built = buildTerrain(kind, rng);
+    this.terrainKind = kind;
     // Paint smooth, then crush to a palette-reduced pixel canvas (1 px = PX world units).
     this.terrain = pixelize(built.canvas, PX);
     this.blockers = built.blockers;
@@ -4635,8 +4643,10 @@ export class GameEngine {
       // until the fire slackens. Vehicles and gun nests have
       // no belly to drop onto.
       if (!u.vehicle && !u.isStatic) {
+        const wasProne = u.prone;
         if (u.suppression >= 70) u.prone = true;
         else if (u.suppression < 30) u.prone = false;
+        if (u.prone !== wasProne) u.proneT = this.elapsed;
       }
       u.abilityCd = Math.max(0, u.abilityCd - dt);
       // Reloading (Josh, 2026-11-13): when the work finishes,
@@ -6633,7 +6643,7 @@ export class GameEngine {
         continue;
       }
       u.deathT += dt;
-      if (u.deathT >= 0.75) {
+      if (u.deathT >= 0.95) {
         u.deathT = 99;
         const look = lookOf(u);
         this.corpses.push({
@@ -6858,6 +6868,8 @@ export class GameEngine {
 
     if (this.terrain) ctx.drawImage(this.terrain, 0, 0, this.terrain.width * PX, this.terrain.height * PX);
 
+    if (this.terrainKind === "beach") this.drawWaterLife(ctx);
+
     this.drawCrates(ctx);
     this.drawMines(ctx);
     this.drawBoats(ctx);
@@ -6865,7 +6877,7 @@ export class GameEngine {
     // Fallen bodies stay where they dropped.
     for (const c of this.corpses) {
       if (c.axis && !this.explored[this.cellAt(c.x, c.y)]) continue;
-      ctx.drawImage(c.img, snap(c.x) - FEET_X * PX, snap(c.y + 9) - SPR_H * PX, c.img.width * PX, c.img.height * PX);
+      ctx.drawImage(c.img, snap(c.x) - FEET_X * PX, snap(c.y + 9) - SPR_H * PX, SPR_W * PX, SPR_H * PX);
     }
 
     // Burnt vehicle wrecks stay where they blew up.
@@ -7224,6 +7236,39 @@ export class GameEngine {
     ctx.fillRect(px - 34, py - 4, 12, 8);
   }
 
+  /** Moving water at the Overlord shoreline (Slice 1): the
+   * sea itself is painted into the static terrain, so the life
+   * is a thin animated overlay — surf that breathes in and out
+   * along the waterline at x 260, a fainter second line behind
+   * it, and whitecap streaks drifting in the shallows. Pure
+   * function of battle time: no state, no particles, a few
+   * dozen fillRects a frame, and the view clip keeps it to
+   * what is on screen. */
+  private drawWaterLife(ctx: CanvasRenderingContext2D) {
+    const t = this.elapsed;
+    // Surf at the waterline: dashes whose reach swells and
+    // slackens down the beach, never quite in step.
+    for (let y = 6; y < MAP_H; y += 34) {
+      const swell = Math.sin(t * 0.8 + y * 0.045);
+      const reach = 248 + swell * 9;
+      ctx.fillStyle = `rgba(214,228,226,${0.30 + 0.18 * swell})`;
+      ctx.fillRect(reach, y, 20, 3);
+      ctx.fillStyle = `rgba(190,208,208,${0.20 + 0.12 * swell})`;
+      ctx.fillRect(reach - 16 - swell * 4, y + 5, 13, 2);
+    }
+    // Whitecaps in the shallows, drifting east toward the
+    // beach and dissolving before they ground.
+    for (let i = 0; i < 16; i++) {
+      const lane = (i * 197) % MAP_H;
+      const drift = (t * (4 + (i % 3) * 2) + i * 61) % 210;
+      const x = 8 + drift;
+      if (x > 238) continue;
+      const pulse = 0.5 + 0.5 * Math.sin(t * 1.3 + i * 1.7);
+      ctx.fillStyle = `rgba(178,202,204,${0.10 + 0.16 * pulse})`;
+      ctx.fillRect(x, lane, 9 + (i % 3) * 5, 2);
+    }
+  }
+
   /** Burnt wrecks, in the game's palette gone to charcoal:
    * a scorch mark soaked into the ground, the hull blackened
    * and slumped, the turret askew on a tank, embers that fade
@@ -7282,22 +7327,39 @@ export class GameEngine {
         ctx.fillRect(fx - 7, fy - 27, 13, 7);
         ctx.fillRect(w.flip ? fx - 52 : fx + 18, fy - 14, 34, 4);
       }
-      // Embers in the first seconds, then just heat shimmer smoke.
-      if (age < 5) {
-        const flick = Math.sin(this.elapsed * 11 + w.x) > -0.2;
-        ctx.fillStyle = flick ? "#E2692E" : "#B34A1F";
-        ctx.fillRect(fx - 6, fy - 3, 3, 3);
-        ctx.fillRect(fx + 5, fy + 2, 2, 2);
-        if (flick) {
+      // Fire life (Slice 1): a fresh wreck burns — two flame
+      // tongues licking at different rates over an orange
+      // heart — then settles to pulsing embers, and the smoke
+      // keeps rising long after, thinner and thinner, so a
+      // burnt-out hulk still marks the field for minutes.
+      if (age < 26) {
+        const f1 = Math.sin(this.elapsed * 13 + w.x * 1.7);
+        const f2 = Math.sin(this.elapsed * 17 + w.y * 2.3);
+        ctx.fillStyle = "#B34A1F";
+        ctx.fillRect(fx - 7, fy - 4, 4, 4);
+        ctx.fillRect(fx + 4, fy + 1, 3, 3);
+        ctx.fillStyle = "#E2692E";
+        ctx.fillRect(fx - 5, fy - 8 - Math.max(0, f1) * 3, 3, 5 + Math.max(0, f1) * 3);
+        ctx.fillRect(fx + 1, fy - 6 - Math.max(0, f2) * 2, 2, 4 + Math.max(0, f2) * 2);
+        if (f1 > -0.2) {
           ctx.fillStyle = "#E5A93C";
-          ctx.fillRect(fx - 1, fy - 6, 2, 2);
+          ctx.fillRect(fx - 4, fy - 10 - Math.max(0, f1) * 3, 2, 3);
         }
+      } else if (age < 70) {
+        const pulse = Math.sin(this.elapsed * 3 + w.x) > 0.1;
+        ctx.fillStyle = pulse ? "#C85A24" : "#7A3416";
+        ctx.fillRect(fx - 5, fy - 3, 3, 3);
+        ctx.fillRect(fx + 5, fy + 2, 2, 2);
       }
-      if (age < 22) {
-        const rise = (this.elapsed * 7 + w.x) % 12;
-        ctx.fillStyle = `rgba(70,68,60,${0.34 * (1 - age / 22)})`;
+      if (age < 240) {
+        const heat = age < 26 ? 1 : age < 70 ? 0.6 : 0.32;
+        const fade = 1 - Math.max(0, (age - 60) / 180);
+        const rise = (this.elapsed * 7 + w.x) % 16;
+        ctx.fillStyle = `rgba(70,68,60,${0.34 * heat * fade})`;
         ctx.fillRect(fx - 3 - rise / 3, fy - 16 - rise, 6, 4);
-        ctx.fillRect(fx + 2 - rise / 2, fy - 22 - rise * 1.4, 5, 3);
+        ctx.fillRect(fx + 2 - rise / 2, fy - 24 - rise * 1.4, 5, 3);
+        ctx.fillStyle = `rgba(88,86,78,${0.20 * heat * fade})`;
+        ctx.fillRect(fx - 1 - rise / 2, fy - 34 - rise * 1.8, 7, 3);
       }
     }
   }
@@ -7659,24 +7721,33 @@ export class GameEngine {
     // Pick the animation frame.
     let pose: Pose;
     if (!u.alive) {
+      // The fall plays in three beats (Slice 1): the flinch,
+      // the crumple (the "fall" frame, pitched forward with a
+      // knee buckling), then flat on the ground.
       const t = u.deathT ?? 1;
-      pose = t < 0.22 ? "hit" : t < 0.48 ? "kneel" : "dead";
+      pose = t < 0.18 ? "hit" : t < 0.5 ? "fall" : "dead";
+    } else if (this.elapsed - (u.proneT ?? -9) < 0.22) {
+      // Just dropped or just rising: the halfway frame.
+      pose = "proneDown";
     } else if (u.prone) {
       // Crawling: the legs scissor on the walk cycle (proneA /
       // proneB). Still — holding or firing — the flat pose.
       pose = moving ? (Math.floor(u.walk / 2.2) % 2 === 0 ? "proneA" : "proneB") : "prone";
     }
+    else if (this.elapsed - (u.lastHitT ?? -9) < 0.16) pose = "hit"; // flinch: a hit rocks him, briefly
     else if ((u.shootT ?? 0) > 0) pose = u.cover || u.pinned || u.isStatic ? "crouch" : "shoot";
     else if (moving) {
+      // Four-frame cycle (Slice 1): stride, passing, stride,
+      // passing — legs AND the free arm swing through it.
       const f = Math.floor(u.walk / 1.6) % 4;
-      pose = f === 0 ? "walkA" : f === 2 ? "walkB" : "stand";
+      pose = f === 0 ? "walkA" : f === 1 ? "walkC" : f === 2 ? "walkB" : "walkD";
     } else if (u.cover || u.pinned || u.isStatic) pose = "crouch";
     else pose = "stand";
     if (u.isStatic && pose === "shoot") pose = "crouch";
 
     const fx = snap(u.x);
     const feetY = snap(u.y + 9);
-    const bob = moving && pose === "stand" ? -PX : 0;
+    // (The walk bob lives in the walkC drawing now, Slice 1.)
 
     // Pixel shadow under the feet.
     ctx.fillStyle = "rgba(0,0,0,0.38)";
@@ -7713,9 +7784,15 @@ export class GameEngine {
     }
 
     const img = sprite(look.pal, pose, look.weapon, look.head, flip, look.fx);
-    const ax = flip ? img.width - 1 - FEET_X : FEET_X;
-    const top = feetY - SPR_H * PX + bob;
-    ctx.drawImage(img, fx - ax * PX, top, img.width * PX, img.height * PX);
+    const ax = flip ? SPR_W - 1 - FEET_X : FEET_X;
+    const top = feetY - SPR_H * PX;
+    // Recoil kick (Slice 1): in the first frames after a shot
+    // the whole man rocks one pixel back against the blast, on
+    // top of the shoot pose's own lean. The sprite canvas is
+    // painted at double density now; it still draws at the
+    // same SPR_W x SPR_H world size it always did.
+    const kick = (u.shootT ?? 0) > 0.09 ? (flip ? PX : -PX) : 0;
+    ctx.drawImage(img, fx - ax * PX + kick, top, SPR_W * PX, SPR_H * PX);
 
     // Radioman: dark backpack on the back, thin antenna rising above
     // the helmet with a tip dot, so he reads as the radio man.
@@ -7879,19 +7956,48 @@ export class GameEngine {
 
     if (!u.alive) return;
 
-    // Muzzle flash on the first frames of a shot.
-    if ((u.shootT ?? 0) > 0.08 && look.weapon !== "mortar" && look.weapon !== "none") {
+    // Muzzle flash, animated (Slice 1): three frames across
+    // the shot — a fat ignition star, the classic cross as it
+    // collapses, then a last tongue of flame and a puff of
+    // smoke hanging at the muzzle. shootT counts down from
+    // the shot, so the frames play hottest first.
+    const st = u.shootT ?? 0;
+    if (st > 0.04 && look.weapon !== "mortar" && look.weapon !== "none") {
       const crouch = pose === "crouch" || pose === "prone";
       const reach = look.weapon === "sniper" || look.weapon === "springfield" || look.weapon === "bar" || look.weapon === "fg42" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
       const wy = look.weapon === "bazooka" ? 4 + (crouch ? 0 : 1) : look.weapon === "flak" ? 6 : 6 + (crouch ? 3 : 0);
       const mx = fx + (flip ? -1 : 1) * (reach - FEET_X + (flip ? 1 : 0)) * PX - (flip ? PX : 0);
       const my = top + wy * PX;
-      ctx.fillStyle = "#FFF6D8";
-      ctx.fillRect(mx, my, PX, PX);
-      ctx.fillStyle = "#FFD97D";
-      ctx.fillRect(mx + (flip ? -PX : PX), my, PX, PX);
-      ctx.fillRect(mx, my - PX, PX, PX);
-      ctx.fillRect(mx, my + PX, PX, PX);
+      const dir = flip ? -1 : 1;
+      if (st > 0.12) {
+        // Ignition: white-hot core, spikes out past the muzzle.
+        ctx.fillStyle = "#FFF6D8";
+        ctx.fillRect(mx, my, PX, PX);
+        ctx.fillRect(mx + dir * PX, my, PX, PX);
+        ctx.fillStyle = "#FFD97D";
+        ctx.fillRect(mx + dir * PX * 2, my, PX, PX);
+        ctx.fillRect(mx, my - PX, PX, PX);
+        ctx.fillRect(mx, my + PX, PX, PX);
+        ctx.fillRect(mx - dir * PX, my, PX, PX);
+        ctx.fillStyle = "#F2A03A";
+        ctx.fillRect(mx + dir * PX * 2, my - PX, PX, PX);
+        ctx.fillRect(mx + dir * PX, my + PX, PX, PX);
+      } else if (st > 0.085) {
+        ctx.fillStyle = "#FFF6D8";
+        ctx.fillRect(mx, my, PX, PX);
+        ctx.fillStyle = "#FFD97D";
+        ctx.fillRect(mx + dir * PX, my, PX, PX);
+        ctx.fillRect(mx, my - PX, PX, PX);
+        ctx.fillRect(mx, my + PX, PX, PX);
+      } else {
+        // The flame dies to a tongue; smoke stays a frame longer.
+        ctx.fillStyle = "#FFD97D";
+        ctx.fillRect(mx, my, PX, PX);
+        ctx.fillStyle = "#F2A03A";
+        ctx.fillRect(mx + dir * PX, my, PX, PX);
+        ctx.fillStyle = "rgba(168,164,152,0.75)";
+        ctx.fillRect(mx + dir * PX, my - PX * 2, PX, PX);
+      }
     }
     if (look.weapon === "mortar" && (u.shootT ?? 0) > 0.2) {
       ctx.fillStyle = "rgba(200,190,160,0.8)";
@@ -8076,6 +8182,14 @@ function drawSandbags(ctx: Ctx, x: number, y: number, _ang: number, n = 5) {
     ctx.fillStyle = "#5E5236";
     ctx.fillRect(bx - 7, by + 3, 14, 2);
     ctx.fillRect(bx - 1, by - 5, 2, 10); // tied seam
+    // Worn light patch and a sag shadow (Slice 1): each bag
+    // catches the light a little differently, by its place in
+    // the stack rather than a roll, so the wall never shimmers
+    // between rebuilds.
+    ctx.fillStyle = "#BBA87A";
+    ctx.fillRect(bx - 5 + (i % 3) * 4, by - 4, 3, 1);
+    ctx.fillStyle = "rgba(40,32,18,0.45)";
+    ctx.fillRect(bx - 6, by + 1, 12, 1);
     COVERS.push({ x: bx, y: by, r: 7, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110, type: "light" });
   }
 }
@@ -8145,6 +8259,21 @@ function drawTrench(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: n
     ctx.moveTo(ax, ay);
     ctx.lineTo(bx, by);
     ctx.stroke();
+    // The trench floor (Slice 1): a worn mid-tone down the
+    // middle and duckboard planks across it, so the cut reads
+    // as dug earth men actually live in, not a black stripe.
+    ctx.strokeStyle = "#2E2115";
+    ctx.lineWidth = 7;
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    for (let t = a + 16; t < b; t += 44) {
+      ctx.fillStyle = (t / 44) % 2 < 1 ? "#4A3A26" : "#41321F";
+      const cxp = x0 + dx * t;
+      const cyp = y0 + dy * t;
+      ctx.fillRect(cxp - Math.abs(px) * 6 - 2, cyp - Math.abs(py) * 6 - 2, Math.abs(px) * 12 + 4, Math.abs(py) * 12 + 4);
+    }
     for (let t = a + 8; t < b; t += 36) {
       for (const s of [-1, 1]) {
         ctx.fillStyle = "#8A7A52";
@@ -8285,6 +8414,13 @@ function hedgerow(ctx: Ctx, blockers: Blocker[], x0: number, y0: number, x1: num
     const x = x0 + (x1 - x0) * f + (rng() - 0.5) * 6;
     const y = y0 + (y1 - y0) * f + (rng() - 0.5) * 6;
     drawBush(ctx, x, y, 17, rng);
+    // Sunlit tufts on the bush tops (Slice 1), placed by a
+    // coordinate hash, not the shared rng, so the layout rolls
+    // downstream never shift.
+    const hh = Math.abs(Math.sin(x * 12.9898 + y * 78.233) * 43758.5453) % 1;
+    ctx.fillStyle = "rgba(122,140,84,0.75)";
+    ctx.fillRect(x - 9 + hh * 16, y - 13, 3, 3);
+    ctx.fillRect(x + 3 - hh * 8, y - 10, 2, 2);
     blockers.push({ x, y, r: 16, kind: "hedgerow", obj });
     COVERS.push({ x, y, r: 16, q: 0.45, q0: 0.45, type: "light", hp: 120, maxHp: 120 });
   }
@@ -8465,6 +8601,38 @@ function buildTerrain(kind: string, rng: () => number): { canvas: HTMLCanvasElem
     ctx.fillRect(260, 0, 560, MAP_H);
     ctx.fillStyle = "#6E6450";
     ctx.fillRect(800, 0, 40, MAP_H); // shingle
+    // Ground texture (Slice 1), rolled on its own rng so the
+    // placement rolls before and after never shift: depth
+    // shading in the sea, a wet band where the surf works the
+    // sand, grain across the dry sand, pebbles in the shingle,
+    // and grass blades over the fields east of it. Everything
+    // after this (hedgehogs, trenches, hedgerows, the trail)
+    // paints over the top.
+    {
+      const tex = mulberry32(987123);
+      ctx.fillStyle = "rgba(8,22,30,0.4)";
+      ctx.fillRect(0, 0, 110, MAP_H);
+      ctx.fillStyle = "rgba(120,170,180,0.05)";
+      ctx.fillRect(150, 0, 110, MAP_H);
+      ctx.fillStyle = "rgba(52,44,30,0.38)"; // wet sand
+      ctx.fillRect(260, 0, 36, MAP_H);
+      ctx.fillStyle = "rgba(226,232,224,0.28)"; // foam crust at the waterline
+      ctx.fillRect(258, 0, 3, MAP_H);
+      const sandTones = ["#97835E", "#7D6B48", "#A68F62", "rgba(60,50,34,0.5)"];
+      for (let i = 0; i < 650; i++) {
+        ctx.fillStyle = sandTones[Math.floor(tex() * sandTones.length)];
+        ctx.fillRect(264 + tex() * 550, tex() * MAP_H, 2 + tex() * 3, 2);
+      }
+      for (let i = 0; i < 130; i++) {
+        ctx.fillStyle = tex() < 0.5 ? "#7E7868" : "#5A544A";
+        ctx.fillRect(801 + tex() * 37, tex() * MAP_H, 2 + tex() * 2, 2);
+      }
+      const bladeTones = ["rgba(96,110,60,0.55)", "rgba(64,78,44,0.55)", "rgba(120,128,74,0.4)", "rgba(140,128,84,0.35)"];
+      for (let i = 0; i < 800; i++) {
+        ctx.fillStyle = bladeTones[Math.floor(tex() * bladeTones.length)];
+        ctx.fillRect(846 + tex() * 3140, tex() * MAP_H, 2, 4 + tex() * 3);
+      }
+    }
     // The shingle bank: a long low wall of stones to hide behind.
     for (let y = 30; y < MAP_H; y += 26) COVERS.push({ x: 820, y, r: 14, q: 0.6, q0: 0.6, type: "light", hp: 150, maxHp: 150 });
     // The fixed defense lines register their footprints first,

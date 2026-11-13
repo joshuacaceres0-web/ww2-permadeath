@@ -50,7 +50,11 @@ describe("prone crawl frames", () => {
     const { sprite, PAL } = await import("../sprites");
     const pixels = (pose: "prone" | "proneA" | "proneB") => {
       const c = sprite("us", pose, "rifle", "us", false) as unknown as FakeCanvas;
-      return new Set(c.rects.map((r) => `${r.x},${r.y},${r.c}`));
+      // Slice 1 paints at SPR_SCALE 2 density: recorded rects
+      // are native backing pixels, so fold them back to the
+      // logical grid this test asserts on (sub-pixel detail
+      // marks land in the logical cell they detail).
+      return new Set(c.rects.map((r) => `${Math.floor(r.x / 2)},${Math.floor(r.y / 2)},${r.c}`));
     };
     const still = pixels("prone");
     const a = pixels("proneA");

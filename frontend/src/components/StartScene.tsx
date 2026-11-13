@@ -97,7 +97,7 @@ export default function StartScene() {
       types.forEach(([weapon, head], i) => {
         const x = Math.floor(((reduce ? 60 : frame * 1.5) + i * 18) % (W + 120)) - 60;
         const f = (frame + i) % 4;
-        const pose = f === 0 ? "walkA" : f === 2 ? "walkB" : "stand";
+        const pose = f === 0 ? "walkA" : f === 1 ? "walkC" : f === 2 ? "walkB" : "walkD";
         const img = sprite("us", pose, weapon, head, false);
         g.drawImage(img, x, 104 - SPR_H + (f % 2 ? 0 : 1) + (i % 2), SPR_W, SPR_H);
       });
