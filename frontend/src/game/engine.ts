@@ -247,10 +247,13 @@ interface Unit {
    * no casualty filing. */
   extracted?: boolean;
   /** Airborne intro: when this man's jump starts (seconds into
-   * the intro, keyed to the C-47 passing his x) and how long he
+   * the intro, keyed to his C-47 passing his x) and how long he
    * hangs under canopy. */
   dropStart?: number;
   dropDur?: number;
+  /** Airborne intro: which of the five C-47s he rides (index
+   * into the engine's formation, lead plane first). */
+  dropPlane?: number;
   /** Airborne intro: set the moment his boots touch, so the
    * landing dust puffs exactly once. */
   landed?: boolean;
@@ -962,6 +965,10 @@ export class GameEngine {
   private introKind: "boats" | "drop" | null = null;
   private introT = -1;
   private dropEnd = 0;
+  /** The drop formation (Josh, 2026-11-13): five C-47s in
+   * echelon, lead first — each plane's lane (its y over the
+   * field) and how far it trails the plane ahead, in x. */
+  planes: Array<{ lane: number; trail: number }> = [];
   private terrain: HTMLCanvasElement | null = null;
   private tctx: CanvasRenderingContext2D | null = null;
   private fog: HTMLCanvasElement | null = null;
@@ -1273,6 +1280,7 @@ export class GameEngine {
     this.spawnWave(0);
     // Intro sequences: built here, run by update() after begin().
     this.boats = [];
+    this.planes = [];
     this.introKind = null;
     this.introT = -1;
     if (kind === "beach") {
@@ -1301,16 +1309,45 @@ export class GameEngine {
         });
       this.introKind = "boats";
     } else if (kind === "airborne") {
-      // The drop: the C-47 crosses west to east at 314/s; a man
-      // exits as it passes his x and hangs under canopy for
-      // about 1.3s. His spawn position is his landing spot.
+      // The drop, in formation (Josh, 2026-11-13): five C-47s,
+      // one per stick — the player's squad rides one, each 2nd
+      // Platoon squad rides its own. The planes fly echelon,
+      // ordered north to south, each trailing the one ahead by
+      // 120, all at 314/s. A man exits as HIS plane passes his
+      // x and hangs under canopy for about 1.3s. His spawn
+      // position is his landing spot.
       this.dropEnd = 0;
-      for (const u of this.units) {
-        if (u.side !== "allies") continue;
-        u.dropStart = (u.x + 80) / 314;
-        u.dropDur = 1.25 + rng() * 0.3;
-        this.dropEnd = Math.max(this.dropEnd, u.dropStart + u.dropDur);
+      const groups: Unit[][] = [];
+      const squadMen = this.units.filter((u) => u.side === "allies" && !u.npc);
+      if (squadMen.length) groups.push(squadMen);
+      const squadIdxs = [...new Set(this.units.filter((u) => u.npc).map((u) => u.npcSquad ?? 0))].sort((a, b) => a - b);
+      for (const s of squadIdxs) groups.push(this.units.filter((u) => u.npc && (u.npcSquad ?? 0) === s));
+      const means = groups.map((men) => men.reduce((t, u) => t + u.y, 0) / men.length);
+      const order = groups.map((_, i) => i).sort((a, b) => means[a] - means[b]);
+      // Lanes at least 150 apart, so five big silhouettes read
+      // as five aircraft instead of one smear; if the spread
+      // overflows the south edge, the whole formation shifts
+      // north to fit.
+      const laneOf = new Array<number>(groups.length).fill(0);
+      let prev = 100;
+      for (const gi of order) {
+        laneOf[gi] = Math.max(means[gi], prev);
+        prev = laneOf[gi] + 150;
       }
+      const overflow = prev - 150 - (MAP_H - 100);
+      if (overflow > 0) for (const gi of order) laneOf[gi] -= overflow;
+      this.planes = order.map((gi, k) => ({ lane: laneOf[gi], trail: k * 120 }));
+      const planeOfGroup = new Array<number>(groups.length).fill(0);
+      order.forEach((gi, k) => { planeOfGroup[gi] = k; });
+      groups.forEach((men, gi) => {
+        const plane = this.planes[planeOfGroup[gi]];
+        for (const u of men) {
+          u.dropPlane = planeOfGroup[gi];
+          u.dropStart = (u.x + 80 + plane.trail) / 314;
+          u.dropDur = 1.25 + rng() * 0.3;
+          this.dropEnd = Math.max(this.dropEnd, u.dropStart + u.dropDur);
+        }
+      });
       this.introKind = "drop";
     }
     this.recomputeFog();
@@ -3739,6 +3776,25 @@ export class GameEngine {
         this.introT = -1;
       }
     } else if (this.introKind === "drop") {
+      // The formation's eyes (Josh, 2026-11-13): as each C-47
+      // crosses, the ground under her path is seen from the air
+      // and stays explored, a corridor per plane and nothing
+      // more. The men's own vision opens only once they land
+      // (recomputeFog skips a man still under canopy).
+      for (const p of this.planes) {
+        const px = -80 + 314 * this.introT - p.trail;
+        if (px < -60 || px > MAP_W + 60) continue;
+        const cx = Math.floor(px / CELL);
+        const cy = Math.floor(p.lane / CELL);
+        const cr = Math.ceil(115 / CELL);
+        for (let gy = Math.max(0, cy - cr); gy <= Math.min(ROWS - 1, cy + cr); gy++) {
+          for (let gx = Math.max(0, cx - cr); gx <= Math.min(COLS - 1, cx + cr); gx++) {
+            const dx = (gx + 0.5) * CELL - px;
+            const dy = (gy + 0.5) * CELL - p.lane;
+            if (dx * dx + dy * dy <= 115 * 115) this.explored[gy * COLS + gx] = 1;
+          }
+        }
+      }
       // Boots on the ground: a puff of dust the moment each man
       // lands, exactly once.
       for (const u of this.units) {
@@ -3754,6 +3810,7 @@ export class GameEngine {
           }
         }
       }
+      this.recomputeFog();
       if (this.introT >= this.dropEnd + 0.1 || this.introT >= 12) this.introT = -1;
     }
   }
@@ -5764,6 +5821,11 @@ export class GameEngine {
     this.visible.fill(0);
     for (const u of this.units) {
       if (u.side !== "allies" || !u.alive) continue;
+      // The drop (Josh, 2026-11-13): a man still under canopy
+      // reveals nothing. While the formation runs in, the only
+      // eyes are the planes, and they mark their own corridors
+      // (advanceIntro). A man starts revealing when he lands.
+      if (this.introKind === "drop" && this.introT >= 0 && u.dropStart !== undefined && !u.landed) continue;
       const r = u.vision;
       const cx = Math.floor(u.x / CELL);
       const cy = Math.floor(u.y / CELL);
@@ -6250,13 +6312,21 @@ export class GameEngine {
     }
   }
 
-  /** The C-47 on its drop run: a dark silhouette crossing west
-   * to east over the drop zone while the sticks exit. One pass,
-   * a soft shadow under her, gone when the last man is down. */
+  /** The C-47s on their drop run (Josh, 2026-11-13): five of
+   * them now, in echelon — dark silhouettes crossing west to
+   * east over the drop zone while their sticks exit, each on
+   * her own lane, each trailing the one ahead. Soft shadows
+   * under them, gone when the last man is down. */
   private drawPlane(ctx: CanvasRenderingContext2D) {
     if (this.introKind !== "drop" || this.introT < 0) return;
-    const px = snap(-80 + 314 * this.introT);
-    const py = snap(240 + Math.sin(this.introT * 2.6) * 3);
+    this.planes.forEach((p, i) => {
+      const px = snap(-80 + 314 * this.introT - p.trail);
+      const py = snap(p.lane + Math.sin(this.introT * 2.6 + i * 1.3) * 3);
+      this.drawC47(ctx, px, py);
+    });
+  }
+
+  private drawC47(ctx: CanvasRenderingContext2D, px: number, py: number) {
     // Her shadow on the fields below, offset by her altitude.
     ctx.fillStyle = "rgba(0,0,0,0.16)";
     ctx.fillRect(px - 78 + 22, py - 10 + 30, 168, 20);
