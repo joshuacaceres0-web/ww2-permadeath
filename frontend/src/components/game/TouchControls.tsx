@@ -1,6 +1,15 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import type { GameEngine, Formation, SquadOrder } from "@/game/engine";
-import { PANEL_BTN, PANEL_BTN_ACTIVE } from "@/components/game/panel";
+import { PANEL_BTN } from "@/components/game/panel";
+
+/** The touch selected state. The shared panel active state
+ * is a solid amber block — on a desktop corner cluster that reads
+ * fine, but on the phone the orders row floats over the field
+ * beside the FIRE thumb, so the picked order ghosts like the
+ * sticks (Josh, 2026-11-13: the bottom right UI stays
+ * see-through on phone). Desktop keeps the solid state. */
+const TOUCH_BTN_ACTIVE =
+  "border-[#E5A93C]/80 bg-[#3A2B0E]/60 text-[#FFD97D] hover:border-[#E5A93C]/80 hover:text-[#FFD97D]";
 
 interface Props {
   engineRef: RefObject<GameEngine | null>;
@@ -149,7 +158,7 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
             key={o.id}
             data-testid={`touch-order-${o.id}`}
             onClick={() => eng()?.setSquadOrder(o.id)}
-            className={`pointer-events-auto px-3 py-2.5 text-[11px] ${PANEL_BTN} ${squadOrder === o.id ? PANEL_BTN_ACTIVE : ""}`}
+            className={`pointer-events-auto px-3 py-2.5 text-[11px] ${PANEL_BTN} ${squadOrder === o.id ? TOUCH_BTN_ACTIVE : ""}`}
           >
             {o.label}
           </button>

@@ -13,7 +13,10 @@ interface Props {
    * sideways phone the full cards stack into a right-hand
    * column that crowds the fire thumb, so touch battles get
    * one slim row of chips along the bottom instead — number,
-   * name, health and morale, tap still selects the man. */
+   * name, health and morale, tap still selects the man. The
+   * chips and their bar are ghosted (see-through fills): the
+   * strip hugs the bottom edge under the FIRE thumb, and
+   * Josh asked for the phone UI transparent, not solid. */
   variant?: "full" | "compact";
 }
 
@@ -145,7 +148,7 @@ export default function SquadDock({ hud, onSelect, onAbility, variant = "full" }
               data-testid={`unit-dock-card-${i}`}
               onClick={() => onSelect(u.id)}
               className={`w-28 shrink-0 border px-2 py-1 text-left ${
-                u.alive ? "bg-[#0D0F0C]/85" : "bg-[#0D0F0C]/60 opacity-60"
+                u.alive ? "bg-[#0D0F0C]/55" : "bg-[#0D0F0C]/40 opacity-60"
               } ${selected ? "border-[#E5A93C]" : "border-[#2E3628]"}`}
             >
               <span className="flex items-baseline justify-between gap-1">

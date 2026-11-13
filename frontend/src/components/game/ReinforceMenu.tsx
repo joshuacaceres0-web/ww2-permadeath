@@ -69,9 +69,17 @@ interface Props {
   /** Which edge of the button the dropdown hangs from. The
    * touch row sits at the left edge, so it hangs "left". */
   align?: "left" | "right";
+  /** True only for the instance in the phone touch row
+   * (Josh, 2026-11-13: no duplicates). The battle status
+   * strip already reads RADIO ● LIVE / ✕ DOWN and the RP
+   * balance, so the touch button drops the word (icon +
+   * calls left — the one readout the strip does not carry)
+   * and the dropdown header drops its RP segment. The
+   * desktop cluster and the Esc menu keep the full text. */
+  touch?: boolean;
 }
 
-export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, commanderLevel, supportCd, tankUsed, supportCost, reinforceCost, onCall, onSupport, onRally, placement = "down", align = "right" }: Props) {
+export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, commanderLevel, supportCd, tankUsed, supportCost, reinforceCost, onCall, onSupport, onRally, placement = "down", align = "right", touch = false }: Props) {
   const [open, setOpen] = useState(false);
   const reinforcementsLocked = commanderLevel < RADIO_CALL_LEVEL.reinforce;
   const rallyLocked = commanderLevel < RADIO_CALL_LEVEL.rally;
@@ -84,9 +92,11 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
         className={`flex items-center px-2 py-1.5 text-[10px] ${PANEL_BTN}`}
         disabled={disabled || !radioLive}
         title={!radioLive ? "Radio is down — no radioman in the squad. Hire one in the Barracks." : undefined}
+        aria-label={touch ? `Radio — ${left} of 3 reinforcement calls left` : undefined}
         onClick={() => setOpen((o) => !o)}
       >
-        <Radio size={12} className="mr-1 text-[#4ECDC4]" /> <span className="text-[#4ECDC4]">{radioLive ? "RADIO" : "NO RADIOMAN"}</span>{" "}
+        <Radio size={12} className="mr-1 text-[#4ECDC4]" />{" "}
+        {!touch && <span className="text-[#4ECDC4]">{radioLive ? "RADIO" : "NO RADIOMAN"}</span>}
         <span className="ml-1 text-[#8D9A83]">{left}/3</span>
       </button>
       {open && !disabled && radioLive && (
@@ -95,7 +105,9 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
           className={`absolute z-30 flex max-h-[min(72vh,30rem)] w-64 flex-col p-2 ${menuPos} ${PANEL_SOLID}`}
         >
           <p className={`mb-1.5 shrink-0 ${PANEL_LABEL}`}>
-            Radio support · LVL {commanderLevel} · {rp} RP · {left} calls left
+            {touch
+              ? `Radio support · LVL ${commanderLevel}`
+              : `Radio support · LVL ${commanderLevel} · ${rp} RP · ${left} calls left`}
           </p>
           <div
             data-testid="reinforce-menu-scroll"

@@ -1,9 +1,11 @@
+import { useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Crosshair } from "lucide-react";
 import { Toaster } from "@/components/ui/sonner";
 import { buttonVariants } from "@/components/ui/button";
 import { apiGet } from "@/lib/api";
+import { loadSettings, resolveTouchControls } from "@/lib/settings";
 import type { GameState } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { onMenuClick } from "@/game/sfx";
@@ -20,6 +22,16 @@ const NAV = [
 export default function Layout() {
   const { pathname } = useLocation();
   const inGame = pathname === "/game";
+  // Same CONTROLS pick the battle uses: on touch devices the
+  // toasts move off the bottom right corner (Josh,
+  // 2026-11-13) — on a phone that corner is the FIRE thumb
+  // and the fixed mobile nav, and mid-battle the toast text
+  // (RP spent, RP left) only repeats the status strip.
+  const [touch] = useState(
+    () =>
+      typeof window !== "undefined" &&
+      resolveTouchControls(loadSettings().controls, window.matchMedia("(pointer: coarse)").matches, window.innerWidth < 1024)
+  );
   const { data: state } = useQuery({
     queryKey: ["state"],
     queryFn: () => apiGet<GameState>("/state"),
@@ -141,7 +153,10 @@ export default function Layout() {
         </nav>
       )}
 
-      <Toaster />
+      <Toaster
+        position={touch ? "top-center" : "bottom-right"}
+        mobileOffset={touch ? { top: 64, left: 8, right: 8 } : undefined}
+      />
     </div>
   );
 }

@@ -658,6 +658,7 @@ export default function Battlefield() {
                 onSupport={callSupport}
                 onRally={() => engineRef.current?.callRally()}
                 align="left"
+                touch
               />
             )}
           />
@@ -680,7 +681,7 @@ export default function Battlefield() {
               className="flex max-h-full w-full max-w-xl flex-col border border-[#2E3628] bg-[#1A1D17]"
               data-testid="briefing-panel"
             >
-              <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6 short:p-3" data-testid="briefing-scroll">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-4 sm:p-6 short:p-3" data-testid="briefing-scroll">
               <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#8D9A83]">
                 Operation orders · {mission.location}
               </p>
@@ -942,7 +943,7 @@ export default function Battlefield() {
       <div
         className={
           touch
-            ? "border-t border-[#2E3628] bg-[#0D0F0C]"
+            ? "border-t border-[#2E3628] bg-[#0D0F0C]/60"
             : "border-t border-[#2E3628] bg-[#0D0F0C] short:w-40 short:shrink-0 short:border-l short:border-t-0"
         }
       >

@@ -32,7 +32,13 @@ describe("in-battle panel language", () => {
     // corner cluster resolve their active class from the constant.
     const uses = field.split("PANEL_BTN_ACTIVE").length - 1;
     expect(uses).toBeGreaterThanOrEqual(2);
-    expect(touch).toContain("PANEL_BTN_ACTIVE");
+    // The touch orders resolve theirs from the ghost variant:
+    // same amber family (border, fill hue, text), translucent
+    // fill — Josh's 2026-11-13 phone-transparency ask
+    // supersedes the shared solid constant on touch only.
+    expect(touch).toContain("TOUCH_BTN_ACTIVE");
+    expect(touch).toContain("bg-[#3A2B0E]/60");
+    expect(touch).not.toContain("PANEL_BTN_ACTIVE");
     // The old teal-text-only formation selection is gone.
     expect(field).not.toContain('? "border-[#4ECDC4] text-[#4ECDC4]"');
   });

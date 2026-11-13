@@ -23,6 +23,8 @@ const settingsSrc = readFileSync(new URL("../../pages/Settings.tsx", import.meta
 const battleSrc = readFileSync(new URL("../../pages/Battlefield.tsx", import.meta.url), "utf8");
 const dockSrc = readFileSync(new URL("../../components/game/SquadDock.tsx", import.meta.url), "utf8");
 const touchSrc = readFileSync(new URL("../../components/game/TouchControls.tsx", import.meta.url), "utf8");
+const radioSrc = readFileSync(new URL("../../components/game/ReinforceMenu.tsx", import.meta.url), "utf8");
+const layoutSrc = readFileSync(new URL("../../components/Layout.tsx", import.meta.url), "utf8");
 
 describe("resolveTouchControls — the player's pick wins", () => {
   it("phone forces touch even on a wide fine-pointer screen", () => {
@@ -105,5 +107,37 @@ describe("phone ghost controls and scrollable overlays (Josh, 2026-11-13)", () =
   it("the debrief and battle-menu panels scroll inside their overlays", () => {
     expect(battleSrc).toContain("max-h-full max-w-lg overflow-y-auto overscroll-contain");
     expect(battleSrc).toContain("max-h-full w-full max-w-sm overflow-y-auto overscroll-contain");
+  });
+});
+
+describe("phone UI pass: no duplicates, ghosted bottom edge (Josh, 2026-11-13)", () => {
+  it("the picked touch order ghosts instead of the solid desktop active block", () => {
+    expect(touchSrc).toContain("TOUCH_BTN_ACTIVE");
+    expect(touchSrc).toContain("bg-[#3A2B0E]/60");
+    expect(touchSrc).not.toContain("PANEL_BTN_ACTIVE");
+  });
+  it("the phone dock strip and its chips are see-through; the desktop dock bar stays solid", () => {
+    expect(dockSrc).toContain('u.alive ? "bg-[#0D0F0C]/55"');
+    expect(battleSrc).toContain('touch\n            ? "border-t border-[#2E3628] bg-[#0D0F0C]/60"');
+    expect(battleSrc).toContain('"border-t border-[#2E3628] bg-[#0D0F0C] short:w-40');
+  });
+  it("the touch radio button drops the word the status strip already shows, and its header drops the RP the strip already shows", () => {
+    expect(radioSrc).toContain("touch?: boolean");
+    expect(radioSrc).toContain("{!touch && <span");
+    expect(radioSrc).toContain('`Radio support · LVL ${commanderLevel}`');
+    expect(radioSrc).toContain("· ${rp} RP · ${left} calls left`");
+    // Only the instance in the touch row gets the slim treatment.
+    expect(battleSrc).toContain('align="left"\n                touch');
+  });
+  it("toasts leave the bottom right corner on touch and keep it on desktop", () => {
+    expect(layoutSrc).toContain('position={touch ? "top-center" : "bottom-right"}');
+    expect(layoutSrc).toContain("resolveTouchControls");
+  });
+  it("every in-battle scroll surface contains its own scroll", () => {
+    // Briefing body (the radio list and the two overlay panels
+    // were pinned in the block above / in ReinforceMenu).
+    expect(battleSrc).toContain("overflow-y-auto overscroll-contain p-4 sm:p-6 short:p-3");
+    expect(radioSrc).toContain('data-testid="reinforce-menu-scroll"');
+    expect(radioSrc).toContain("overflow-y-auto overscroll-contain");
   });
 });
