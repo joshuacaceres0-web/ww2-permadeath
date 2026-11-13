@@ -109,6 +109,17 @@ describe("NPC tactical fallback at low health", () => {
     engine.update(1 / 60);
     expect(man.npcFallback).toBe(true);
     expect(healthy.npcFallback).toBeFalsy();
+    // Isolate the state machine from the battle: the garrison
+    // camps the trench line at x 900, in range of the road,
+    // and whether its fire pins the falling-back man mid-walk
+    // is a coin flip that has nothing to do with the fallback
+    // rule under test. Park the enemy far east, out of range.
+    for (const u of engine.units) {
+      if (u.side === "axis") {
+        u.x = 3900;
+        u.y = 200;
+      }
+    }
     // Three seconds of falling back: well west of where he stood.
     for (let step = 0; step < 60 * 3; step++) engine.update(1 / 60);
     expect(man.alive).toBe(true);

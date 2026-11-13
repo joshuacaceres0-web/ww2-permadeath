@@ -410,7 +410,7 @@ interface Particle {
   life: number;
   max: number;
   size: number;
-  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom" | "foam";
+  kind: "muzzle" | "blood" | "dust" | "smoke" | "spark" | "heal" | "ring" | "boom" | "foam" | "leaf";
 }
 
 export type BlockerKind = "tree" | "ruin" | "building" | "hedgerow" | "wreck" | "crate" | "hedgehog" | "pillbox" | "bush" | "trench" | "obstacle";
@@ -425,6 +425,9 @@ interface Blocker {
    * of DIFFERENT objects must never overlap (Josh, 2026-11-12:
    * ruins and houses sat on top of other objects). */
   obj?: number;
+  /** Foliage only: battle clock of the last rustle through
+   * this tree or bush, for the moving-foliage draw. */
+  rustleT?: number;
 }
 
 export interface HudUnit {
@@ -633,6 +636,7 @@ function buildBlockedGrid(blockers: Blocker[]): Uint8Array {
   const g = new Uint8Array(COLS * ROWS);
   for (const b of blockers) {
     if (b.kind === "trench") continue; // dug in, not built up: men walk in and fight from inside
+    if (b.kind === "tree" || b.kind === "bush") continue; // foliage: troops push through it now
     const r = b.r + UNIT_R * 0.7;
     const c0 = Math.max(0, Math.floor((b.x - r) / CELL));
     const c1 = Math.min(COLS - 1, Math.floor((b.x + r) / CELL));
@@ -831,6 +835,9 @@ export class GameEngine {
   /** Beach only: the hedgehog blockers, cached for the obstacle
    * belt slowdown in moveToward. */
   private hedgehogs: Blocker[] = [];
+  /** Trees and bushes: soft cover a footman can push through
+   * (Josh, 2026-11-12). Cached once per battle. */
+  private foliage: Blocker[] = [];
   /** Tellermines, laid in setup: in the beach sand (x 300-780)
    * and in the airborne landing fields (x 480-1560). An armed
    * mine under an allied man's feet goes off once; the axis
@@ -1094,6 +1101,7 @@ export class GameEngine {
     this.blocked = buildBlockedGrid(built.blockers);
     this.covers = built.covers;
     this.hedgehogs = built.blockers.filter((b) => b.kind === "hedgehog");
+    this.foliage = built.blockers.filter((b) => b.kind === "tree" || b.kind === "bush");
     // Beach mines (Josh's suggestion, 2026-11-12): Tellermines in
     // the sand among the hedgehogs. The landing force triggers
     // them; the defenders know their own lanes and do not. The
@@ -3784,6 +3792,11 @@ export class GameEngine {
           // trenches for the same reason; the bullet sweep had
           // been missed.
           if (bl.kind === "trench") continue;
+          // Foliage does not stop rounds either: they fly into
+          // the green and the concealment roll at the target
+          // (inFoliage) does the protecting, like the trench
+          // cover roll does for a dug-in man.
+          if (bl.kind === "tree" || bl.kind === "bush") continue;
           if (dist(b.x, b.y, bl.x, bl.y) < bl.r) {
             this.puff(b.x, b.y);
             dead = true;
@@ -3804,6 +3817,19 @@ export class GameEngine {
             // (0.7x: sustained fire pins a man behind cover, but a
             // single stopped round does not — full strength pinned
             // whole squads in testing and AUTO lost 3 in a row).
+            // Foliage concealment (Josh, 2026-11-12): a man
+            // standing in trees or bushes is a ghost target.
+            // The shooters are firing blindly into the green,
+            // and the leaves catch about a third of the rounds
+            // that would have hit him — on top of the light
+            // cover a tree gives through the roll below. Both
+            // sides get it: it is the ground, not a perk.
+            if (!u.vehicle && this.inFoliage(u) && Math.random() < 0.35) {
+              this.particles.push({ x: b.x, y: b.y, vx: -b.vx * 0.1, vy: 6, life: 0.6, max: 0.6, size: 2.6, kind: "leaf" });
+              this.particles.push({ x: b.x, y: b.y, vx: b.vx * 0.06, vy: 10, life: 0.7, max: 0.7, size: 2.2, kind: "leaf" });
+              dead = true;
+              break;
+            }
             const c = this.coverBetween(b.ox, b.oy, u.x, u.y);
             if (c && Math.random() < c.q) {
               this.puff(b.x, b.y);
@@ -4028,9 +4054,41 @@ export class GameEngine {
     return false;
   }
 
+  /** Is this footman standing in trees or bushes right now?
+   * The trunk circle plus a step: inside the canopy's shade. */
+  private inFoliage(u: Unit): boolean {
+    for (const f of this.foliage) {
+      if (dist(u.x, u.y, f.x, f.y) < f.r + 4) return true;
+    }
+    return false;
+  }
+
+  /** A man moving through foliage shakes it: the canopy gets
+   * a rustle stamp (the draw shakes it while the stamp is
+   * fresh) and a couple of leaves shake loose. */
+  private rustle(u: Unit) {
+    for (const f of this.foliage) {
+      if (dist(u.x, u.y, f.x, f.y) >= f.r + 4) continue;
+      if (this.elapsed - (f.rustleT ?? -9) < 0.18) continue;
+      f.rustleT = this.elapsed;
+      this.particles.push({
+        x: f.x + (Math.random() - 0.5) * f.r, y: f.y - 2,
+        vx: (Math.random() - 0.5) * 14, vy: 8 + Math.random() * 8,
+        life: 0.7, max: 0.7, size: 2.6, kind: "leaf",
+      });
+      this.particles.push({
+        x: f.x + (Math.random() - 0.5) * f.r, y: f.y + 3,
+        vx: (Math.random() - 0.5) * 10, vy: 12,
+        life: 0.6, max: 0.6, size: 2.2, kind: "leaf",
+      });
+    }
+  }
+
   private moveToward(u: Unit, x: number, y: number, dt: number, speedMult = 1) {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
+    const sx = u.x;
+    const sy = u.y;
     let sp = u.speed * speedMult * (u.pinned ? 0.35 : 1);
     // The beach obstacle belt: picking through the hedgehogs
     // slows the landing force and channels it into the lanes the
@@ -4040,6 +4098,18 @@ export class GameEngine {
       for (const h of this.hedgehogs) {
         if (dist(u.x, u.y, h.x, h.y) < h.r + 26) {
           sp *= 0.55;
+          break;
+        }
+      }
+    }
+    // Pushing through trees and bushes costs a little speed
+    // for any footman, both sides: branches and brush, not a
+    // wall. Vehicles do not push through at all (collision
+    // still stops them), so they get no factor here.
+    if (!u.vehicle && this.foliage.length) {
+      for (const f of this.foliage) {
+        if (dist(u.x, u.y, f.x, f.y) < f.r + 4) {
+          sp *= 0.8;
           break;
         }
       }
@@ -4104,6 +4174,8 @@ export class GameEngine {
     }
     u.facing = Math.atan2(y - u.y, x - u.x);
     u.walk += dt * 10;
+    // He actually moved: if it was through foliage, shake it.
+    if (!u.vehicle && (u.x !== sx || u.y !== sy)) this.rustle(u);
   }
 
   private resolveCollisions() {
@@ -4111,6 +4183,7 @@ export class GameEngine {
       if (!u.alive || u.isStatic) continue;
       for (const b of this.blockers) {
         if (b.kind === "trench") continue; // a trench is a hole, not a wall: men stand in it
+        if ((b.kind === "tree" || b.kind === "bush") && !u.vehicle) continue; // footmen push through foliage; vehicles still cannot
         const d = dist(u.x, u.y, b.x, b.y);
         const min = b.r + UNIT_R;
         if (d < min && d > 0.001) {
@@ -4960,6 +5033,22 @@ export class GameEngine {
       }
     }
 
+    // Rustling foliage: while a tree or bush's rustle stamp
+    // is fresh, its canopy shakes — a few offset blobs in the
+    // tree's own greens over the static drawing, so you can
+    // see something is moving in there.
+    for (const f of this.foliage) {
+      if (f.rustleT === undefined || this.elapsed - f.rustleT > 0.35) continue;
+      const j = Math.sin(this.elapsed * 42 + f.x * 0.7) * 2.4;
+      const j2 = Math.cos(this.elapsed * 37 + f.y * 0.5) * 2;
+      ctx.fillStyle = "rgba(45,82,34,0.85)";
+      ctx.fillRect(snap(f.x - f.r + j), snap(f.y - f.r * 0.55 + j2), f.r * 1.15, f.r * 0.72);
+      ctx.fillStyle = "rgba(63,106,40,0.8)";
+      ctx.fillRect(snap(f.x - f.r * 0.4 - j), snap(f.y - f.r * 0.2 - j2), f.r * 0.9, f.r * 0.6);
+      ctx.fillStyle = "rgba(31,58,24,0.85)";
+      ctx.fillRect(snap(f.x + j2), snap(f.y + f.r * 0.25 + j), f.r * 0.8, f.r * 0.5);
+    }
+
     // Particles.
     for (const p of this.particles) {
       const a = p.life / p.max;
@@ -4975,6 +5064,9 @@ export class GameEngine {
           break;
         case "foam":
           ctx.fillStyle = `rgba(226,238,234,${a * 0.85})`;
+          break;
+        case "leaf":
+          ctx.fillStyle = `rgba(63,106,40,${a})`;
           break;
         case "smoke":
           ctx.fillStyle = `rgba(70,68,60,${a * 0.5})`;

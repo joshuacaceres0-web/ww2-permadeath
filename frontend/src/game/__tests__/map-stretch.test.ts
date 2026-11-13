@@ -121,6 +121,19 @@ function easternBlockedCount(e: AnyEngine): number {
   return n;
 }
 
+/** Cover OBJECTS east of x=3200 (blockers and cover spots).
+ * The grid count above cannot see foliage: since the foliage
+ * change (2026-11-12) trees and bushes no longer block the
+ * pathing grid, and on the causeway they were the only
+ * grid-blockers in the new ground — the cover is still there,
+ * it just does not block movement anymore. */
+function easternCoverCount(e: AnyEngine): number {
+  let n = 0;
+  for (const b of e.blockers as Array<{ x: number }>) if (b.x > 3200) n++;
+  for (const c of e.covers as Array<{ x: number }>) if (c.x > 3200) n++;
+  return n;
+}
+
 describe("map stretch: 3200 -> 4000 wide", () => {
   it("the map is 4000 wide and 1350 tall", () => {
     expect(MAP_W).toBe(4000);
@@ -131,7 +144,10 @@ describe("map stretch: 3200 -> 4000 wide", () => {
     "terrain %s fills the new eastern ground with cover",
     async (terrain) => {
       const e = await makeEngine(terrain);
-      expect(easternBlockedCount(e), `${terrain} must have blocked ground east of x=3200`).toBeGreaterThan(0);
+      expect(
+        easternBlockedCount(e) + easternCoverCount(e),
+        `${terrain} must have cover on the new ground east of x=3200`,
+      ).toBeGreaterThan(0);
     },
   );
 
