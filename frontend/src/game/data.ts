@@ -21,6 +21,12 @@ export interface UnitTypeSpec {
   vision: number;
   dmg: number;
   fireInterval: number;
+  /** Rounds in the weapon's magazine (0 = never reloads:
+   * vehicles and crew-served pieces). Reloading (Josh,
+   * 2026-11-13): a man cannot fire while he reloads. */
+  magSize: number;
+  /** Seconds a reload takes: MG belts longest, pistols fastest. */
+  reloadTime: number;
   spread: number;
   bulletSpeed: number;
   ability: AbilitySpec;
@@ -42,6 +48,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 260,
     dmg: 35,
     fireInterval: 2.0,
+    magSize: 0,
+    reloadTime: 0,
     spread: 0.05,
     bulletSpeed: 800,
     ability: { key: "Q", name: "Main Gun", desc: "75mm cannon", cd: 0, aim: "auto" },
@@ -60,6 +68,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 260,
     dmg: 12,
     fireInterval: 0.55,
+    magSize: 8,
+    reloadTime: 2.2,
     spread: 0.055,
     bulletSpeed: 620,
     ability: { key: "Q", name: "Frag Grenade", desc: "Throw a fragmentation grenade — 60 dmg in a wide burst", cd: 12, aim: "ground" },
@@ -77,6 +87,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 240,
     dmg: 6,
     fireInterval: 0.5,
+    magSize: 15,
+    reloadTime: 1.8,
     spread: 0.09,
     bulletSpeed: 560,
     ability: { key: "Q", name: "Combat Triage", desc: "Heal the worst-wounded man nearby for 50 HP (passive aura also mends)", cd: 10, aim: "auto" },
@@ -94,6 +106,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 260,
     dmg: 7,
     fireInterval: 0.18,
+    magSize: 50,
+    reloadTime: 4.5,
     spread: 0.1,
     bulletSpeed: 640,
     ability: { key: "Q", name: "Suppressive Barrage", desc: "Walk 16 rounds across an area — pins everything under them", cd: 14, aim: "ground" },
@@ -111,6 +125,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 420,
     dmg: 45,
     fireInterval: 1.1,
+    magSize: 5,
+    reloadTime: 2.8,
     spread: 0.02,
     bulletSpeed: 900,
     ability: { key: "Q", name: "Deadeye Shot", desc: "Instant 120 dmg to the highest-value target in range", cd: 16, aim: "auto" },
@@ -128,6 +144,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 260,
     dmg: 8,
     fireInterval: 0.6,
+    magSize: 15,
+    reloadTime: 1.8,
     spread: 0.07,
     bulletSpeed: 560,
     ability: { key: "Q", name: "Rally Call", desc: "Radio the squad — nearby men recover 15 morale", cd: 20, aim: "auto" },
@@ -145,6 +163,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 220,
     dmg: 55,
     fireInterval: 2.2,
+    magSize: 1,
+    reloadTime: 2.4,
     spread: 0.03,
     bulletSpeed: 380,
     ability: { key: "Q", name: "Bunker Buster", desc: "Rocket — 80 dmg with a 65px blast on the toughest target", cd: 14, aim: "auto" },
@@ -162,6 +182,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 460,
     dmg: 10,
     fireInterval: 0.6,
+    magSize: 15,
+    reloadTime: 1.8,
     spread: 0.06,
     bulletSpeed: 600,
     ability: { key: "Q", name: "Mark Target", desc: "Mark one enemy for the squad: he takes heavier fire, and a hidden Recon's mark sets an ambush", cd: 18, aim: "auto" },
@@ -179,6 +201,8 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     vision: 250,
     dmg: 9,
     fireInterval: 0.55,
+    magSize: 15,
+    reloadTime: 1.8,
     spread: 0.07,
     bulletSpeed: 580,
     ability: { key: "Q", name: "Deploy Cover", desc: "Throw up a sandbag position where you aim — real cover, wears down under fire", cd: 20, aim: "ground" },
@@ -198,6 +222,10 @@ export interface EnemyTypeSpec {
   vision: number;
   dmg: number;
   fireInterval: number;
+  /** Rounds before a reload (0 = never: vehicles, mortars). */
+  magSize: number;
+  /** Seconds a reload takes: MG belts longest, pistols fastest. */
+  reloadTime: number;
   spread: number;
   bulletSpeed: number;
   static?: boolean;
@@ -210,50 +238,74 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
   volks: {
     type: "volks", label: "Volkssturm Conscript", weapon: "Kar98k", hp: 60, speed: 55, range: 200,
     vision: 240, dmg: 14, fireInterval: 1.35, spread: 0.07, bulletSpeed: 520, threat: "LOW",
+    magSize: 5,
+    reloadTime: 2.4,
   },
   funk: {
     type: "funk", label: "Funker Radioman", weapon: "Radio + P08 Pistol", hp: 70, speed: 55, range: 170,
     vision: 240, dmg: 6, fireInterval: 1.0, spread: 0.09, bulletSpeed: 480, threat: "LOW",
+    magSize: 8,
+    reloadTime: 1.2,
   },
   grenadier: {
     type: "grenadier", label: "Wehrmacht Grenadier", weapon: "MP40 SMG", hp: 95, speed: 60, range: 170,
     vision: 240, dmg: 6, fireInterval: 0.22, spread: 0.12, bulletSpeed: 480, threat: "MEDIUM",
+    magSize: 32,
+    reloadTime: 2.0,
   },
   mg42: {
     type: "mg42", label: "MG42 Bunker Nest", weapon: "MG42 'Hitlersäge'", hp: 280, speed: 0, range: 320,
     vision: 300, dmg: 6, fireInterval: 0.12, spread: 0.1, bulletSpeed: 700, static: true, threat: "EXTREME",
+    magSize: 50,
+    reloadTime: 4.5,
   },
   officer: {
     type: "officer", label: "SS Hauptmann Officer", weapon: "Luger P08 + Morale Aura", hp: 140, speed: 58, range: 200,
     vision: 260, dmg: 10, fireInterval: 0.5, spread: 0.05, bulletSpeed: 520, threat: "HIGH",
+    magSize: 8,
+    reloadTime: 1.2,
   },
   panzerfaust: {
     type: "panzerfaust", label: "Panzerfaust Shocktrooper", weapon: "Anti-tank Rocket", hp: 110, speed: 50, range: 260,
     vision: 260, dmg: 55, fireInterval: 3.2, spread: 0.03, bulletSpeed: 300, threat: "HIGH",
+    magSize: 1,
+    reloadTime: 3.2,
   },
   flak: {
     type: "flak", label: "Flak 38 20mm Emplacement", weapon: "Rapid Autocannon", hp: 320, speed: 0, range: 340,
     vision: 320, dmg: 8, fireInterval: 0.15, spread: 0.12, bulletSpeed: 800, static: true, threat: "CRITICAL",
+    magSize: 20,
+    reloadTime: 3.5,
   },
   scharfschutze: {
     type: "scharfschutze", label: "Scharfschütze Sniper", weapon: "Kar98k ZF39 scope", hp: 70, speed: 45, range: 420,
     vision: 440, dmg: 40, fireInterval: 2.4, spread: 0.02, bulletSpeed: 900, threat: "HIGH",
+    magSize: 5,
+    reloadTime: 2.8,
   },
   mortar: {
     type: "mortar", label: "Granatwerfer 34 Mortar Team", weapon: "8cm mortar (indirect fire)", hp: 120, speed: 0, range: 620,
     vision: 300, dmg: 45, fireInterval: 6, spread: 0.1, bulletSpeed: 300, static: true, threat: "EXTREME",
+    magSize: 0,
+    reloadTime: 0,
   },
   fallschirmjager: {
     type: "fallschirmjager", label: "Fallschirmjäger Paratrooper", weapon: "FG42 automatic rifle", hp: 120, speed: 66, range: 220,
     vision: 260, dmg: 11, fireInterval: 0.3, spread: 0.07, bulletSpeed: 620, threat: "HIGH",
+    magSize: 20,
+    reloadTime: 2.2,
   },
   medic: {
     type: "medic", label: "Sanitäter Medic", weapon: "P08 pistol + field dressings", hp: 80, speed: 55, range: 170,
     vision: 240, dmg: 8, fireInterval: 1.0, spread: 0.1, bulletSpeed: 480, threat: "LOW",
+    magSize: 8,
+    reloadTime: 1.2,
   },
   panzer: {
     type: "panzer", label: "Panzer IV Medium Tank", weapon: "75mm KwK 40 cannon", hp: 400, speed: 30, range: 300,
     vision: 240, dmg: 30, fireInterval: 2.0, spread: 0.05, bulletSpeed: 800, vehicle: true, threat: "HIGH",
+    magSize: 0,
+    reloadTime: 0,
   },
   halftrack: {
     // The airborne convoy's armoured troop carrier (Josh,
@@ -262,6 +314,8 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     // it a real gun platform once the ambush is sprung.
     type: "halftrack", label: "Sd.Kfz. 251 Halftrack", weapon: "MG42 (mounted)", hp: 220, speed: 34, range: 230,
     vision: 250, dmg: 7, fireInterval: 0.45, spread: 0.09, bulletSpeed: 700, vehicle: true, threat: "HIGH",
+    magSize: 0,
+    reloadTime: 0,
   },
   truck: {
     // The airborne mission's convoy (Josh, 2026-11-12): an
@@ -270,6 +324,8 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     // cleared until the convoy is destroyed with its escort.
     type: "truck", label: "Opel Blitz Supply Truck", weapon: "Unarmed", hp: 150, speed: 30, range: 0,
     vision: 220, dmg: 0, fireInterval: 1.0, spread: 0, bulletSpeed: 0, vehicle: true, threat: "LOW",
+    magSize: 0,
+    reloadTime: 0,
   },
 };
 

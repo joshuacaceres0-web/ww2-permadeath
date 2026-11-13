@@ -130,6 +130,9 @@ export const ENGINEER_DETECT_RANGE = 70;
 export const ENGINEER_CLEAR_RANGE = 26;
 export const ENGINEER_CLEAR_SECONDS = 4;
 export const ENGINEER_SEEK_RANGE = 130;
+/** Reloading (Josh, 2026-11-13): a pinned man's hands shake,
+ * so his reload takes half again as long. */
+export const RELOAD_PINNED_MULT = 1.5;
 export const RECON_CD = 30;
 export const MORTAR_CD = 25;
 export const SMOKE_CD = 45;
@@ -320,6 +323,17 @@ interface Unit {
   burst: number;
   burstTimer: number;
   burstTarget: { x: number; y: number } | null;
+  /** Reloading (Josh, 2026-11-13): the weapon's magazine size
+   * (0 = it never reloads: vehicles, mortars), rounds left in
+   * it, seconds left on the reload in progress (0 = ready),
+   * how long this weapon's reload takes, and the total the
+   * current reload started at (the bar's denominator, since a
+   * pinned man's reload runs long). */
+  magSize: number;
+  mag: number;
+  reloadT: number;
+  reloadTime: number;
+  reloadTotal: number;
   kills: number;
   alive: boolean;
   walk: number;
@@ -492,6 +506,8 @@ export interface HudUnit {
   pinned: boolean;
   morale: number;
   broken: boolean;
+  /** Reloading: his weapon is silent until the magazine is in. */
+  reloading: boolean;
   /** A coward: breaks and runs for the edge, deserts if he reaches it. */
   coward: boolean;
   abilityCd: number;
@@ -2355,7 +2371,7 @@ export class GameEngine {
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
-        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, kills: 0, alive: true, walk: 0,
+        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
         stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
@@ -3276,6 +3292,11 @@ export class GameEngine {
         burst: 0,
         burstTimer: 0,
         burstTarget: null,
+        magSize: spec.magSize,
+        mag: spec.magSize,
+        reloadT: 0,
+        reloadTime: spec.reloadTime,
+        reloadTotal: 0,
         kills: 0,
         alive: true,
         walk: 0,
@@ -3355,6 +3376,11 @@ export class GameEngine {
           burst: 0,
           burstTimer: 0,
           burstTarget: null,
+          magSize: def.magSize,
+          mag: def.magSize,
+          reloadT: 0,
+          reloadTime: def.reloadTime,
+          reloadTotal: 0,
           kills: 0,
           alive: true,
           walk: 0,
@@ -4031,6 +4057,12 @@ export class GameEngine {
         else if (u.suppression < 30) u.prone = false;
       }
       u.abilityCd = Math.max(0, u.abilityCd - dt);
+      // Reloading (Josh, 2026-11-13): when the work finishes,
+      // the magazine is full again and the man can fire.
+      if (u.reloadT > 0) {
+        u.reloadT = Math.max(0, u.reloadT - dt);
+        if (u.reloadT <= 0) u.mag = u.magSize;
+      }
 
       // Morale: pinned men lose nerve fast, heavy suppression wears
       // it down. Out of fire for 5s it comes back, faster beside a
@@ -4565,7 +4597,7 @@ export class GameEngine {
       u.cooldown -= dt;
       if (u.burst > 0 && u.burstTarget) {
         u.burstTimer -= dt;
-        while (u.burstTimer <= 0 && u.burst > 0) {
+        while (u.burstTimer <= 0 && u.burst > 0 && u.reloadT <= 0) {
           this.spawnBullet(
             u,
             u.burstTarget.x + (Math.random() - 0.5) * 90,
@@ -4574,7 +4606,7 @@ export class GameEngine {
             5,
             26
           );
-          u.burst--;
+          u.burst = Math.max(0, u.burst - 1); // spawnBullet may have zeroed it: the belt ran dry mid-barrage
           u.burstTimer += 0.06;
         }
       } else if (u.enemyType === "mortar") {
@@ -4595,7 +4627,7 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
+      } else if (u.cooldown <= 0 && u.reloadT <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
         // A pinned man in the open keeps his head down and cannot
         // fire. A pinned man IN COVER still shoots back, at a
         // slower rate: before this, rounds stopped by his cover
@@ -4611,7 +4643,7 @@ export class GameEngine {
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
       } else if (
-        u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && this.manualShot &&
+        u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && u.reloadT <= 0 && this.manualShot &&
         this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed))
       ) {
         // The player clicked open ground: the leader fires at
@@ -5210,8 +5242,22 @@ export class GameEngine {
   }
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
+    // Reloading (Josh, 2026-11-13): no weapon fires mid-reload,
+    // whatever path called for the shot.
+    if (u.reloadT > 0) return;
     u.shootT = 0.16;
     u.lastShotT = this.elapsed;
+    // Every shot leaves the magazine. When it runs dry the
+    // reload starts on the spot (slower with shaking, pinned
+    // hands), and an MG barrage dies with its belt.
+    if (u.magSize > 0) {
+      u.mag -= 1;
+      if (u.mag <= 0) {
+        u.burst = 0;
+        u.reloadTotal = u.reloadTime * (u.pinned ? RELOAD_PINNED_MULT : 1);
+        u.reloadT = u.reloadTotal;
+      }
+    }
     if (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]) sfx(u.type === "mg" || u.enemyType === "mg42" || u.enemyType === "grenadier" ? "mg" : "shot");
     const ang = Math.atan2(ty - u.y, tx - u.x) + (Math.random() - 0.5) * spread * 2;
     const mx = u.x + Math.cos(u.facing) * 14;
@@ -5781,6 +5827,7 @@ export class GameEngine {
         pinned: u.pinned,
         morale: Math.round(u.morale),
         broken: u.broken,
+        reloading: u.reloadT > 0,
         coward: u.coward,
         abilityCd: u.abilityCd,
         abilityCdMax: UNIT_TYPES[u.type].ability.cd,
@@ -6715,6 +6762,21 @@ export class GameEngine {
       ctx.fillRect(mbx - PX, mby - PX, (msegs + 2) * PX, PX * 3);
       ctx.fillStyle = u.broken ? "#3D348B" : mpct > 0.6 ? "#56B4E8" : mpct > 0.3 ? "#4A6FD4" : "#9B59D0";
       ctx.fillRect(mbx, mby, mon * PX, PX);
+    }
+
+    // Reload bar (Josh, 2026-11-13): amber segments under the
+    // morale bar, filling as the reload runs — the visible half
+    // of the rule. While it shows, the man's weapon is silent.
+    if (u.reloadT > 0 && u.reloadTotal > 0) {
+      const rsegs = 8;
+      const rpct = Math.max(0, Math.min(1, 1 - u.reloadT / u.reloadTotal));
+      const ron = Math.ceil(rpct * rsegs);
+      const rbx = fx - (rsegs / 2) * PX;
+      const rby = headY + PX * 4;
+      ctx.fillStyle = "rgba(10,12,8,0.85)";
+      ctx.fillRect(rbx - PX, rby - PX, (rsegs + 2) * PX, PX * 3);
+      ctx.fillStyle = "#E5A93C";
+      ctx.fillRect(rbx, rby, ron * PX, PX);
     }
 
     // In-cover marker: small pixel shield beside the head.

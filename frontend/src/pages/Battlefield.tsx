@@ -863,6 +863,7 @@ export default function Battlefield() {
                 pinned: false,
                 morale: 100,
                 broken: false,
+                reloading: false,
                 coward: isCowardQuirk(soldier.quirk),
                 abilityCd: 0,
                 abilityCdMax: UNIT_TYPES[soldier.type].ability.cd,
