@@ -134,31 +134,45 @@ def test_buy_equip_rules(client: httpx.Client):
     assert state["inventory"]["binoculars"] == 1
     assert state["requisition"] == rp0 - 75
 
-    # A rifleman cannot carry binoculars (recon / sniper only).
+    # A rifleman cannot carry binoculars.
     frank = _man(client, "Frank Hayes")
     resp = client.post("/squad/equip", json={"soldier_id": frank["id"], "item": "binoculars"})
     assert resp.status_code == 400
 
-    # The sniper can. Stores empty out; a second pair is refused
-    # both for stores and for duplication.
+    # Nor can the sniper any more (Josh, 2026-11-13): binoculars
+    # are Recon only, and the refusal names the class.
     earl = _man(client, "Earl Whitaker")
     resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "binoculars"})
+    assert resp.status_code == 400
+    assert "recon" in resp.json()["detail"].lower()
+
+    # The Recon can. Hire one (a victory first, to be sure of
+    # the RP); his pair empties the stores, and a second pair
+    # is refused for duplication.
+    _file_battle(
+        client, "barracks-buy-topup", victory=True,
+        survivors=[{"soldier_id": frank["id"], "kills": 2}],
+    )
+    resp = client.post("/squad/hire", json={"type": "recon"})
+    assert resp.status_code == 200, resp.text
+    recon = resp.json()
+    resp = client.post("/squad/equip", json={"soldier_id": recon["id"], "item": "binoculars"})
     assert resp.status_code == 200, resp.text
     assert resp.json()["equipment"] == ["binoculars"]
     assert _state(client)["inventory"]["binoculars"] == 0
-    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "binoculars"})
+    resp = client.post("/squad/equip", json={"soldier_id": recon["id"], "item": "binoculars"})
     assert resp.status_code == 400
 
     # Two slots total: ammo fills the second, a third is refused.
     client.post("/inventory/buy", json={"item": "ammo"})
     client.post("/inventory/buy", json={"item": "canteen"})
-    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "ammo"})
+    resp = client.post("/squad/equip", json={"soldier_id": recon["id"], "item": "ammo"})
     assert resp.status_code == 200
-    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "canteen"})
+    resp = client.post("/squad/equip", json={"soldier_id": recon["id"], "item": "canteen"})
     assert resp.status_code == 400
 
     # Unequip returns the piece to stores.
-    resp = client.post("/squad/unequip", json={"soldier_id": earl["id"], "item": "ammo"})
+    resp = client.post("/squad/unequip", json={"soldier_id": recon["id"], "item": "ammo"})
     assert resp.status_code == 200
     assert resp.json()["equipment"] == ["binoculars"]
     assert _state(client)["inventory"]["ammo"] == 1
@@ -322,3 +336,34 @@ def test_class_item_loot_lands_and_dies_with_its_man(client: httpx.Client):
     )
     assert "bayonet" in result["gear_lost"], result
     assert _state(client)["inventory"].get("bayonet", 0) == bayonets_before
+
+
+def test_binoculars_legacy_pair_returns_to_stores(client: httpx.Client):
+    """A save written while snipers could carry binoculars:
+    on the next read the pair comes off the sniper and lands
+    back in stores. Nothing is lost, and a Recon's own pair
+    is never touched (Josh, 2026-11-13)."""
+    from pathlib import Path
+
+    from dotenv import load_dotenv
+    from pymongo import MongoClient
+
+    load_dotenv(Path(__file__).parent.parent / ".env")
+    db = MongoClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
+    # The stored save id is the client's header run through the
+    # server's own cleaning (lib/save.py strips dots and the
+    # like) — derive it the same way rather than guessing it.
+    import re
+
+    save_id = re.sub(r"[^A-Za-z0-9_-]", "", client.headers.get("X-Save-Id", ""))[:48] or "main"
+    earl = _man(client, "Earl Whitaker")
+    before = _state(client)["inventory"].get("binoculars", 0)
+    db.soldiers.update_one(
+        {"save_id": save_id, "id": earl["id"]},
+        {"$set": {"equipment": ["binoculars"]}},
+    )
+    state = _state(client)  # the read runs the sweep
+    assert state["inventory"].get("binoculars", 0) == before + 1
+    assert _man(client, "Earl Whitaker")["equipment"] == []
+    recon = next(s for s in _squad(client) if s["type"] == "recon")
+    assert "binoculars" in recon["equipment"]

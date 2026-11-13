@@ -153,6 +153,10 @@ export const SUPPLY_CD = 45;
  * Recon hidden in foliage is spotted by the enemy at barely
  * half the normal distance, until his own fire gives him away. */
 export const RECON_PAIR_DIST = 90;
+/** A Recon carrying Binoculars pairs with his sniper from
+ * much further out (Josh, 2026-11-13): the glasses are the
+ * pair's reach. Without them the leash is RECON_PAIR_DIST. */
+export const BINOCULAR_PAIR_DIST = 220;
 export const SNIPER_SOLO_RANGE = 260;
 export const RECON_SPOT_FACTOR = 0.55;
 export const RECON_REVEAL_SECONDS = 3;
@@ -3515,7 +3519,8 @@ export class GameEngine {
         a.alive &&
         a.id !== u.id &&
         (a.type === "recon" || a.enemyType === "spotter") &&
-        dist(u.x, u.y, a.x, a.y) <= RECON_PAIR_DIST,
+        dist(u.x, u.y, a.x, a.y) <=
+          (a.type === "recon" && a.equipment?.includes("binoculars") ? BINOCULAR_PAIR_DIST : RECON_PAIR_DIST),
     );
   }
 
@@ -5502,6 +5507,25 @@ export class GameEngine {
 
   private autoTarget(u: Unit): Unit | null {
     const range = this.effRange(u);
+    // Pair work (Josh, 2026-11-13): a marked man is the
+    // sniper's priority while the mark lasts — the Recon
+    // paints him, the sniper takes him, ahead of a nearer
+    // unmarked man. The mark itself reveals him, so the
+    // concealment caps below do not apply to the pick.
+    if (u.type === "sniper") {
+      let marked: Unit | null = null;
+      let markedD = range;
+      for (const e of this.units) {
+        if (e.side === u.side || !e.alive) continue;
+        if (!e.markedUntil || e.markedUntil <= this.elapsed) continue;
+        const d = dist(u.x, u.y, e.x, e.y);
+        if (d <= markedD && this.los(u, e)) {
+          marked = e;
+          markedD = d;
+        }
+      }
+      if (marked) return marked;
+    }
     let best: Unit | null = null;
     let bestD = range * 1.05;
     for (const e of this.units) {

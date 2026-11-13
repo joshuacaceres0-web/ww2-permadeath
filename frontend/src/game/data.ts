@@ -516,7 +516,7 @@ export const ITEM_DEFS: ItemDef[] = [
   { id: "canteen", label: "Canteen", blurb: "A full canteen and the nerve it buys: morale returns 60% faster.", price: 40, weight: 3, kind: "gear" },
   { id: "dressing", label: "Field Dressing", blurb: "Wounds bind themselves: after 5 quiet seconds he slowly heals, up to 60% health.", price: 40, weight: 3, kind: "gear" },
   { id: "jeepcap", label: "M1941 Jeep Cap", blurb: "Wool knit comfort under the helmet liner: morale returns 30% faster.", price: 40, weight: 3, kind: "headgear" },
-  { id: "binoculars", label: "Binoculars", blurb: "+60 vision.", price: 75, restrict: ["recon", "sniper"], weight: 1, kind: "gear" },
+  { id: "binoculars", label: "Binoculars", blurb: "Recon only. +60 vision, and a sniper paired with him holds full range out to 220.", price: 75, restrict: ["recon"], weight: 1, kind: "gear" },
   { id: "charm", label: "Lucky Charm", blurb: "Once a battle, a killing hit has a 15% chance to leave him standing on 1 health.", price: 75, weight: 1, kind: "gear" },
   { id: "batteries", label: "Fresh Batteries", blurb: "The radio answers faster: support cooldowns 20% shorter.", price: 75, restrict: ["radioman"], weight: 1, kind: "gear" },
   { id: "aidbag", label: "Aid Bag", blurb: "Proper kit: his healing is 30% stronger.", price: 75, restrict: ["medic"], weight: 1, kind: "gear" },

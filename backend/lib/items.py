@@ -58,7 +58,7 @@ ITEMS = {
     "dressing": {"price": 40, "restrict": None, "weight": 3},
     "jeepcap": {"price": 40, "restrict": None, "weight": 3},
     # The rare and class pieces, 75 RP.
-    "binoculars": {"price": 75, "restrict": ["recon", "sniper"], "weight": 1},
+    "binoculars": {"price": 75, "restrict": ["recon"], "weight": 1},
     "charm": {"price": 75, "restrict": None, "weight": 1},
     "batteries": {"price": 75, "restrict": ["radioman"], "weight": 1},
     "aidbag": {"price": 75, "restrict": ["medic"], "weight": 1},

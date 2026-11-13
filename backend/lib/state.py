@@ -105,7 +105,22 @@ def memorial_out(doc: dict) -> MemorialOut:
     return MemorialOut(**doc)
 
 
+async def _binoculars_recon_only() -> None:
+    """Binoculars are Recon-only (Josh, 2026-11-13): in a save
+    written while snipers could carry them, anyone but a Recon
+    wearing a pair hands it back to stores on the next read.
+    Nothing is lost — the pair returns to the pool, and the
+    sweep is idempotent, so it costs one small query per read
+    once no legacy pairs remain."""
+    async for doc in S.soldiers.find({"equipment": "binoculars", "type": {"$ne": "recon"}}):
+        await S.soldiers.update_one({"id": doc["id"]}, {"$pull": {"equipment": "binoculars"}})
+        await S.game_state.update_one({"id": STATE_ID}, {"$inc": {"inventory.binoculars": 1}})
+
+
 async def get_state() -> dict:
+    # The binoculars sweep runs before the read so the state
+    # handed back already reflects it, not one read later.
+    await _binoculars_recon_only()
     state = await S.game_state.find_one({"id": STATE_ID})
     if state:
         return state
