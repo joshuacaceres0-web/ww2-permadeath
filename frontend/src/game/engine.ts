@@ -183,6 +183,19 @@ export const TURRET_TRAVERSE: Record<string, number> = {
   panzer: 1.1, tank: 1.5, halftrack: 3.2,
 };
 export const TURRET_FIRE_TOLERANCE = 0.07;
+/** Where a turreted vehicle's fire leaves the barrel, by type:
+ * the tanks' long guns at 42, the halftrack's top MG at 24,
+ * matching where its drawn barrel ends. */
+export const MUZZLE_LEN: Record<string, number> = {
+  panzer: 42, tank: 42, halftrack: 24,
+};
+/** NPC squad idle push (Josh, 2026-11-13, bug hunt item 23):
+ * a 2nd Platoon squad whose men have not fought for this many
+ * seconds (nobody fired, hit, or was hit) pushes up toward the
+ * fight on its own, anchor included, instead of sitting until
+ * the 60s stalemate breaker. NPC squads only: the player's own
+ * hold behaviour is untouched and the shared breaker stays. */
+export const NPC_SQUAD_IDLE_PUSH = 25;
 /** A tank with enemy footmen this close backs away at
  * reverse speed while its turret keeps working. */
 export const TANK_REVERSE_RANGE = 70;
@@ -1127,6 +1140,12 @@ export class GameEngine {
   private stalemateHp = -1;
   private stalemateAlive = -1;
   private stalemateActive = false;
+  // NPC idle push: per-squad clock of the last time any member
+  // actually fought, the squads already told once in the log,
+  // and the checker's own cadence timer.
+  private npcSquadEngageT = new Map<number, number>();
+  private npcSquadPushed = new Set<number>();
+  private npcPushT = 0;
   private phase: "briefing" | "battle" | "over" = "briefing";
   private paused = false;
   // Auto Battle: when on, the player's squad fights on its own using
@@ -1253,6 +1272,9 @@ export class GameEngine {
     this.stalemateHp = -1;
     this.stalemateAlive = -1;
     this.stalemateActive = false;
+    this.npcSquadEngageT.clear();
+    this.npcSquadPushed.clear();
+    this.npcPushT = 0;
     this.phase = "briefing";
     this.paused = false;
     this.battleState = "active";
@@ -4243,6 +4265,62 @@ export class GameEngine {
       }
     }
 
+    // NPC squad idle push (Josh, 2026-11-13, bug hunt item 23):
+    // a 2nd Platoon squad that has not fought for
+    // NPC_SQUAD_IDLE_PUSH seconds (no member fired, hit, or was
+    // hit — the stamps land in spawnBullet and damage) is
+    // ordered to hunt its nearest enemy, leader and anchor
+    // included, on the same orders mechanism the stalemate
+    // breaker uses. It is a separate, shorter, squad-level
+    // clock: the shared 60s breaker is unchanged, and the
+    // player's own squad is never touched by this, so a
+    // deliberate player hold keeps behaving exactly as before.
+    {
+      this.npcPushT -= dt;
+      if (this.npcPushT <= 0) {
+        this.npcPushT = 0.5;
+        if (this.phase === "battle" && this.battleState === "active" && !this.retreating && this.introT < 0) {
+          const squads = new Map<number, Unit[]>();
+          for (const u of this.units) {
+            if (u.side === "allies" && u.npc && u.npcSquad != null && u.alive) {
+              const arr = squads.get(u.npcSquad) ?? [];
+              arr.push(u);
+              squads.set(u.npcSquad, arr);
+            }
+          }
+          for (const [idx, members] of squads) {
+            const last = this.npcSquadEngageT.get(idx);
+            if (last === undefined) {
+              // First sight of the squad: its window starts now,
+              // so a fresh squad always gets its full 25s.
+              this.npcSquadEngageT.set(idx, this.elapsed);
+              continue;
+            }
+            if (this.elapsed - last < NPC_SQUAD_IDLE_PUSH) continue;
+            let pushed = false;
+            for (const m of members) {
+              if (m.isStatic || m.vehicle || m.broken || m.fled) continue;
+              const prey = this.nearestAlly(m);
+              if (!prey) continue;
+              m.orders = findPath(this.blocked, m.x, m.y, prey.x, prey.y);
+              m.chase = [];
+              m.coverSeekT = 8;
+              pushed = true;
+            }
+            if (pushed) {
+              // A fresh window from the push: if the squad still
+              // has not fought 25s later, it pushes again.
+              this.npcSquadEngageT.set(idx, this.elapsed);
+              if (!this.npcSquadPushed.has(idx)) {
+                this.npcSquadPushed.add(idx);
+                this.pushLog("The 2nd Platoon pushes up toward the fight.", "info");
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Abilities on their own judgment: once a second, each
     // follower and NPC ally uses his class ability — medic
     // heals, sniper / AT pick a target, rifleman frags and MG
@@ -5679,7 +5757,7 @@ export class GameEngine {
     // which rides on the turret, not the hull.
     const turreted = u.vehicle && (TURRET_TRAVERSE[u.enemyType ?? u.type] ?? 0) > 0;
     const mAng = turreted ? u.turret : u.facing;
-    const mLen = turreted ? 42 : 14;
+    const mLen = turreted ? (MUZZLE_LEN[u.enemyType ?? u.type] ?? 42) : 14;
     const mx = u.x + Math.cos(mAng) * mLen;
     const my = u.y + Math.sin(mAng) * mLen;
     this.bullets.push({
@@ -5697,6 +5775,7 @@ export class GameEngine {
       killerId: u.id,
       ally: u.side === "allies",
     });
+    this.stampNpcSquad(u);
     // Muzzle flash.
     for (let i = 0; i < 3; i++) {
       this.particles.push({
@@ -5757,8 +5836,21 @@ export class GameEngine {
     this.particles.push({ x, y, vx: 0, vy: -8, life: 0.5, max: 0.5, size: 3, kind: "smoke" });
   }
 
+  /** Stamp a 2nd Platoon squad's fight clock: one of its men
+   * fired, hit, or was hit just now. Drives the idle push. */
+  private stampNpcSquad(u: Unit) {
+    if (u.side === "allies" && u.npc && u.npcSquad != null) {
+      this.npcSquadEngageT.set(u.npcSquad, this.elapsed);
+    }
+  }
+
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
+    this.stampNpcSquad(u);
+    if (killerId != null) {
+      const killer = this.unitById(killerId);
+      if (killer) this.stampNpcSquad(killer);
+    }
     // Tank armour (Josh, 2026-11-13): small arms do nothing
     // to a tank — only tank guns, anti-tank weapons and
     // explosives get through (ARMOR_SOURCES). A halftrack's
@@ -7068,16 +7160,53 @@ export class GameEngine {
       ctx.fillStyle = "#3A4526";
       ctx.fillRect(bayX + 10, fy - 6, 7, 7);
       ctx.fillRect(bayX + 20, fy + 3, 7, 7);
-      // The mounted MG on its pivot, turned on u.turret.
+      // The top MG, manned and unmistakable (Josh, 2026-11-13):
+      // a gunner up out of the bay behind an armoured shield
+      // at the bay's front edge, the gun on its pivot turned
+      // on u.turret, the barrel reaching out over the nose.
+      // Drawn big and pale against the dark hull on purpose:
+      // the old pivot gun was a 20-long dark line on dark
+      // green and read as part of the hull. The gunner is
+      // hull-fixed (he turns with the vehicle); the gun turns
+      // on its own. Its fire leaves at MUZZLE_LEN 24, right at
+      // this barrel's tip.
       const mgX = flip ? fx - 11 : fx + 5;
+      const bayDir = flip ? 1 : -1;
+      // The gunner: shoulders and a helmet on the bay side of
+      // the pivot, up out of the troop bay.
+      ctx.fillStyle = "#2E3324";
+      ctx.fillRect(mgX + bayDir * 3 - 4, fy - 5, 9, 10);
+      ctx.fillStyle = "#49513A";
+      ctx.fillRect(mgX + bayDir * 5 - 4, fy - 4, 7, 8);
+      ctx.fillStyle = "#79835E";
+      ctx.fillRect(mgX + bayDir * 5 - 4, fy - 4, 7, 2);
       ctx.save();
       ctx.translate(mgX, fy);
       ctx.rotate(u.turret);
-      ctx.fillStyle = "#3A3D33";
-      ctx.fillRect(-3, -7, 5, 14);
-      ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(0, -2, 20, 4);
-      ctx.fillRect(-4, -3, 5, 6);
+      // Pivot post.
+      ctx.fillStyle = "#22241C";
+      ctx.fillRect(-3, -3, 6, 6);
+      // Receiver, behind the shield.
+      ctx.fillStyle = "#26261C";
+      ctx.fillRect(-7, -3, 7, 6);
+      // The armoured shield across the gun: pale steel so it
+      // reads against the hull, lit on top, shaded below.
+      ctx.fillStyle = "#6E7264";
+      ctx.fillRect(0, -10, 4, 20);
+      ctx.fillStyle = "#8B8F82";
+      ctx.fillRect(0, -10, 4, 3);
+      ctx.fillStyle = "#54584C";
+      ctx.fillRect(0, 7, 4, 3);
+      // Barrel: long and thick, with a muzzle brake at the
+      // tip and a light line along the top.
+      ctx.fillStyle = "#17170F";
+      ctx.fillRect(4, -2, 22, 4);
+      ctx.fillStyle = "#43453A";
+      ctx.fillRect(4, -2, 22, 1);
+      ctx.fillRect(23, -3, 5, 6);
+      // Belt drum at the receiver's side.
+      ctx.fillStyle = "#4C4433";
+      ctx.fillRect(-5, 3, 6, 5);
       ctx.restore();
       const w = 72;
       const pct = Math.max(0, u.hp / u.maxHp);
