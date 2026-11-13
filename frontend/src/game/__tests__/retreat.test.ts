@@ -90,6 +90,7 @@ type U = {
   x: number; y: number; hp: number; maxHp: number; kills: number;
   enemyType: string | null; extracted?: boolean;
   counterAttack?: boolean; aggressive?: boolean;
+  attackId: number | null;
   orders: Array<{ x: number; y: number }>;
 };
 type Engine = {
@@ -102,6 +103,15 @@ type Engine = {
   battleState: string;
   retreating: boolean;
   fallen: unknown[];
+  leaderId: number | null;
+  manualShot: unknown;
+  aimUnitId: number | null;
+  keys: Set<string>;
+  setSquadOrder: (o: string) => void;
+  getSquadOrder: () => string;
+  leaderShootAt: (x: number, y: number) => void;
+  leaderAbilityAt: (x: number, y: number) => void;
+  startAim: (id: number) => void;
   damage: (u: U, dmg: number, st: string, killerId: number | null) => void;
 };
 
@@ -225,5 +235,39 @@ describe("retreat is a fighting withdrawal", () => {
     for (let s = 0; s < 60 * 12; s++) e.update(1 / 60);
     expect(e.units.filter((u) => u.side === "axis").length).toBe(axisBefore);
     expect(e.units.some((u) => u.counterAttack)).toBe(false);
+  });
+
+  it("retreat ends player control: inputs do nothing, the squad runs west on its own (Josh, 2026-11-12)", async () => {
+    const e = await makeEngine();
+    e.begin();
+    const men = squadOf(e);
+    men.forEach((u, i) => { u.x = 1200; u.y = 620 + i * 30; });
+    const startX = new Map(men.map((u) => [u.id, u.x]));
+    e.retreat();
+    expect(e.retreating).toBe(true);
+    // Orders, clicks, and the ability are all dead.
+    e.setSquadOrder("attack");
+    expect(e.getSquadOrder()).toBe("formup");
+    const leader = men.find((u) => u.id === e.leaderId)!;
+    expect(leader).toBeTruthy();
+    e.leaderShootAt(1300, leader.y);
+    expect(leader.attackId).toBeNull();
+    expect(e.manualShot).toBeNull();
+    e.leaderAbilityAt(1300, leader.y);
+    expect(e.aimUnitId).toBeNull();
+    e.startAim(leader.id);
+    expect(e.aimUnitId).toBeNull();
+    // WASD is dead too: hold D (east) and nobody walks east.
+    // The whole squad, leader included, runs WEST on its own.
+    e.keys.add("d");
+    for (let s = 0; s < 60 * 6; s++) e.update(1 / 60);
+    e.keys.delete("d");
+    for (const u of men) expect(u.x).toBeLessThan(startX.get(u.id)! - 150);
+    // They keep going until the battle files as a defeat with
+    // every man out, dead, or deserted.
+    for (let s = 0; s < 60 * 90 && e.phase === "battle"; s++) e.update(1 / 60);
+    expect(e.phase).toBe("over");
+    expect(e.battleState).toBe("defeat");
+    expect(men.every((u) => u.extracted || !u.alive)).toBe(true);
   });
 });

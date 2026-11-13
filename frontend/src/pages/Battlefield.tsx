@@ -437,6 +437,17 @@ export default function Battlefield() {
             )}
           </div>
         )}
+        {hud?.retreating && hud?.state === "active" && (
+          <div
+            data-testid="retreat-banner"
+            className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 border border-[#B3402E] bg-[#2A0E08]/90 px-4 py-2 text-center"
+          >
+            <div className="font-mono text-[12px] font-bold tracking-[0.2em] text-[#FF8A70]">RETREATING</div>
+            <div className="mt-0.5 font-mono text-[10px] tracking-wider text-[#E3E7DC]">
+              Your squad is falling back on its own. Control is gone until the battle is filed.
+            </div>
+          </div>
+        )}
         {touch && !fullMap && !hud?.briefing && hud?.state === "active" && (
           <button
             data-testid="esc-menu-btn"
@@ -552,9 +563,10 @@ export default function Battlefield() {
                 <Button
                   data-testid="esc-retreat"
                   variant="destructive"
+                  disabled={hud?.retreating}
                   onClick={() => { closeEsc(false); engineRef.current?.setPaused(false); engineRef.current?.retreat(); }}
                 >
-                  <Flag size={12} className="mr-1" /> RETREAT — FIGHTING WITHDRAWAL
+                  <Flag size={12} className="mr-1" /> {hud?.retreating ? "RETREATING — CONTROL IS GONE" : "RETREAT — SQUAD FALLS BACK ON ITS OWN"}
                 </Button>
                 {escConfirm ? (
                   <div className="border border-[#E5A93C] bg-[#3A2B0E] p-2.5" data-testid="esc-confirm">

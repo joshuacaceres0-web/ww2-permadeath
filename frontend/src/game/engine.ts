@@ -499,6 +499,10 @@ export interface HudSnapshot {
   autoBattle: boolean;
   leaderId: number | null;
   squadOrder: SquadOrder;
+  /** True while a retreat is running: player control is over
+   * and the squad is falling back on its own. The UI banners
+   * it so the dead controls read as a state, not a bug. */
+  retreating: boolean;
   // Fireteams: living player-squad ids in Alpha / Bravo, empty when
   // the squad has not been split. The UI shows SPLIT / ALPHA / BRAVO
   // / MERGE from these.
@@ -1503,7 +1507,7 @@ export class GameEngine {
   }
 
   setSquadOrder(o: SquadOrder) {
-    if (this.phase !== "battle" || this.squadOrder === o) return;
+    if (this.phase !== "battle" || this.retreating || this.squadOrder === o) return;
     this.squadOrder = o;
     for (const u of this.units) if (this.isFollower(u)) u.chase = [];
     this.pushLog(o === "attack" ? "Squad order: ATTACK." : o === "defend" ? "Squad order: DEFEND." : "Squad order: FORM UP.", "info");
@@ -1519,7 +1523,7 @@ export class GameEngine {
    * fires at the point for a short window. Range and LOS come
    * from the normal fire rules: he never chases a click. */
   leaderShootAt(x: number, y: number) {
-    if (this.phase !== "battle" || this.autoBattle) return;
+    if (this.phase !== "battle" || this.autoBattle || this.retreating) return;
     const L = this.leaderUnit();
     if (!L || L.broken) return;
     let foe: Unit | null = null;
@@ -1543,7 +1547,7 @@ export class GameEngine {
    * aimed abilities landing at the clicked point, exactly like
    * pressing Q and clicking there in one motion. */
   leaderAbilityAt(x: number, y: number) {
-    if (this.phase !== "battle") return;
+    if (this.phase !== "battle" || this.retreating) return;
     const L = this.leaderUnit();
     if (!L) return;
     this.startAim(L.id);
@@ -1673,18 +1677,22 @@ export class GameEngine {
     return this.fitWholeMap;
   }
 
-  /** Retreat is a fighting withdrawal now, not an instant
-   * filing (Josh, 2026-11-12: hard to retreat, not instant).
-   * Pressing it starts the fall back: AUTO hands the men back,
-   * every living squad man (and the Sherman) gets a fall-back
-   * order to the west edge, and the battle keeps running —
-   * the enemy keeps shooting, men can be hit, pinned, or break
-   * on the way out. A man who reaches the west edge extracts
+  /** Retreat is a break and run now, not an instant filing
+   * and not a controlled withdrawal (Josh, 2026-11-12).
+   * Pressing it ends player control outright: WASD, clicks,
+   * squad orders, abilities, the touch sticks, radio support
+   * and reinforcements all go dead, and every living roster
+   * man, leader included, runs for the west edge on his own
+   * while the battle keeps running — the enemy keeps
+   * shooting, men can be hit, pinned, or break on the way
+   * out. A man who reaches the west edge extracts
    * (extract()); when every roster man is out, dead, or
    * deserted, the battle files as a defeat through the usual
    * path, so kills already made still pay their kill RP and
    * the mission does not advance. The 2nd Platoon is not
-   * ordered back: they hold where they stand and cover it. */
+   * ordered back: they hold where they stand and cover it.
+   * The Sherman has no driver either: it rolls west down
+   * the road on its own and never halts to trade fire. */
   retreat() {
     if (this.phase !== "battle" || this.battleState !== "active" || this.retreating) return;
     this.retreating = true;
@@ -1693,6 +1701,14 @@ export class GameEngine {
     // to cut the withdrawal off (Josh, 2026-11-12).
     this.flankersAt = this.elapsed + 6;
     if (this.autoBattle) this.setAutoBattle(false);
+    // Player control ends here (Josh, 2026-11-12): every input
+    // path checks retreating and goes dead, and any shot or aim
+    // in flight is cancelled. The squad runs on its own now.
+    this.manualShot = null;
+    this.touchMove = null;
+    this.touchAimVec = null;
+    this.touchAimTarget = false;
+    this.aimUnitId = null;
     for (const u of this.units) {
       if (u.side !== "allies" || u.npc || !u.alive) continue;
       u.attackId = null;
@@ -1700,6 +1716,7 @@ export class GameEngine {
       u.orders = findPath(this.blocked, u.x, u.y, 24, Math.max(60, Math.min(MAP_H - 60, u.y)));
     }
     this.pushLog("Fall back! Every man to the west edge — the mission is scrubbed once the squad is out.", "lose");
+    this.pushLog("Control is gone: the squad is falling back on its own.", "info");
     this.dirty = true;
   }
 
@@ -1717,7 +1734,7 @@ export class GameEngine {
   }
 
   startAim(unitId: number) {
-    if (this.phase !== "battle") return;
+    if (this.phase !== "battle" || this.retreating) return;
     this.takeManualControl();
     const u = this.unitById(unitId);
     if (!u || !u.alive || u.abilityCd > 0 || u.broken) return;
@@ -1790,6 +1807,7 @@ export class GameEngine {
    * so the backend is only called for a call that will land. */
   canSupport(kind: RadioSupportKind): boolean {
     if (this.phase !== "battle" || this.battleState !== "active") return false;
+    if (this.retreating) return false; // break and run: nobody works the radio
     if (!this.radioLive()) return false;
     if (this.commanderLevel < RADIO_CALL_LEVEL[kind]) return false;
     if (kind === "artillery") return this.artyCd <= 0;
@@ -1926,7 +1944,7 @@ export class GameEngine {
   }
 
   canReinforce(): boolean {
-    return this.phase === "battle" && this.battleState === "active" && this.reinforcements < MAX_REINFORCEMENTS && this.radioLive() && this.commanderLevel >= RADIO_CALL_LEVEL.reinforce;
+    return this.phase === "battle" && this.battleState === "active" && !this.retreating && this.reinforcements < MAX_REINFORCEMENTS && this.radioLive() && this.commanderLevel >= RADIO_CALL_LEVEL.reinforce;
   }
 
   /** The living squad radioman who makes the calls, or null. */
@@ -2231,10 +2249,12 @@ export class GameEngine {
   /** Twin-stick inputs from the touch overlay. A null vector
    * means that thumb is off the stick. */
   setTouchMove(v: { x: number; y: number } | null) {
+    if (this.retreating) v = null; // break and run: the sticks are dead
     this.touchMove = v && (Math.abs(v.x) > 0.22 || Math.abs(v.y) > 0.22) ? v : null;
   }
 
   setTouchAim(v: { x: number; y: number } | null) {
+    if (this.retreating) v = null;
     this.touchAimVec = v && (Math.abs(v.x) > 0.22 || Math.abs(v.y) > 0.22) ? v : null;
     if (!this.touchAimVec && this.touchAimTarget) {
       const L = this.leaderUnit();
@@ -3526,8 +3546,10 @@ export class GameEngine {
 
     // WASD drives the leader. He moves where the player walks
     // him; his men follow on their own logic. A broken leader
-    // runs on morale's rules, not the player's keys.
-    if (this.phase === "battle" && !this.autoBattle && !this.paused) {
+    // runs on morale's rules, not the player's keys. A
+    // retreating leader is not driven at all: retreat ends
+    // player control (Josh, 2026-11-12).
+    if (this.phase === "battle" && !this.autoBattle && !this.paused && !this.retreating) {
       const L = this.leaderUnit();
       if (L && !L.broken && !L.fled) {
         const k = this.keys;
@@ -3557,7 +3579,7 @@ export class GameEngine {
     // that way. An enemy near the aim line (within range and
     // sight) snaps as his target; otherwise he fires toward the
     // aim point. Release stops the fire (setTouchAim clears it).
-    if (this.phase === "battle" && !this.autoBattle && !this.paused && this.touchAimVec) {
+    if (this.phase === "battle" && !this.autoBattle && !this.paused && !this.retreating && this.touchAimVec) {
       const L = this.leaderUnit();
       if (L && !L.broken && !L.fled) {
         const ang = Math.atan2(this.touchAimVec.y, this.touchAimVec.x);
@@ -3736,6 +3758,22 @@ export class GameEngine {
             const len = Math.hypot(dx, dy) || 1;
             moving = this.chaseTo(u, u.x + (dx / len) * 320, u.y + (dy / len) * 320, dt);
           }
+        }
+      } else if (this.retreating && u.side === "allies" && !u.npc) {
+        // Break and run (Josh, 2026-11-12): retreat ends player
+        // control, and every roster man, leader included, runs
+        // for the west edge on his own — no formation, no
+        // orders, no firing back. Footmen path around blockers
+        // with chaseTo; the Sherman rolls west down the road
+        // and never halts to trade fire. Pinned and prone
+        // slowdowns still apply inside the movement. Reaching
+        // x <= 46 extracts him (the update-loop check).
+        if (u.vehicle) {
+          const tx = Math.max(30, u.x - 160);
+          this.moveToward(u, tx, roadYAt(tx), dt);
+          moving = true;
+        } else {
+          moving = this.chaseTo(u, 24, Math.max(60, Math.min(MAP_H - 60, u.y)), dt);
         }
       } else if (u.orders.length > 0) {
         const o = u.orders[0];
@@ -5321,6 +5359,7 @@ export class GameEngine {
       autoBattle: this.autoBattle,
       leaderId: this.leaderId,
       squadOrder: this.squadOrder,
+      retreating: this.retreating,
     });
   }
 
