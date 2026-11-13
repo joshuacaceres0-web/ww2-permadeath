@@ -80,6 +80,10 @@ describe("the battle wiring", () => {
   });
   it("on touch the squad dock is the compact chip strip, never the right column", () => {
     expect(battleSrc).toContain('variant={touch ? "compact" : "full"}');
+    // The page root must not flip to a row on sideways phones
+    // either, or the strip lands on the right and squeezes
+    // the canvas (the first package test shot showed both).
+    expect(battleSrc).toContain('touch ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col short:flex-row"');
     expect(dockSrc).toContain('variant?: "full" | "compact"');
     expect(dockSrc).toContain('data-testid="squad-dock"');
     // The chips keep the card testids and the tap-to-select.

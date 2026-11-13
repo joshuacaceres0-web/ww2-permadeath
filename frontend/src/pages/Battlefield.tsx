@@ -440,7 +440,7 @@ export default function Battlefield() {
           </Button>
         </div>
       )}
-      <div className="flex min-h-0 flex-1 flex-col short:flex-row">
+      <div className={touch ? "flex min-h-0 flex-1 flex-col" : "flex min-h-0 flex-1 flex-col short:flex-row"}>
       {/* Battlefield */}
       <div className="scanlines relative min-h-0 flex-1 overflow-hidden bg-[#080A08]">
         <BattleCanvas
