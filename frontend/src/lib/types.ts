@@ -14,7 +14,8 @@ export type EnemyTypeId =
   | "mortar"
   | "fallschirmjager"
   | "medic"
-  | "panzer";
+  | "panzer"
+  | "truck";
 export type SoldierStatus = "active" | "reserve";
 export type DecorKind = "poppies" | "roses" | "lilies" | "wreath" | "candle" | "flag";
 

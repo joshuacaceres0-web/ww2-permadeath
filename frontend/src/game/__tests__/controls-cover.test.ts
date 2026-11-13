@@ -1,5 +1,5 @@
 // Headless checks for the three fixes in this job:
-// 1. All objective tags removed — only the mortar warning circle remains.
+// 1. All objective tags removed — and the mortar warning circle too.
 // 2. AI no longer wedges in cover in a re-seek loop.
 // 3. Battle controls are present and respond: 1-8 / 0 select (even in
 //    the briefing), Space pauses, and the engine's keyboard/mouse
@@ -102,7 +102,7 @@ const SQUAD = [
 ] as const;
 
 describe("objective tags removed, controls respond, no cover-stuck loop", () => {
-  it("draws the mortar warning but no objective tags", async () => {
+  it("draws no mortar warning and no objective tags", async () => {
     const { GameEngine } = await loadEngine();
     const canvas = (document as unknown as { createElement: (t: string) => HTMLCanvasElement }).createElement("canvas");
     const engine = new GameEngine(canvas, () => {});
@@ -119,30 +119,11 @@ describe("objective tags removed, controls respond, no cover-stuck loop", () => 
     anyEngine.projectiles = [{ sourceType: "mortar", tx: 1200, ty: 675, aoe: 62 }];
     anyEngine.elapsed = 1;
 
-    const texts: string[] = [];
-    const ctx = new Proxy(
-      {},
-      {
-        get(_t, prop) {
-          if (prop === "fillText") return (text: string) => void texts.push(text);
-          if (prop === "measureText") return () => ({ width: 0 });
-          if (prop === "createLinearGradient") return () => ({ addColorStop: () => {} });
-          return () => {};
-        },
-        set() {
-          return true;
-        },
-      },
-    );
-    // Canvas stub returns a fresh proxy ctx from getContext; call the
-    // private draw method with our recording ctx instead.
-    (anyEngine as { drawMortarWarnings: (c: unknown) => void }).drawMortarWarnings(ctx);
-    expect(texts).toContain("!");
-    for (const banned of ["SS OFFICER", "MG42", "MORTAR", "FLAK"]) {
-      expect(texts).not.toContain(banned);
-    }
-    // The old method is gone entirely.
-    expect((anyEngine as Record<string, unknown>).drawObjectiveMarkers).toBeUndefined();
+    // Both drawing methods are gone entirely (Josh, 2026-11-12:
+    // the red mortar indicators come out — the shell's whistle,
+    // about a second before impact, is the only warning now).
+    expect(anyEngine.drawMortarWarnings).toBeUndefined();
+    expect(anyEngine.drawObjectiveMarkers).toBeUndefined();
   });
 
   it("keyboard controls respond, including selection in the briefing", async () => {

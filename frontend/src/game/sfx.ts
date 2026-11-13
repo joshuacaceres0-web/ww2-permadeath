@@ -78,9 +78,32 @@ export function menuSfx(kind: MenuSfx) {
   }
 }
 
+/** The incoming mortar whistle: a faint descending tone, about a
+ * second long, ears only. It is the only warning a shell gives
+ * now that the red impact circles are gone (Josh, 2026-11-12).
+ * Throttled harder than gunfire: several shells in the air share
+ * one whistle rather than stacking into a chorus. */
+export function whistleSfx() {
+  const a = audio();
+  if (!a) return;
+  const now = a.currentTime;
+  if (now - (lastAt.whistle ?? -1) < 0.4) return;
+  lastAt.whistle = now;
+  const o = a.createOscillator();
+  o.type = "sine";
+  o.frequency.setValueAtTime(1500, now);
+  o.frequency.exponentialRampToValueAtTime(620, now + 0.9);
+  const g = a.createGain();
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.11 * volume, now + 0.15);
+  g.gain.exponentialRampToValueAtTime(0.0001, now + 0.95);
+  o.connect(g).connect(a.destination);
+  o.start(now);
+  o.stop(now + 1.0);
+}
+
 /** Click-capture handler: blip on any button/link inside a menu screen. */
-export function onMenuClick(e: { target: EventTarget | null }) {
-  const el = (e.target as HTMLElement | null)?.closest?.("a,button,[role=radio]") as HTMLElement | null;
+export function onMenuClick(e: { target: EventTarget | null }) {  const el = (e.target as HTMLElement | null)?.closest?.("a,button,[role=radio]") as HTMLElement | null;
   if (!el || el.hasAttribute("disabled") || el.getAttribute("data-testid") === "settings-mute-toggle") return;
   const id = el.getAttribute("data-testid") ?? "";
   menuSfx(/back|close|cancel/.test(id) ? "back" : /^(map-|warroom-view|settings-)/.test(id) ? "nav" : "select");

@@ -120,8 +120,11 @@ describe("2nd Platoon landing force", () => {
     expect(men.filter((u) => u.type === "rifleman")).toHaveLength(11);
   });
 
-  it("the airborne drop keeps 12 NPCs: the 32 are a beach landing", async () => {
+  it("the airborne drop fields 32 NPCs too: same number as the beach landing", async () => {
     const e = await makeEngine("dday", "airborne");
-    expect(npcs(e)).toHaveLength(12);
+    const men = npcs(e);
+    expect(men).toHaveLength(32);
+    expect(men.filter((u) => u.type === "medic")).toHaveLength(1);
+    expect(men.filter((u) => u.type === "rifleman")).toHaveLength(31);
   });
 });

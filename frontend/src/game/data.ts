@@ -221,6 +221,14 @@ export const ENEMY_TYPES: Record<EnemyTypeId, EnemyTypeSpec> = {
     type: "panzer", label: "Panzer IV Medium Tank", weapon: "75mm KwK 40 cannon", hp: 400, speed: 30, range: 300,
     vision: 240, dmg: 30, fireInterval: 2.0, spread: 0.05, bulletSpeed: 800, vehicle: true, threat: "HIGH",
   },
+  truck: {
+    // The airborne mission's convoy (Josh, 2026-11-12): an
+    // unarmed supply truck. It carries no gun and never fires;
+    // it is on the field to be ambushed, and the wave is not
+    // cleared until the convoy is destroyed with its escort.
+    type: "truck", label: "Opel Blitz Supply Truck", weapon: "Unarmed", hp: 150, speed: 30, range: 0,
+    vision: 220, dmg: 0, fireInterval: 1.0, spread: 0, bulletSpeed: 0, vehicle: true, threat: "LOW",
+  },
 };
 
 // Death causes by killer type — mirrors the debrief filing.
@@ -236,6 +244,7 @@ export const CAUSES: Record<string, string> = {
   scharfschutze: "Sniper fire",
   panzer: "75mm cannon fire",
   mortar: "Mortar bombardment",
+  mine: "Tellermine blast",
   fallschirmjager: "FG42 fire",
 };
 

@@ -3,10 +3,12 @@
 // 156s looked too easy: the wave 1 defense sits in three lines.
 // The first 6 MG42 nests are at the grassline where the beach
 // meets the grass (x 880-1020, the foot of the dune ridge, spread
-// in bands along the whole beach); the first 2 mortars are right
-// on the sand at the shoreline (x 350-650); the remaining 3 MGs
-// and 1 mortar scatter east inland (x 1700+) as guns in depth.
-// The infantry still holds the first trench.
+// in bands along the whole beach); the first 2 mortars sit just
+// behind the grassline (x 960-1120, moved back from mid-sand on
+// 2026-11-12: at x 350-650 they died in 4-6 seconds, before they
+// could bombard, and Josh never saw them); the
+// remaining 3 MGs and 1 mortar scatter east inland (x 1700+) as
+// guns in depth. The infantry still holds the first trench.
 import { describe, expect, it } from "vitest";
 
 function stubBrowser() {
@@ -110,7 +112,7 @@ async function makeEngine(variant = "") {
 // Spawn snapping can shift a unit a few units off its placed point,
 // so the lines are judged with margin: shoreline x < 750, grassline
 // 820-1120, east x >= 1650, and nothing in the gaps.
-const isShore = (u: U) => u.x < 750;
+const isShore = (u: U) => u.x >= 900 && u.x < 1200;
 const isGrass = (u: U) => u.x >= 820 && u.x < 1120;
 const isEast = (u: U) => u.x >= 1650;
 
@@ -131,7 +133,7 @@ describe("Overlord beach layout: grassline, shoreline, scattered east", () => {
     expect(Math.max(...ys)).toBeGreaterThan(750);
   });
 
-  it("fields 3 mortars: 2 at the shoreline with the MGs, 1 east", async () => {
+  it("fields 3 mortars: 2 behind the grassline, 1 east", async () => {
     const e = await makeEngine();
     const mortars = e.units.filter((u) => u.enemyType === "mortar");
     expect(mortars.length).toBe(3);
@@ -140,16 +142,20 @@ describe("Overlord beach layout: grassline, shoreline, scattered east", () => {
     for (const m of mortars) expect(m.isStatic).toBe(true);
   });
 
-  it("the airborne drop gets no shoreline line: its guns hold the bluffs", async () => {
+  it("the airborne drop gets no gun line at all: the ambush redesign fields the convoy instead", async () => {
     const e = await makeEngine("airborne");
-    const mgs = e.units.filter((u) => u.enemyType === "mg42");
-    expect(mgs.length).toBe(9);
-    // No east scatter and nothing on the sand: every nest in the
-    // old bluff band.
-    expect(mgs.filter(isEast).length).toBe(0);
-    for (const mg of mgs) {
-      expect(mg.x).toBeGreaterThanOrEqual(650);
-      expect(mg.x).toBeLessThan(1100);
+    // Josh, 2026-11-12: the airborne variant loses its MG nests
+    // and mortars entirely. In their place, the convoy: 3 trucks
+    // on the road in the east with their infantry escort around it.
+    expect(e.units.filter((u) => u.enemyType === "mg42").length).toBe(0);
+    expect(e.units.filter((u) => u.enemyType === "mortar").length).toBe(0);
+    const trucks = e.units.filter((u) => u.enemyType === "truck");
+    expect(trucks.length).toBe(3);
+    for (const t of trucks) {
+      expect(t.convoy).toBe(true);
+      expect(t.x).toBeGreaterThan(3300);
     }
+    const escort = e.units.filter((u) => u.side === "axis" && u.convoy && u.enemyType !== "truck");
+    expect(escort.length).toBe(11);
   });
 });

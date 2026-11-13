@@ -4,7 +4,7 @@
 import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
-import { setSfxMuted, setSfxVolume, sfx } from "./sfx";
+import { setSfxMuted, setSfxVolume, sfx, whistleSfx } from "./sfx";
 import { FEET_X, SPR_H, drawBoom, pixelize, sprite, type Head, type Pose, type Weapon } from "./sprites";
 
 export const MAP_W = 4000;
@@ -45,6 +45,12 @@ const UNIT_R = 9;
 // rejoin share, he goes back to the fight.
 const NPC_FALLBACK_HP = 0.35;
 const NPC_REJOIN_HP = 0.6;
+// Near-miss band for mortar shells (2026-11-12): a shell that
+// lands within this far beyond its damage radius still rattles
+// the men it missed — suppression and morale, no wound.
+const NEAR_MISS_BAND = 45;
+// The airborne convoy's road speed: a slow, cautious roll west.
+const CONVOY_SPEED = 26;
 const PAN_SPEED = 900;
 const PX = 3; // world units per screen pixel — the whole battlefield renders as chunky pixel art
 const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
@@ -191,6 +197,11 @@ interface Unit {
   /** Wave 1 trench garrison: the man holds the first trench line,
    * and patrols along it instead of wandering open ground. */
   trenchHold?: boolean;
+  /** Airborne variant only: this unit belongs to the enemy
+   * convoy (a truck or one of its escort). The convoy marches
+   * west along the road until first contact; see the convoy
+   * branch in the movement chain. */
+  convoy?: boolean;
   orders: Order[];
   attackId: number | null;
   targetId: number | null;
@@ -339,6 +350,10 @@ interface Projectile {
   sourceType: string;
   killerId: number | null;
   smokeT: number;
+  /** True once this shell's incoming whistle has been played
+   * (about a second before impact; the only warning a mortar
+   * round gives now). */
+  whistled?: boolean;
 }
 
 interface Particle {
@@ -761,6 +776,14 @@ export class GameEngine {
   private blockers: Blocker[] = [];
   private blocked: Uint8Array = new Uint8Array(COLS * ROWS);
   private covers: Cover[] = [];
+  /** Beach only: the hedgehog blockers, cached for the obstacle
+   * belt slowdown in moveToward. */
+  private hedgehogs: Blocker[] = [];
+  /** Beach only: Tellermines in the sand (x 300-780), laid in
+   * setup. An armed mine under a landing-force man's feet goes
+   * off once. Drawn small and dark — you find them by stepping
+   * on them, or by watching where the sand is marked. */
+  private mines: { x: number; y: number; armed: boolean }[] = [];
   private corpses: Corpse[] = [];
   private speed = 1; // Settings: game speed multiplier
   private shakeK = 1; // Settings: screen shake strength
@@ -775,6 +798,10 @@ export class GameEngine {
   private viewH = VIEW_H;
   private keys = new Set<string>();
   private variant: Variant = "";
+  /** Airborne variant: true once the enemy convoy has made
+   * first contact with the paratroopers. The march ends, the
+   * trucks halt, and the escort deploys to fight. */
+  private convoyContact = false;
   private terrain: HTMLCanvasElement | null = null;
   private tctx: CanvasRenderingContext2D | null = null;
   private fog: HTMLCanvasElement | null = null;
@@ -996,6 +1023,22 @@ export class GameEngine {
     this.blockers = built.blockers;
     this.blocked = buildBlockedGrid(built.blockers);
     this.covers = built.covers;
+    this.hedgehogs = built.blockers.filter((b) => b.kind === "hedgehog");
+    // Beach mines (Josh's suggestion, 2026-11-12): Tellermines in
+    // the sand among the hedgehogs. The landing force triggers
+    // them; the defenders know their own lanes and do not. The
+    // beach trail stays clear — the tank follows it.
+    this.mines = [];
+    if (kind === "beach") {
+      for (let i = 0; i < 60 && this.mines.length < 24; i++) {
+        const mx = 300 + rng() * 480;
+        const my = 60 + rng() * (MAP_H - 120);
+        if (Math.abs(my - roadYAt(mx)) < 46) continue;
+        if (this.hedgehogs.some((h) => dist(mx, my, h.x, h.y) < 34)) continue;
+        if (this.mines.some((m) => dist(mx, my, m.x, m.y) < 52)) continue;
+        this.mines.push({ x: mx, y: my, armed: true });
+      }
+    }
     this.placeCrates();
     this.tctx = this.terrain.getContext("2d");
     this.tctx?.setTransform(1 / PX, 0, 0, 1 / PX, 0, 0);
@@ -1010,6 +1053,7 @@ export class GameEngine {
     this.replayFrames = [];
     this.replayT = 0;
     this.autoBattle = false;
+    this.convoyContact = false;
     this.spawnAllies(squad, rng, commanderBonus);
     // 2nd Platoon: weak allies, so they support the fight but can
     // never clear a wave on their own — in the Emergent play test
@@ -1018,10 +1062,12 @@ export class GameEngine {
     // i.e. 2-5; Josh picked 12 on 2026-11-11, and on 2026-11-12 he
     // raised the Overlord beach landing to 32: a full landing force
     // to match the hardened beach defense (9 MG42s and 3 mortars in
-    // wave 1 alone). The airborne drop and the other missions stay
-    // at 12. Still weak, spread down the western edge so they do
-    // not spawn stacked on each other.
-    const npcAllies = mission.terrain === "dday" && this.variant !== "airborne" ? 32 : 12;
+    // wave 1 alone). The other missions stay at 12. Still weak,
+    // spread down the western edge so they do not spawn stacked on
+    // each other. The airborne drop fields the same 32 (Josh,
+    // 2026-11-12: same number as the beach) — with 12 and the old
+    // drop zone AUTO went 0 for 6, wiped in under 71 seconds.
+    const npcAllies = mission.terrain === "dday" ? 32 : 12;
     this.spawnNpcAllies(npcAllies, rng);
     this.spawnWave(0);
     this.recomputeFog();
@@ -1331,7 +1377,17 @@ export class GameEngine {
     // own wounded with the same aura and triage as every other medic.
     for (let i = 0; i < n; i++) {
       const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
-      this.addNpc(i === 0 ? "medic" : "rifleman", 90 + rng() * 80, py, i, rng(), true);
+      if (this.variant === "airborne") {
+        // The drop: the platoon's sticks scatter across the same
+        // drop zone as the player's squad (x 120-640, west of the
+        // bluff gun line), so the whole force lands together and
+        // forms up together. On the west-edge line they arrived
+        // behind the squad and the squad died alone at the guns:
+        // AUTO went 0 for 6 with 0 squad kills (2026-11-12).
+        this.addNpc(i === 0 ? "medic" : "rifleman", 120 + rng() * 520, 80 + rng() * (MAP_H - 160), i, rng(), true);
+      } else {
+        this.addNpc(i === 0 ? "medic" : "rifleman", 90 + rng() * 80, py, i, rng(), true);
+      }
     }
   }
 
@@ -2291,8 +2347,15 @@ export class GameEngine {
       let sx = 80 + rng() * 60;
       let y = MAP_H / 2 + (i - (n - 1) / 2) * gap + (rng() * 20 - 10);
       if (this.variant === "airborne") {
-        // Scattered drop: men land all over the western fields, far from each other.
-        sx = 120 + rng() * MAP_W * 0.35;
+        // Scattered drop: men land all over the western fields, far
+        // from each other — but west of the bluff gun line (the
+        // wave 1 statics hold x 700-1000). The old zone reached
+        // x 1520 and dropped men inside the MG nests: AUTO lost
+        // 6 of 6 in under 71 seconds with 0-1 kills (2026-11-12
+        // balance pass). A drop zone of x 120-640 keeps the
+        // scatter and the bocage, and lets the squad form up
+        // before it hits the guns.
+        sx = 120 + rng() * 520;
         y = 80 + rng() * (MAP_H - 160);
       } else if (this.variant === "beach") {
         sx = 150 + rng() * 40;
@@ -2482,9 +2545,9 @@ export class GameEngine {
     const beach = index === 0;
     const shoreline = beach && this.mission.terrain === "dday" && this.variant !== "airborne";
     // Josh's beach layout: the first 6 MG42 nests sit at the
-    // grassline, the first 2 mortars right at the shoreline; any
-    // more than that scatter east inland as guns in depth. Each
-    // line spreads in its own bands along the whole beach.
+    // grassline, the first 2 mortars at the top of the beach;
+    // any more than that scatter east inland as guns in depth.
+    // Each line spreads in its own bands along the whole beach.
     const GRASS_MG42 = 6;
     const SHORE_MORTAR = 2;
     let grassStaticTotal = 0;
@@ -2520,16 +2583,22 @@ export class GameEngine {
       (n, s) => n + (ENEMY_TYPES[s.type].static ? s.count : 0),
       0,
     );
+    // Airborne is an ambush mission (Josh, 2026-11-12): no MG42
+    // nests and no mortars in any wave. Wave 1 is the convoy and
+    // its escort on the road; waves 2 and 3 are the reaction
+    // force. The beach landing keeps every gun.
     let mobileCount = 0;
     let trenchCount = 0;
     let staticCount = 0;
     for (const spec of this.waves[index]) {
       const def = ENEMY_TYPES[spec.type];
+      if (this.variant === "airborne" && (spec.type === "mg42" || spec.type === "mortar")) continue;
       for (let i = 0; i < spec.count; i++) {
         const isStatic = !!def.static;
         let x: number;
         let y: number;
         let trench = false;
+        let convoy = false;
         if (isStatic) {
           let zone: "grass" | "shore" | "east" | null = null;
           if (shoreline) {
@@ -2561,9 +2630,21 @@ export class GameEngine {
                 : MAP_H * (0.2 + rng() * 0.6);
             grassCount++;
           } else if (zone === "shore") {
-            // Right at the shoreline, on the sand west of the
-            // bluffs, spread along the beach in their own bands.
-            x = 350 + rng() * 300;
+            // Just behind the grassline: the mortars sit east of
+            // the MG nests, around the pillbox line, and shell
+            // over the ridge — indirect fire needs no line of
+            // sight. They were first placed mid-sand at x 350-650
+            // and in play they were invisible: a headless check
+            // (2026-11-12, Josh's "I did not see mortar on the
+            // beach") had both dead at 4 and 6 seconds, each
+            // having fired one shell — the landing force is in
+            // rifle range of mid-sand almost at once and focuses
+            // the nearest enemy. A second try at the top of the
+            // beach (x 690-830) only bought 9-10 seconds. Behind
+            // the grassline they live until the line breaks, and
+            // the whole sand fight (x 350+) is inside their 620
+            // range.
+            x = 960 + rng() * 160;
             y =
               shoreStaticTotal > 1
                 ? 90 + ((shoreCount + rng() * 0.7) * (MAP_H - 180)) / shoreStaticTotal
@@ -2582,6 +2663,12 @@ export class GameEngine {
                 : MAP_H * (0.2 + rng() * 0.6);
           }
           staticCount++;
+        } else if (this.variant === "airborne" && index === 0) {
+          // The convoy escort: a loose column around the road in
+          // the east, marching with the trucks until contact.
+          x = 3300 + (mobileCount % 4) * 120 + rng() * 40;
+          y = roadYAt(x) + ((mobileCount % 3) - 1) * 38 + (rng() - 0.5) * 20;
+          convoy = true;
         } else if (beach && trenchSpots.length) {
           // Spread along the line: man i takes spot i * spots /
           // total, so the garrison covers the whole trench instead
@@ -2601,10 +2688,22 @@ export class GameEngine {
         mobileCount++;
         const u = this.spawnEnemyUnit(spec.type, x, y, rng, trench);
         if (trench) u.trenchHold = true;
+        if (convoy) u.convoy = true;
         // Waves 2 and 3 are aggressive: the mobile men charge on
         // spawn instead of camping. Statics stay put (they cannot
         // move), and the wave 1 garrison keeps holding its trench.
         if (index > 0 && !isStatic) u.aggressive = true;
+      }
+    }
+    // The airborne convoy itself: 3 unarmed trucks on the road
+    // in the east (Josh, 2026-11-12). They roll west with their
+    // escort until first contact, then halt. The wave is not
+    // cleared until they are destroyed with the escort.
+    if (this.variant === "airborne" && index === 0) {
+      for (let i = 0; i < 3; i++) {
+        const txx = 3520 + i * 190;
+        const t = this.spawnEnemyUnit("truck", txx, roadYAt(txx), rng, false);
+        t.convoy = true;
       }
     }
     if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
@@ -2681,6 +2780,27 @@ export class GameEngine {
         this.counterAttackT = 45 + Math.random() * 45;
         this.spawnCounterAttack();
       }
+    }
+    // Airborne convoy contact: the march ends the moment the
+    // convoy sees the paratroopers, comes under fire, or the
+    // paratroopers get close enough for a brush contact.
+    if (!this.convoyContact && this.variant === "airborne") {
+      for (const u of this.units) {
+        if (!u.convoy || !u.alive) continue;
+        if (u.hp < u.maxHp) {
+          this.convoyContact = true;
+          break;
+        }
+        const prey = this.nearestAlly(u);
+        if (prey) {
+          const pd = dist(u.x, u.y, prey.x, prey.y);
+          if (pd <= 150 || (pd <= u.vision && this.los(u, prey))) {
+            this.convoyContact = true;
+            break;
+          }
+        }
+      }
+      if (this.convoyContact) this.pushLog("Contact! The convoy halts and its escort deploys.", "wave");
     }
     // Radio support cooldowns tick down while the battle runs.
     this.artyCd = Math.max(0, this.artyCd - dt);
@@ -2919,6 +3039,17 @@ export class GameEngine {
         // brought him back, and he does not rejoin the fight until
         // he is healed — the fallback check above clears the flag
         // once he is back above 60% health.
+        u.chase = [];
+      } else if (u.convoy && (!this.convoyContact || u.vehicle)) {
+        // The airborne convoy on the march: trucks and escort roll
+        // west along the road at convoy speed, holding the route
+        // and moving cautiously, until first contact. After
+        // contact the escort leaves this branch for the AI below
+        // and fights; the trucks stay here and halt for good.
+        if (!this.convoyContact) {
+          this.moveToward(u, u.x - 160, roadYAt(u.x - 160), dt, Math.min(1, CONVOY_SPEED / u.speed));
+          moving = true;
+        }
         u.chase = [];
       } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc)) && !u.isStatic && u.enemyType !== "mortar") {
         // Auto Battle core: a player squad man with AUTO on fights the
@@ -3252,10 +3383,10 @@ export class GameEngine {
             x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0, dur: 2.4, side: "axis", dmg: u.dmg, aoe: 62,
             kind: "grenade", sourceType: "mortar", killerId: u.id, smokeT: 0,
           });
-          // Always warn: the old 40% roll meant most shells arrived with
-          // no radio line at all, and there was no visible marker. The
-          // 2.4s flight time is the warning window — drawMortarWarnings
-          // draws a pulsing red circle at the impact point for its whole flight.
+          // No visual warning any more (Josh, 2026-11-12): the
+          // pulsing red circle at the impact point is gone for
+          // enemy and radio shells alike. The only warning is the
+          // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
       } else if (u.cooldown <= 0 && focus && d <= u.range && !u.pinned && !u.broken && this.los(u, focus)) {
@@ -3347,6 +3478,13 @@ export class GameEngine {
       const p = this.projectiles[i];
       p.t += dt;
       p.smokeT -= dt;
+      // The mortar whistle: about a second before a mortar shell
+      // (enemy or radio) lands, once per shell. Sound only — the
+      // red warning circles are gone (Josh, 2026-11-12).
+      if (!p.whistled && p.sourceType === "mortar" && p.dur - p.t <= 1.0) {
+        p.whistled = true;
+        whistleSfx();
+      }
       if (p.kind === "rocket" && p.smokeT <= 0) {
         p.smokeT = 0.03;
         const px = p.x + (p.tx - p.sx) * (p.t / p.dur);
@@ -3358,6 +3496,20 @@ export class GameEngine {
         const y = p.ty;
         this.explode(x, y, p.aoe, p.dmg, p.side, p.sourceType, p.killerId);
         this.projectiles.splice(i, 1);
+      }
+    }
+
+    // Beach mines: a landing-force man who steps on one sets it
+    // off. Axis men never trigger them — their own field, marked
+    // lanes. One detonation per mine, ever.
+    if (this.mines.length) {
+      for (const m of this.mines) {
+        if (!m.armed) continue;
+        const stepped = this.units.some((u) => u.side === "allies" && u.alive && !u.vehicle && dist(m.x, m.y, u.x, u.y) <= 11);
+        if (stepped) {
+          m.armed = false;
+          this.explode(m.x, m.y, 34, 55, "axis", "mine", null);
+        }
       }
     }
 
@@ -3533,7 +3685,19 @@ export class GameEngine {
   private moveToward(u: Unit, x: number, y: number, dt: number, speedMult = 1) {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
-    const sp = u.speed * speedMult * (u.pinned ? 0.35 : 1);
+    let sp = u.speed * speedMult * (u.pinned ? 0.35 : 1);
+    // The beach obstacle belt: picking through the hedgehogs
+    // slows the landing force and channels it into the lanes the
+    // MGs cover (Josh's suggestion, 2026-11-12). Landing force
+    // only — the defenders know their own belt.
+    if (u.side === "allies" && !u.vehicle && this.hedgehogs.length) {
+      for (const h of this.hedgehogs) {
+        if (dist(u.x, u.y, h.x, h.y) < h.r + 26) {
+          sp *= 0.55;
+          break;
+        }
+      }
+    }
     const step = sp * dt;
     const dx = ((x - u.x) / d) * step;
     const dy = ((y - u.y) / d) * step;
@@ -3847,6 +4011,15 @@ export class GameEngine {
       if (d < aoe) {
         this.damage(u, dmg * (1 - (d / aoe) * 0.6), sourceType, killerId);
         u.suppression = Math.min(100, u.suppression + 40);
+      } else if (sourceType === "mortar" && d < aoe + NEAR_MISS_BAND && !u.vehicle) {
+        // Near miss from a mortar shell: no wound, but the blast
+        // rattles him — suppression up, morale down, and his
+        // nerve needs the same quiet spell to recover as if he
+        // had been hit. Bunching up under mortars is dangerous
+        // even when the shells miss (Josh's suggestion, 2026-11-12).
+        u.suppression = Math.min(100, u.suppression + 30);
+        u.morale = Math.max(0, u.morale - 6);
+        u.lastHitT = this.elapsed;
       }
     }
     for (let i = 0; i < 18; i++) {
@@ -4265,6 +4438,7 @@ export class GameEngine {
     if (this.terrain) ctx.drawImage(this.terrain, 0, 0, this.terrain.width * PX, this.terrain.height * PX);
 
     this.drawCrates(ctx);
+    this.drawMines(ctx);
 
     // Fallen bodies stay where they dropped.
     for (const c of this.corpses) {
@@ -4433,12 +4607,12 @@ export class GameEngine {
     ctx.restore();
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    // Mortar warnings are drawn last, in screen space, so the fog of
-    // war can never hide them. There are no objective tags any more:
-    // no red diamonds / labels / off-screen arrows for the SS officer,
-    // MG42, mortar or flak — only the mortar warning circle below,
-    // which is a dodge warning, not a tag.
-    this.drawMortarWarnings(ctx);
+    // There are no objective tags and no mortar warnings any more:
+    // no red diamonds / labels / off-screen arrows for the SS
+    // officer, MG42, mortar or flak, and no pulsing red circle
+    // under an incoming shell either (Josh, 2026-11-12: the red
+    // indicators come out; a mortar round now lands with only its
+    // whistle, about a second before impact, as warning).
   }
 
   /** Smoke zones: a grey cloud on the ground that blocks line of
@@ -4463,10 +4637,30 @@ export class GameEngine {
     }
   }
 
-  /** Pulsing red warning circle under every incoming mortar shell for
-   * its whole 2.4s flight. This is the only on-screen marker left:
-   * no objective tags for any enemy — no red diamonds / labels /
-   * off-screen arrows for the SS officer, MG42, mortar or flak. */
+  /** Beach mines, drawn as what they are: a small dark disc in
+   * the sand with a pressure plate on top. Easy to miss at a
+   * glance, which is the point — but they are on the map to be
+   * seen by a careful eye, in explored ground only. A detonated
+   * mine leaves nothing to draw but the crater. */
+  private drawMines(ctx: CanvasRenderingContext2D) {
+    for (const m of this.mines) {
+      if (!m.armed) continue;
+      if (!this.explored[this.cellAt(m.x, m.y)]) continue;
+      const x = snap(m.x);
+      const y = snap(m.y);
+      ctx.fillStyle = "#211F19";
+      ctx.beginPath();
+      ctx.arc(x, y, 5 * PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#3B382C";
+      ctx.beginPath();
+      ctx.arc(x, y, 3 * PX, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = "#57543F";
+      ctx.fillRect(x - PX, y - PX, 2 * PX, 2 * PX);
+    }
+  }
+
   /** Supply crates, drawn so they read at a glance: a full crate
    * gets a gold glow, a gold border and the RP it holds written
    * above it; a looted one is a dark, empty, lidless box. Crates in
@@ -4511,40 +4705,38 @@ export class GameEngine {
     }
   }
 
-  private drawMortarWarnings(ctx: CanvasRenderingContext2D) {
-    const rect = this.canvas.getBoundingClientRect();
-    const dpr = this.canvas.width / Math.max(1, rect.width);
-    const { s, ox, oy } = this.view;
-    const toScreen = (x: number, y: number) => ({
-      x: ox + (x - this.cam.x) * s,
-      y: oy + (y - this.cam.y) * s,
-    });
-
-    // Mortar warning: pulsing red circle at the shell's impact point.
-    for (const p of this.projectiles) {
-      if (p.sourceType !== "mortar") continue;
-      const sp = toScreen(p.tx, p.ty);
-      const r = Math.max(10, p.aoe * s);
-      const pulse = 0.55 + 0.35 * Math.sin(this.elapsed * 10);
-      ctx.fillStyle = `rgba(226,74,74,${0.14 * pulse + 0.06})`;
-      ctx.beginPath();
-      ctx.arc(sp.x * dpr, sp.y * dpr, r * dpr, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = `rgba(226,74,74,${pulse})`;
-      ctx.lineWidth = Math.max(2, 2 * dpr);
-      ctx.beginPath();
-      ctx.arc(sp.x * dpr, sp.y * dpr, r * dpr, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = `rgba(255,120,120,${pulse})`;
-      ctx.font = `bold ${Math.max(12, 13 * dpr)}px sans-serif`;
-      ctx.textAlign = "center";
-      ctx.fillText("!", sp.x * dpr, sp.y * dpr + 4 * dpr);
-    }
-  }
-
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {
     // A deserter has left the field: nothing to draw, and no corpse.
     if (u.fled) return;
+    if (u.vehicle && u.enemyType === "truck") {
+      // The convoy truck: cab at the front (the way it faces),
+      // canvas-covered bed behind, wheels as dark blocks. No
+      // turret, no gun — just a target on wheels, with the same
+      // health bar the tanks get.
+      const fx = snap(u.x);
+      const fy = snap(u.y);
+      const flip = Math.cos(u.facing) < 0;
+      ctx.fillStyle = "#23231C";
+      ctx.fillRect(fx - 20, fy - 10, 40, 5);
+      ctx.fillRect(fx - 20, fy + 5, 40, 5);
+      ctx.fillStyle = "#6E6450";
+      const bedX = flip ? fx - 3 : fx - 19;
+      ctx.fillRect(bedX, fy - 8, 22, 16);
+      ctx.fillStyle = "#5D5342";
+      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 4 + r * 7, fy - 8, 2, 16);
+      ctx.fillStyle = "#4C4F45";
+      const cabX = flip ? fx - 17 : fx + 3;
+      ctx.fillRect(cabX, fy - 7, 15, 14);
+      ctx.fillStyle = "#2E3238";
+      ctx.fillRect(flip ? cabX + 1 : cabX + 10, fy - 5, 4, 10);
+      const w = 36;
+      const pct = Math.max(0, u.hp / u.maxHp);
+      ctx.fillStyle = "rgba(0,0,0,0.6)";
+      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
+      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      return;
+    }
     if (u.vehicle) {
       // A tank: hull, turret, barrel, tracks — a chunky pixel tank,
       // not a man. No pose and no morale bar, just a health bar above
