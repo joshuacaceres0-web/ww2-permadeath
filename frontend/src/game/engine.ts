@@ -1636,7 +1636,12 @@ export class GameEngine {
       deserted: this.deserted,
       lootRp: this.lootRp,
       survivors: this.units
-        .filter((u) => u.side === "allies" && u.alive && u.soldierId)
+        // Extracted men (a retreat's west-edge escapees) are alive
+        // on the roster by design, but extract() marks them
+        // alive=false on the field — without counting them here
+        // the filing drops them entirely: their kills earn no
+        // kill RP and none of their battle stats are credited.
+        .filter((u) => u.side === "allies" && (u.alive || u.extracted) && u.soldierId)
         .map((u) => ({
           soldierId: u.soldierId!,
           kills: u.kills,
