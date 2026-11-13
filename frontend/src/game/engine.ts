@@ -3787,7 +3787,10 @@ export class GameEngine {
         if (dead) break;
         for (const u of this.units) {
           if (!u.alive || u.side === b.side) continue;
-          if (dist(b.x, b.y, u.x, u.y) < UNIT_R + 2) {
+          // Vehicles are big targets now (a tank's hull is 96
+          // long): their hit circle matches the footprint
+          // instead of a man's.
+          if (dist(b.x, b.y, u.x, u.y) < (u.vehicle ? (u.enemyType === "panzer" || u.type === "tank" ? 21 : 18) : UNIT_R + 2)) {
             // Cover between shooter and target soaks the round — but
             // only cover on the shooter's side of the target, so a
             // flanking shot finds the open side. A stopped round
@@ -5189,47 +5192,51 @@ export class GameEngine {
       const fx = snap(w.x);
       const fy = snap(w.y);
       const age = this.elapsed - w.t0;
-      // Scorch.
+      // Scorch, sized to the wreck (the footprints match the
+      // live vehicles: tank 96, halftrack 76, truck 68 long).
+      const scorchW = w.kind === "halftrack" ? 96 : w.kind === "truck" ? 90 : 118;
+      const scorchH = w.kind === "halftrack" ? 46 : w.kind === "truck" ? 42 : 58;
       ctx.fillStyle = "rgba(12,10,8,0.55)";
-      ctx.fillRect(fx - 26, fy - 12, 52, 24);
+      ctx.fillRect(fx - scorchW / 2, fy - scorchH / 2, scorchW, scorchH);
       ctx.fillStyle = "rgba(12,10,8,0.35)";
-      ctx.fillRect(fx - 32, fy - 8, 64, 16);
+      ctx.fillRect(fx - scorchW / 2 - 7, fy - scorchH / 2 + 6, scorchW + 14, scorchH - 12);
       const char1 = "#1B1B15";
       const char2 = "#26241C";
       const char3 = "#12120D";
       if (w.kind === "halftrack") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 23, fy - 11, 46, 5);
-        ctx.fillRect(fx - 23, fy + 6, 46, 5);
+        ctx.fillRect(fx - 38, fy - 15, 76, 7);
+        ctx.fillRect(fx - 38, fy + 8, 76, 7);
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 21, fy - 8, 42, 16);
+        ctx.fillRect(fx - 35, fy - 11, 70, 22);
         ctx.fillStyle = char3;
-        const bayX = w.flip ? fx - 2 : fx - 19;
-        ctx.fillRect(bayX, fy - 6, 17, 12);
+        const bayX = w.flip ? fx - 3 : fx - 32;
+        ctx.fillRect(bayX, fy - 8, 29, 16);
         ctx.fillStyle = char2;
-        ctx.fillRect(w.flip ? fx - 20 : fx + 14, fy - 6, 6, 12);
+        ctx.fillRect(w.flip ? fx - 34 : fx + 22, fy - 10, 13, 20);
       } else if (w.kind === "truck") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 20, fy - 10, 40, 5);
-        ctx.fillRect(fx - 20, fy + 5, 40, 5);
+        ctx.fillRect(fx - 34, fy - 13, 68, 6);
+        ctx.fillRect(fx - 34, fy + 7, 68, 6);
         ctx.fillStyle = char1;
-        ctx.fillRect(w.flip ? fx - 3 : fx - 19, fy - 8, 22, 16);
+        ctx.fillRect(w.flip ? fx - 5 : fx - 33, fy - 10, 38, 20);
         ctx.fillStyle = char2;
-        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 3 : fx - 19) + 4 + r * 7, fy - 8, 2, 16);
+        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 5 : fx - 33) + 6 + r * 12, fy - 10, 3, 20);
         ctx.fillStyle = char3;
-        ctx.fillRect(w.flip ? fx - 17 : fx + 3, fy - 7, 15, 14);
+        ctx.fillRect(w.flip ? fx - 29 : fx + 5, fy - 9, 24, 18);
       } else {
         // Panzer or the player's Sherman: same charred shape.
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 18, fy - 6, 36, 12);
+        ctx.fillRect(fx - 48, fy - 20, 96, 10);
+        ctx.fillRect(fx - 48, fy + 10, 96, 10);
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 15, fy - 9, 30, 10);
+        ctx.fillRect(fx - 43, fy - 13, 86, 26);
         // Turret knocked askew, hatch blown open, barrel drooped.
         ctx.fillStyle = char2;
-        ctx.fillRect(fx - 5, fy - 15, 14, 8);
+        ctx.fillRect(fx - 10, fy - 22, 26, 13);
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 2, fy - 15, 6, 4);
-        ctx.fillRect(w.flip ? fx - 21 : fx + 8, fy - 8, 13, 2);
+        ctx.fillRect(fx - 5, fy - 22, 10, 6);
+        ctx.fillRect(w.flip ? fx - 42 : fx + 14, fy - 12, 28, 3);
       }
       // Embers in the first seconds, then just heat shimmer smoke.
       if (age < 5) {
@@ -5383,24 +5390,24 @@ export class GameEngine {
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 20, fy - 10, 40, 5);
-      ctx.fillRect(fx - 20, fy + 5, 40, 5);
+      ctx.fillRect(fx - 34, fy - 13, 68, 6);
+      ctx.fillRect(fx - 34, fy + 7, 68, 6);
       ctx.fillStyle = "#6E6450";
-      const bedX = flip ? fx - 3 : fx - 19;
-      ctx.fillRect(bedX, fy - 8, 22, 16);
+      const bedX = flip ? fx - 5 : fx - 33;
+      ctx.fillRect(bedX, fy - 10, 38, 20);
       ctx.fillStyle = "#5D5342";
-      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 4 + r * 7, fy - 8, 2, 16);
+      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 6 + r * 12, fy - 10, 3, 20);
       ctx.fillStyle = "#4C4F45";
-      const cabX = flip ? fx - 17 : fx + 3;
-      ctx.fillRect(cabX, fy - 7, 15, 14);
+      const cabX = flip ? fx - 29 : fx + 5;
+      ctx.fillRect(cabX, fy - 9, 24, 18);
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? cabX + 1 : cabX + 10, fy - 5, 4, 10);
-      const w = 36;
+      ctx.fillRect(flip ? cabX + 2 : cabX + 17, fy - 6, 5, 12);
+      const w = 54;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillRect(fx - w / 2, fy - 26, w, 4);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      ctx.fillRect(fx - w / 2, fy - 26, w * pct, 4);
       return;
     }
     if (u.vehicle && u.enemyType === "halftrack") {
@@ -5414,43 +5421,43 @@ export class GameEngine {
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 23, fy - 11, 46, 5);
-      ctx.fillRect(fx - 23, fy + 6, 46, 5);
+      ctx.fillRect(fx - 38, fy - 15, 76, 7);
+      ctx.fillRect(fx - 38, fy + 8, 76, 7);
       ctx.fillStyle = "#3B3B30";
-      for (let rwx = -18; rwx <= 18; rwx += 9) {
-        ctx.fillRect(fx + rwx, fy - 10, 4, 3);
-        ctx.fillRect(fx + rwx, fy + 7, 4, 3);
+      for (let rwx = -32; rwx <= 32; rwx += 11) {
+        ctx.fillRect(fx + rwx, fy - 14, 6, 4);
+        ctx.fillRect(fx + rwx, fy + 10, 6, 4);
       }
       // Hull.
       ctx.fillStyle = "#4C4F45";
-      ctx.fillRect(fx - 21, fy - 8, 42, 16);
+      ctx.fillRect(fx - 35, fy - 11, 70, 22);
       // Sloped nose at the front.
-      const noseX = flip ? fx - 21 : fx + 13;
+      const noseX = flip ? fx - 35 : fx + 22;
       ctx.fillStyle = "#565A4C";
-      ctx.fillRect(noseX, fy - 7, 8, 14);
+      ctx.fillRect(noseX, fy - 10, 13, 20);
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? noseX + 1 : noseX + 5, fy - 5, 2, 10);
+      ctx.fillRect(flip ? noseX + 2 : noseX + 8, fy - 7, 3, 14);
       // The open troop bay: darker floor, bench lines, helmets.
-      const bayX = flip ? fx - 2 : fx - 19;
+      const bayX = flip ? fx - 3 : fx - 32;
       ctx.fillStyle = "#33362E";
-      ctx.fillRect(bayX, fy - 6, 17, 12);
+      ctx.fillRect(bayX, fy - 8, 29, 16);
       ctx.fillStyle = "#3E4238";
-      ctx.fillRect(bayX + 2, fy - 6, 2, 12);
-      ctx.fillRect(bayX + 13, fy - 6, 2, 12);
+      ctx.fillRect(bayX + 3, fy - 8, 3, 16);
+      ctx.fillRect(bayX + 23, fy - 8, 3, 16);
       ctx.fillStyle = "#3A4526";
-      ctx.fillRect(bayX + 5, fy - 4, 4, 4);
-      ctx.fillRect(bayX + 10, fy + 1, 4, 4);
+      ctx.fillRect(bayX + 8, fy - 5, 6, 6);
+      ctx.fillRect(bayX + 17, fy + 2, 6, 6);
       // The mounted MG at the bay's front edge.
-      const mgX = flip ? fx - 6 : fx + 2;
+      const mgX = flip ? fx - 9 : fx + 4;
       ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(mgX, fy - 2, 3, 3);
-      ctx.fillRect(flip ? mgX - 7 : mgX + 3, fy - 1, 7, 1);
-      const w = 40;
+      ctx.fillRect(mgX, fy - 2, 4, 4);
+      ctx.fillRect(flip ? mgX - 11 : mgX + 4, fy - 1, 11, 2);
+      const w = 58;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillRect(fx - w / 2, fy - 27, w, 4);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      ctx.fillRect(fx - w / 2, fy - 27, w * pct, 4);
       return;
     }
     if (u.vehicle) {
@@ -5462,20 +5469,28 @@ export class GameEngine {
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       const ally = u.side === "allies";
+      // Track bands first, then the hull over them: 96 long,
+      // twice a man's width on screen, 40 deep.
       ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(fx - 18, fy - 6, 36, 12);
+      ctx.fillRect(fx - 48, fy - 20, 96, 10);
+      ctx.fillRect(fx - 48, fy + 10, 96, 10);
+      ctx.fillStyle = "#2C2C20";
+      for (let twx = -44; twx <= 44; twx += 11) {
+        ctx.fillRect(fx + twx, fy - 19, 6, 7);
+        ctx.fillRect(fx + twx, fy + 12, 6, 7);
+      }
       ctx.fillStyle = ally ? "#4A5A2E" : "#565650";
-      ctx.fillRect(fx - 15, fy - 9, 30, 10);
+      ctx.fillRect(fx - 43, fy - 13, 86, 26);
       ctx.fillStyle = ally ? "#5A6E3A" : "#6A6A66";
-      ctx.fillRect(fx - 7, fy - 14, 14, 8);
+      ctx.fillRect(fx - 14, fy - 11, 28, 16);
       ctx.fillStyle = "#2E2E20";
-      ctx.fillRect(flip ? fx - 23 : fx + 7, fy - 13, 16, 3);
-      const w = 36;
+      ctx.fillRect(flip ? fx - 44 : fx + 14, fy - 9, 30, 5);
+      const w = 66;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 22, w, 4);
+      ctx.fillRect(fx - w / 2, fy - 31, w, 5);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 22, w * pct, 4);
+      ctx.fillRect(fx - w / 2, fy - 31, w * pct, 5);
       return;
     }
     const isAlly = u.side === "allies";
