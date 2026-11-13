@@ -272,7 +272,9 @@ describe("radio calls gated by commander level", () => {
     expect(tank.side).toBe("allies");
     expect(tank.npc).toBe(true);
     // A tank has no nerve to lose: heavy damage leaves morale at 100.
-    e.damage(tank, 200, "rifle", null);
+    // (The stress hit comes from a panzer's gun: since the armour
+    // rule of 2026-11-13, rifle fire no longer dents a tank at all.)
+    e.damage(tank, 200, "panzer", null);
     expect(tank.hp).toBe(300);
     expect(tank.morale).toBe(100);
     expect(tank.broken).toBe(false);

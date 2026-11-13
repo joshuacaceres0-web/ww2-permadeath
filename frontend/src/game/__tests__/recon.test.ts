@@ -79,7 +79,7 @@ describe("recon and the sniper pairing", () => {
     recon.x = sniper.x + 60;
     recon.y = sniper.y;
     expect(e.reconPaired(sniper)).toBe(true);
-    expect(e.effRange(sniper)).toBe(400);
+    expect(e.effRange(sniper)).toBe(460);
     // The pairing is the Recon class only: a rifleman beside him does nothing.
     recon.x = sniper.x + 900;
     const rifle = e.units.find((u) => u.type === "rifleman" && !u.npc)!;
@@ -99,7 +99,7 @@ describe("recon and the sniper pairing", () => {
     expect(e.effRange(sniper)).toBe(260);
     recon.x = sniper.x + 50;
     recon.y = sniper.y;
-    expect(e.effRange(sniper)).toBe(400);
+    expect(e.effRange(sniper)).toBe(460);
   });
 
   it("a Recon in the trees is not spotted at normal range; in the open he is", async () => {

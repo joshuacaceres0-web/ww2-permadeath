@@ -367,3 +367,22 @@ input, textarea, select {
 @media (prefers-reduced-motion: reduce) {
   .map-route-draw, .map-route-fade, .map-poppy { animation: none; }
 }
+
+/* ---- Opening intro ---- */
+@keyframes intro-beat-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.intro-beat-in {
+  animation: intro-beat-in 0.45s steps(5) both;
+}
+@keyframes intro-line-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+.intro-line-in {
+  animation: intro-line-in 0.4s steps(4) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .intro-beat-in, .intro-line-in { animation: none; }
+}

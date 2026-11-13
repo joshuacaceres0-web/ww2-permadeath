@@ -1,8 +1,9 @@
 // @vitest-environment node
 // Vehicle scale (Josh, 2026-11-12): tanks were drawn at 46
 // wide while an infantry sprite is 48 — literally man-sized.
-// Vehicles now have a proper footprint: tank 96 long, halftrack
-// 76, truck 68, all wider than a man is tall on screen. This
+// Vehicles now have a proper footprint: tank 120 long,
+// halftrack 92, truck 80 (bumped up again 2026-11-13), all
+// wider than a man is tall on screen. This
 // test renders real frames through a recording canvas context
 // and measures the geometry that actually gets drawn.
 import { describe, expect, it } from "vitest";
@@ -151,9 +152,9 @@ describe("vehicles draw bigger than infantry", () => {
     expect(manW).toBe(48);
     const tankW = widestRectNear(canvas.rects, pz.x, pz.y, 70);
     const halfW = widestRectNear(canvas.rects, half.x, half.y, 60);
-    expect(tankW).toBeGreaterThanOrEqual(90);
+    expect(tankW).toBeGreaterThanOrEqual(110);
     expect(tankW).toBeGreaterThan(manW * 1.8);
-    expect(halfW).toBeGreaterThanOrEqual(70);
+    expect(halfW).toBeGreaterThanOrEqual(85);
     expect(halfW).toBeGreaterThan(manW * 1.4);
     expect(halfW).toBeLessThan(tankW);
   });

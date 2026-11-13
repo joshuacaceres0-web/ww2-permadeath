@@ -122,7 +122,7 @@ describe("enemy tanks", () => {
     expect(pz.hp).toBe(400);
     expect(pz.vehicle).toBe(true);
     expect(pz.speed).toBe(30);
-    expect(pz.range).toBe(300);
+    expect(pz.range).toBe(340); // ranges pass 2026-11-13: tank guns reach past rifles
     expect(pz.threat).toBe("HIGH");
   });
 

@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import StartScene from "@/components/StartScene";
+import OpeningIntro from "@/components/OpeningIntro";
 import { onMenuClick } from "@/game/sfx";
 import { useMusic } from "@/game/music";
 import { apiGet, apiPost } from "@/lib/api";
@@ -20,6 +21,23 @@ export default function StartMenu() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // The opening intro plays once per browser session; after that
+  // the menu comes up straight away.
+  const [introDone, setIntroDone] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem("v44:intro-seen") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const finishIntro = () => {
+    try {
+      sessionStorage.setItem("v44:intro-seen", "1");
+    } catch {
+      /* storage unavailable: the intro simply replays next load */
+    }
+    setIntroDone(true);
+  };
   const { data: save, isLoading, isError } = useQuery({
     queryKey: ["save-summary"],
     queryFn: () => apiGet<SaveSummary>("/save/summary"),
@@ -172,6 +190,8 @@ export default function StartMenu() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {!introDone && <OpeningIntro onDone={finishIntro} />}
     </div>
   );
 }

@@ -103,6 +103,7 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
     case "panzerfaust": return { pal: "wehr", head: "stahl", weapon: "panzerfaust" };
     case "flak": return { pal: "wehr", head: "stahl", weapon: "flak" };
     case "scharfschutze": return { pal: "sniperDe", head: "stahl", weapon: "sniper" };
+    case "spotter": return { pal: "sniperDe", head: "stahl", weapon: "rifle" };
     case "mortar": return { pal: "wehr", head: "stahl", weapon: "mortar" };
     case "fallschirmjager": return { pal: "para", head: "para", weapon: "rifle" };
     case "medic": return { pal: "wehr", head: "stahl", weapon: "pistol" };
@@ -133,6 +134,15 @@ export const RECON_PAIR_DIST = 90;
 export const SNIPER_SOLO_RANGE = 260;
 export const RECON_SPOT_FACTOR = 0.55;
 export const RECON_REVEAL_SECONDS = 3;
+/** Ranges pass (2026-11-13): ranges and vision were rescaled per
+ * class for the 4000-wide maps (data.ts — snipers longest, MG and
+ * mortar long, rifles mid, pistol and SMG short; the two spotters,
+ * allied Recon and axis Beobachter, hold the longest vision at
+ * 500). A target who is prone or in foliage is spotted at 0.7x
+ * the normal distance: harder to acquire, in autoTarget and in
+ * the camp-and-defend spot check alike. A hidden spotter (above)
+ * is harder still at 0.55x. */
+export const CONCEAL_SPOT_FACTOR = 0.7;
 /** Engineer (Josh, 2026-11-12): the detector finds mines
  * within 70; a revealed mine within reach gets four seconds of
  * still, exposed work to clear; he walks to a revealed mine
@@ -144,6 +154,30 @@ export const ENGINEER_SEEK_RANGE = 130;
 /** Reloading (Josh, 2026-11-13): a pinned man's hands shake,
  * so his reload takes half again as long. */
 export const RELOAD_PINNED_MULT = 1.5;
+
+/** Tank armour and turrets (Josh, 2026-11-13): a tank's hide
+ * turns small arms — only tank guns, anti-tank weapons and
+ * explosives hurt a panzer or the Sherman. A halftrack is
+ * armoured but lighter: small arms still bite, at half
+ * strength (Muse's call, flagged to Josh). Trucks are soft
+ * and take everything, as before. */
+export const ARMOR_SOURCES: ReadonlySet<string> = new Set([
+  "panzer", "tank", "at", "panzerfaust", "rocket",
+  "mortar", "artillery", "mine", "grenade",
+]);
+export const TANK_HIT_R = 26;
+export const VEHICLE_HIT_R = 22;
+/** Turret traverse, radians per second: a pintle MG swings
+ * fast, a Sherman's turret faster than a Panzer's. A tank
+ * only fires when its turret is lined up on the target. */
+export const TURRET_TRAVERSE: Record<string, number> = {
+  panzer: 1.1, tank: 1.5, halftrack: 3.2,
+};
+export const TURRET_FIRE_TOLERANCE = 0.07;
+/** A tank with enemy footmen this close backs away at
+ * reverse speed while its turret keeps working. */
+export const TANK_REVERSE_RANGE = 70;
+export const TANK_REVERSE_MULT = 0.4;
 export const RECON_CD = 30;
 export const MORTAR_CD = 25;
 export const SMOKE_CD = 45;
@@ -348,6 +382,10 @@ interface Unit {
   reloadT: number;
   reloadTime: number;
   reloadTotal: number;
+  /** Turret facing for a tank or a halftrack's MG, in
+   * radians: it traverses on its own clock, independent of
+   * the hull, and the gun only fires when it is lined up. */
+  turret: number;
   kills: number;
   alive: boolean;
   walk: number;
@@ -702,6 +740,21 @@ function hashStr(s: string): number {
 
 function dist(ax: number, ay: number, bx: number, by: number): number {
   return Math.hypot(ax - bx, ay - by);
+}
+
+/** Signed smallest turn from angle a to angle b, in radians. */
+function angDiff(a: number, b: number): number {
+  let d = (b - a) % (Math.PI * 2);
+  if (d > Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+
+/** Rotate angle a toward b by at most step radians. */
+function turnToward(a: number, b: number, step: number): number {
+  const d = angDiff(a, b);
+  if (Math.abs(d) <= step) return b;
+  return a + Math.sign(d) * step;
 }
 
 const prefersReducedMotion =
@@ -1999,6 +2052,30 @@ export class GameEngine {
    * Returns true/false when the anchor decides this tick, null to
    * run the normal prey logic. The leader himself runs the normal
    * logic: he is the one advancing the squad. */
+  /** A Beobachter answers to his Scharfschutze the way an NPC
+   * answers to his squad leader (ranges pass, 2026-11-13): he
+   * stays inside pairing distance so the sniper keeps his full
+   * range, and fires his carbine from the man's shoulder. When
+   * his sniper falls he has no anchor left and fights on as a
+   * rifleman — null hands him back to the normal prey logic. */
+  private spotterMove(u: Unit, dt: number): boolean | null {
+    if (u.enemyType !== "spotter") return null;
+    let sniper: Unit | null = null;
+    let best = Infinity;
+    for (const a of this.units) {
+      if (a.side !== "axis" || !a.alive || a.enemyType !== "scharfschutze") continue;
+      const d = dist(u.x, u.y, a.x, a.y);
+      if (d < best) {
+        best = d;
+        sniper = a;
+      }
+    }
+    if (!sniper) return null;
+    if (best > RECON_PAIR_DIST - 15) return this.chaseTo(u, sniper.x, sniper.y, dt);
+    u.chase = [];
+    return false;
+  }
+
   private npcAnchorMove(u: Unit, prey: Unit | null, dt: number): boolean | null {
     if (this.stalemateActive) return null;
     if (u.npcSquad === undefined) return null;
@@ -2477,7 +2554,7 @@ export class GameEngine {
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
-        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, kills: 0, alive: true, walk: 0,
+        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, turret: 0, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
         stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
@@ -3283,35 +3360,55 @@ export class GameEngine {
     return inRange.reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
   }
 
-  /** A Recon of his own side within pairing distance, alive —
-   * the man who feeds the sniper his targets. */
+  /** A spotter of his own side within pairing distance, alive —
+   * the man who feeds the sniper his targets. For the player's
+   * snipers that is a Recon; for a Scharfschutze it is his
+   * Beobachter (ranges pass, 2026-11-13: the enemy fields
+   * spotters of its own now, and the rule runs the same way). */
   reconPaired(u: Unit): boolean {
     return this.units.some(
-      (a) => a.side === u.side && a.alive && a.id !== u.id && a.type === "recon" && dist(u.x, u.y, a.x, a.y) <= RECON_PAIR_DIST,
+      (a) =>
+        a.side === u.side &&
+        a.alive &&
+        a.id !== u.id &&
+        (a.type === "recon" || a.enemyType === "spotter") &&
+        dist(u.x, u.y, a.x, a.y) <= RECON_PAIR_DIST,
     );
   }
 
   /** The range this unit can actually engage at. A sniper (the
-   * player's or an NPC's) reaches his full range only with a
-   * Recon paired near him; alone he self-spots at solo range.
-   * Everyone else fights at their listed range. (Enemy snipers
-   * keep full range until the enemy fields spotters of its own:
-   * the ranges pass owns that half of the rule.) */
+   * player's, an NPC's, or a Scharfschutze) reaches his full
+   * range only with a spotter paired near him; alone he
+   * self-spots at solo range. Everyone else fights at their
+   * listed range. */
   effRange(u: Unit): number {
-    if (u.side === "allies" && u.type === "sniper" && !this.reconPaired(u)) {
+    const sniperClass = u.type === "sniper" || u.enemyType === "scharfschutze";
+    if (sniperClass && !this.reconPaired(u)) {
       return Math.min(u.range, SNIPER_SOLO_RANGE);
     }
     return u.range;
   }
 
-  /** A Recon concealed in foliage: in the green, and he has not
-   * fired in the last few seconds to give himself away. The
-   * enemy spots him at a fraction of the normal distance. His
-   * own spotting is unaffected — that is the whole point of him. */
+  /** A spotter concealed in foliage: in the green, and he has
+   * not fired in the last few seconds to give himself away. The
+   * other side spots him at a fraction of the normal distance.
+   * His own spotting is unaffected — that is the whole point of
+   * him. True for the allied Recon and the axis Beobachter
+   * alike. */
   reconHidden(u: Unit): boolean {
-    if (u.side !== "allies" || u.type !== "recon" || !u.alive) return false;
+    const spotterClass = (u.side === "allies" && u.type === "recon") || u.enemyType === "spotter";
+    if (!spotterClass || !u.alive) return false;
     if (!this.inFoliage(u)) return false;
     return u.lastShotT === undefined || this.elapsed - u.lastShotT > RECON_REVEAL_SECONDS;
+  }
+
+  /** A target who is hard to pick out: prone, or standing in
+   * foliage. Searchers acquire him at CONCEAL_SPOT_FACTOR of
+   * their normal reach. Vehicles are never concealed — too big
+   * to hide. A hidden spotter (above) is harder still and takes
+   * precedence where both apply. */
+  concealedTarget(u: Unit): boolean {
+    return u.alive && !u.vehicle && (u.prone || this.inFoliage(u));
   }
 
   // ---------------- spawning ----------------
@@ -3389,6 +3486,7 @@ export class GameEngine {
         reloadT: 0,
         reloadTime: spec.reloadTime,
         reloadTotal: 0,
+        turret: 0,
         kills: 0,
         alive: true,
         walk: 0,
@@ -3473,6 +3571,7 @@ export class GameEngine {
           reloadT: 0,
           reloadTime: def.reloadTime,
           reloadTotal: 0,
+          turret: Math.PI,
           kills: 0,
           alive: true,
           walk: 0,
@@ -3684,6 +3783,17 @@ export class GameEngine {
         // spawn instead of camping. Statics stay put (they cannot
         // move), and the wave 1 garrison keeps holding its trench.
         if (index > 0 && !isStatic) u.aggressive = true;
+        // A Scharfschutze never takes the field alone (ranges
+        // pass, 2026-11-13): his Beobachter spotter spawns at his
+        // shoulder, and the pair works like the player's Recon
+        // and sniper — full range while the spotter lives and
+        // stays near, solo range the moment he falls.
+        if (spec.type === "scharfschutze") {
+          const sx = Math.max(24, Math.min(MAP_W - 24, x + 30));
+          const sy = Math.max(24, Math.min(MAP_H - 24, y + (i % 2 === 0 ? 34 : -34)));
+          const sp = this.spawnEnemyUnit("spotter", sx, sy, rng, false);
+          if (index > 0) sp.aggressive = true;
+        }
       }
     }
     // The airborne convoy itself (Josh's spec, 2026-11-12,
@@ -4339,7 +4449,15 @@ export class GameEngine {
         // clear path. At the far east edge it holds and fires.
         const prey = this.nearestAlly(u);
         const inRange = prey && dist(u.x, u.y, prey.x, prey.y) <= this.effRange(u) * 0.9 && this.los(u, prey);
-        if (inRange) {
+        const crowd = this.closestFootman(u, TANK_REVERSE_RANGE);
+        if (crowd) {
+          // Footmen crowding the Sherman (Josh, 2026-11-13):
+          // she backs down the road at reverse speed, turret
+          // still working, rather than sit and be swarmed.
+          const tx = Math.max(30, u.x - 120);
+          this.moveToward(u, tx, roadYAt(tx), dt, TANK_REVERSE_MULT);
+          moving = true;
+        } else if (inRange) {
           u.chase = []; // hold and fire from where it stands
         } else if (u.x < MAP_W - 120) {
           // Steer toward the road 120 units ahead, so it follows the
@@ -4400,6 +4518,15 @@ export class GameEngine {
             moving = nm;
           }
         }
+        // An enemy spotter answers to his sniper the same way:
+        // glued to the man's shoulder so the pair keeps working.
+        if (u.side === "axis" && u.enemyType === "spotter") {
+          const sm = this.spotterMove(u, dt);
+          if (sm !== null) {
+            skipPrey = true;
+            moving = sm;
+          }
+        }
         if (prey && !skipPrey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           // Camp and defend: an axis unit holds its ground until it
@@ -4412,8 +4539,26 @@ export class GameEngine {
           // its prey is a wounded man on its own side, not the player,
           // so it moves to heal regardless.
           const isEnemyPrey = prey.side !== u.side;
-          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision * (isEnemyPrey && this.reconHidden(prey) ? RECON_SPOT_FACTOR : 1) && this.los(u, prey));
-          if (!spotted) {
+          const spotFactor = !isEnemyPrey
+            ? 1
+            : this.reconHidden(prey)
+              ? RECON_SPOT_FACTOR
+              : this.concealedTarget(prey)
+                ? CONCEAL_SPOT_FACTOR
+                : 1;
+          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision * spotFactor && this.los(u, prey));
+          // Tank reversing (Josh, 2026-11-13): enemy footmen
+          // crowding a tank or halftrack inside 70 make it
+          // back away at reverse speed while its turret keeps
+          // working — armour does not sit still to be swarmed.
+          const crowd = u.vehicle && this.turretSpeed(u) > 0 ? this.closestFootman(u, TANK_REVERSE_RANGE) : null;
+          if (crowd) {
+            const dx = u.x - crowd.x;
+            const dy = u.y - crowd.y;
+            const len = Math.hypot(dx, dy) || 1;
+            this.moveToward(u, u.x + (dx / len) * 90, u.y + (dy / len) * 90, dt, TANK_REVERSE_MULT);
+            moving = true;
+          } else if (!spotted) {
             // Camping, but not frozen: patrol slowly around the
             // garrison home. A static gun or a vehicle never patrols.
             if (u.side === "axis" && !u.isStatic && !u.vehicle) {
@@ -4705,6 +4850,19 @@ export class GameEngine {
         }
       }
 
+      // Turret traverse (Josh, 2026-11-13): a tank's gun lives
+      // on its own clock. It swings toward the current target
+      // at its traverse rate; with no target it scans slowly
+      // to either side of the hull's facing. The fire check
+      // below only lets it shoot once the barrel is lined up.
+      const tSpeed = this.turretSpeed(u);
+      if (tSpeed > 0) {
+        const want = focus
+          ? Math.atan2(focus.y - u.y, focus.x - u.x)
+          : u.facing + Math.sin(this.elapsed * 0.45 + u.id * 1.7) * 0.7;
+        u.turret = turnToward(u.turret, want, tSpeed * dt);
+      }
+
       // Fire.
       u.cooldown -= dt;
       if (u.burst > 0 && u.burstTarget) {
@@ -4739,7 +4897,7 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && u.reloadT <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
+      } else if (u.cooldown <= 0 && u.reloadT <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus) && (tSpeed === 0 || Math.abs(angDiff(u.turret, Math.atan2(focus.y - u.y, focus.x - u.x))) <= TURRET_FIRE_TOLERANCE)) {
         // A pinned man in the open keeps his head down and cannot
         // fire. A pinned man IN COVER still shoots back, at a
         // slower rate: before this, rounds stopped by his cover
@@ -4838,10 +4996,10 @@ export class GameEngine {
         if (dead) break;
         for (const u of this.units) {
           if (!u.alive || u.side === b.side) continue;
-          // Vehicles are big targets now (a tank's hull is 96
-          // long): their hit circle matches the footprint
-          // instead of a man's.
-          if (dist(b.x, b.y, u.x, u.y) < (u.vehicle ? (u.enemyType === "panzer" || u.type === "tank" ? 21 : 18) : UNIT_R + 2)) {
+          // Vehicles are big targets (a tank's hull is 120
+          // long since the 2026-11-13 size bump): their hit
+          // circle matches the footprint instead of a man's.
+          if (dist(b.x, b.y, u.x, u.y) < (u.vehicle ? (u.enemyType === "panzer" || u.type === "tank" ? TANK_HIT_R : VEHICLE_HIT_R) : UNIT_R + 2)) {
             // Cover between shooter and target soaks the round — but
             // only cover on the shooter's side of the target, so a
             // flanking shot finds the open side. A stopped round
@@ -4890,7 +5048,10 @@ export class GameEngine {
               break;
             }
             this.damage(u, b.dmg, b.sourceType, b.killerId);
-            this.bloodFx(b.x, b.y, b.vx, b.vy);
+            // A vehicle does not bleed: rounds strike sparks
+            // off the steel, turned away by the armour or not.
+            if (u.vehicle) this.armorSpark(b.x, b.y);
+            else this.bloodFx(b.x, b.y, b.vx, b.vy);
             this.suppressArea(b.x, b.y, b.side, b.suppress);
             dead = true;
             break;
@@ -5015,9 +5176,15 @@ export class GameEngine {
     for (const e of this.units) {
       if (e.side === u.side || !e.alive) continue;
       const d = dist(u.x, u.y, e.x, e.y);
-      // A hidden Recon is spotted at a fraction of the distance:
-      // the searcher's reach against him shrinks, nobody else's.
-      const cap = u.side === "axis" && this.reconHidden(e) ? range * RECON_SPOT_FACTOR : range * 1.05;
+      // A concealed target is spotted at a fraction of the
+      // distance: the searcher's reach against him shrinks,
+      // nobody else's. A hidden spotter (0.55x) is harder to
+      // pick out than a merely prone or in-foliage man (0.7x).
+      const cap = this.reconHidden(e)
+        ? range * RECON_SPOT_FACTOR
+        : this.concealedTarget(e)
+          ? range * CONCEAL_SPOT_FACTOR
+          : range * 1.05;
       if (d < bestD && d <= cap && this.los(u, e)) {
         // AT men pick armor over infantry when both are in reach.
         if (u.type === "at" && best && best.vehicle && !e.vehicle) continue;
@@ -5373,8 +5540,13 @@ export class GameEngine {
     }
     if (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]) sfx(u.type === "mg" || u.enemyType === "mg42" || u.enemyType === "grenadier" ? "mg" : "shot");
     const ang = Math.atan2(ty - u.y, tx - u.x) + (Math.random() - 0.5) * spread * 2;
-    const mx = u.x + Math.cos(u.facing) * 14;
-    const my = u.y + Math.sin(u.facing) * 14;
+    // A turreted vehicle fires from the end of its barrel,
+    // which rides on the turret, not the hull.
+    const turreted = u.vehicle && (TURRET_TRAVERSE[u.enemyType ?? u.type] ?? 0) > 0;
+    const mAng = turreted ? u.turret : u.facing;
+    const mLen = turreted ? 42 : 14;
+    const mx = u.x + Math.cos(mAng) * mLen;
+    const my = u.y + Math.sin(mAng) * mLen;
     this.bullets.push({
       ox: u.x,
       oy: u.y,
@@ -5411,8 +5583,54 @@ export class GameEngine {
     u.morale = Math.max(0, u.morale - amount * (u.coward ? 2 : 1));
   }
 
+  /** "tank" for a panzer or the Sherman, "halftrack" for the
+   * Sd.Kfz. 251, null for everything else (trucks are soft). */
+  private armorClass(u: Unit): "tank" | "halftrack" | null {
+    if (!u.vehicle) return null;
+    if (u.enemyType === "panzer" || u.type === "tank") return "tank";
+    if (u.enemyType === "halftrack") return "halftrack";
+    return null;
+  }
+
+  /** Turret traverse rate for a vehicle, 0 when it has no
+   * traversing gun (a truck, a man's weapon). */
+  private turretSpeed(u: Unit): number {
+    if (!u.vehicle) return 0;
+    return TURRET_TRAVERSE[u.enemyType ?? u.type] ?? 0;
+  }
+
+  /** The nearest living enemy footman (never a vehicle)
+   * within range of u, or null: what makes a tank reverse. */
+  private closestFootman(u: Unit, range: number): Unit | null {
+    let best: Unit | null = null;
+    let bd = range;
+    for (const o of this.units) {
+      if (!o.alive || o.side === u.side || o.vehicle) continue;
+      const d = dist(u.x, u.y, o.x, o.y);
+      if (d < bd) { bd = d; best = o; }
+    }
+    return best;
+  }
+
+  /** Sparks struck off armour where a round hit steel. */
+  private armorSpark(x: number, y: number) {
+    for (let i = 0; i < 5; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 30 + Math.random() * 70;
+      this.particles.push({ x, y, vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp, life: 0.3, max: 0.3, size: 2, kind: "spark" });
+    }
+    this.particles.push({ x, y, vx: 0, vy: -8, life: 0.5, max: 0.5, size: 3, kind: "smoke" });
+  }
+
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
+    // Tank armour (Josh, 2026-11-13): small arms do nothing
+    // to a tank — only tank guns, anti-tank weapons and
+    // explosives get through (ARMOR_SOURCES). A halftrack's
+    // lighter plate lets small arms bite at half strength.
+    const armor = this.armorClass(u);
+    if (armor === "tank" && !ARMOR_SOURCES.has(sourceType)) return;
+    if (armor === "halftrack" && !ARMOR_SOURCES.has(sourceType)) dmg = Math.floor(dmg / 2);
     // A Recon's mark: the squad's fire on a marked man runs
     // heavier, and the first hit on an ambush mark springs it
     // hardest of all, once.
@@ -6445,9 +6663,9 @@ export class GameEngine {
       const fy = snap(w.y);
       const age = this.elapsed - w.t0;
       // Scorch, sized to the wreck (the footprints match the
-      // live vehicles: tank 96, halftrack 76, truck 68 long).
-      const scorchW = w.kind === "halftrack" ? 96 : w.kind === "truck" ? 90 : 118;
-      const scorchH = w.kind === "halftrack" ? 46 : w.kind === "truck" ? 42 : 58;
+      // live vehicles: tank 120, halftrack 92, truck 80 long).
+      const scorchW = w.kind === "halftrack" ? 114 : w.kind === "truck" ? 100 : 146;
+      const scorchH = w.kind === "halftrack" ? 56 : w.kind === "truck" ? 50 : 72;
       ctx.fillStyle = "rgba(12,10,8,0.55)";
       ctx.fillRect(fx - scorchW / 2, fy - scorchH / 2, scorchW, scorchH);
       ctx.fillStyle = "rgba(12,10,8,0.35)";
@@ -6457,38 +6675,38 @@ export class GameEngine {
       const char3 = "#12120D";
       if (w.kind === "halftrack") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 38, fy - 15, 76, 7);
-        ctx.fillRect(fx - 38, fy + 8, 76, 7);
+        ctx.fillRect(fx - 46, fy - 20, 92, 9);
+        ctx.fillRect(fx - 46, fy + 11, 92, 9);
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 35, fy - 11, 70, 22);
+        ctx.fillRect(fx - 43, fy - 14, 86, 28);
         ctx.fillStyle = char3;
-        const bayX = w.flip ? fx - 3 : fx - 32;
-        ctx.fillRect(bayX, fy - 8, 29, 16);
+        const bayX = w.flip ? fx - 4 : fx - 39;
+        ctx.fillRect(bayX, fy - 10, 35, 20);
         ctx.fillStyle = char2;
-        ctx.fillRect(w.flip ? fx - 34 : fx + 22, fy - 10, 13, 20);
+        ctx.fillRect(w.flip ? fx - 41 : fx + 27, fy - 13, 16, 26);
       } else if (w.kind === "truck") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 34, fy - 13, 68, 6);
-        ctx.fillRect(fx - 34, fy + 7, 68, 6);
+        ctx.fillRect(fx - 40, fy - 16, 80, 7);
+        ctx.fillRect(fx - 40, fy + 9, 80, 7);
         ctx.fillStyle = char1;
-        ctx.fillRect(w.flip ? fx - 5 : fx - 33, fy - 10, 38, 20);
+        ctx.fillRect(w.flip ? fx - 6 : fx - 39, fy - 12, 45, 24);
         ctx.fillStyle = char2;
-        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 5 : fx - 33) + 6 + r * 12, fy - 10, 3, 20);
+        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 6 : fx - 39) + 7 + r * 14, fy - 12, 3, 24);
         ctx.fillStyle = char3;
-        ctx.fillRect(w.flip ? fx - 29 : fx + 5, fy - 9, 24, 18);
+        ctx.fillRect(w.flip ? fx - 34 : fx + 6, fy - 11, 28, 22);
       } else {
         // Panzer or the player's Sherman: same charred shape.
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 48, fy - 20, 96, 10);
-        ctx.fillRect(fx - 48, fy + 10, 96, 10);
+        ctx.fillRect(fx - 60, fy - 24, 120, 12);
+        ctx.fillRect(fx - 60, fy + 12, 120, 12);
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 43, fy - 13, 86, 26);
+        ctx.fillRect(fx - 54, fy - 16, 108, 32);
         // Turret knocked askew, hatch blown open, barrel drooped.
         ctx.fillStyle = char2;
-        ctx.fillRect(fx - 10, fy - 22, 26, 13);
+        ctx.fillRect(fx - 14, fy - 27, 34, 16);
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 5, fy - 22, 10, 6);
-        ctx.fillRect(w.flip ? fx - 42 : fx + 14, fy - 12, 28, 3);
+        ctx.fillRect(fx - 7, fy - 27, 13, 7);
+        ctx.fillRect(w.flip ? fx - 52 : fx + 18, fy - 14, 34, 4);
       }
       // Embers in the first seconds, then just heat shimmer smoke.
       if (age < 5) {
@@ -6656,107 +6874,169 @@ export class GameEngine {
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 34, fy - 13, 68, 6);
-      ctx.fillRect(fx - 34, fy + 7, 68, 6);
+      ctx.fillRect(fx - 40, fy - 16, 80, 7);
+      ctx.fillRect(fx - 40, fy + 9, 80, 7);
       ctx.fillStyle = "#6E6450";
-      const bedX = flip ? fx - 5 : fx - 33;
-      ctx.fillRect(bedX, fy - 10, 38, 20);
+      const bedX = flip ? fx - 6 : fx - 39;
+      ctx.fillRect(bedX, fy - 12, 45, 24);
       ctx.fillStyle = "#5D5342";
-      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 6 + r * 12, fy - 10, 3, 20);
+      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 7 + r * 14, fy - 12, 3, 24);
       ctx.fillStyle = "#4C4F45";
-      const cabX = flip ? fx - 29 : fx + 5;
-      ctx.fillRect(cabX, fy - 9, 24, 18);
+      const cabX = flip ? fx - 34 : fx + 6;
+      ctx.fillRect(cabX, fy - 11, 28, 22);
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? cabX + 2 : cabX + 17, fy - 6, 5, 12);
-      const w = 54;
+      ctx.fillRect(flip ? cabX + 2 : cabX + 20, fy - 7, 6, 14);
+      const w = 64;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 26, w, 4);
+      ctx.fillRect(fx - w / 2, fy - 30, w, 4);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 26, w * pct, 4);
+      ctx.fillRect(fx - w / 2, fy - 30, w * pct, 4);
       return;
     }
     if (u.vehicle && u.enemyType === "halftrack") {
-      // The Sd.Kfz. 251 halftrack, drawn like the tanks: track
-      // bands with road wheels, a sloped nose at the front (the
-      // way it faces), the open troop bay behind with bench
-      // lines and the crew's helmets, and the mounted MG over
-      // the bay's front edge. German gray-green, health bar
-      // above like the tanks.
+      // The Sd.Kfz. 251 halftrack, drawn like the tanks and
+      // sized up with them (Josh, 2026-11-13): 92 long, track
+      // bands with road wheels, a sloped nose at the front
+      // (the way it faces), the open troop bay behind with
+      // bench lines and the crew's helmets, and the mounted
+      // MG on a pivot at the bay's front edge — the gun
+      // traverses on u.turret like a tank's. German
+      // gray-green, health bar above like the tanks.
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 38, fy - 15, 76, 7);
-      ctx.fillRect(fx - 38, fy + 8, 76, 7);
+      ctx.fillRect(fx - 46, fy - 20, 92, 9);
+      ctx.fillRect(fx - 46, fy + 11, 92, 9);
       ctx.fillStyle = "#3B3B30";
-      for (let rwx = -32; rwx <= 32; rwx += 11) {
-        ctx.fillRect(fx + rwx, fy - 14, 6, 4);
-        ctx.fillRect(fx + rwx, fy + 10, 6, 4);
+      for (let rwx = -40; rwx <= 38; rwx += 12) {
+        ctx.fillRect(fx + rwx, fy - 19, 7, 5);
+        ctx.fillRect(fx + rwx, fy + 12, 7, 5);
       }
       // Hull.
       ctx.fillStyle = "#4C4F45";
-      ctx.fillRect(fx - 35, fy - 11, 70, 22);
+      ctx.fillRect(fx - 43, fy - 14, 86, 28);
       // Sloped nose at the front.
-      const noseX = flip ? fx - 35 : fx + 22;
+      const noseX = flip ? fx - 43 : fx + 27;
       ctx.fillStyle = "#565A4C";
-      ctx.fillRect(noseX, fy - 10, 13, 20);
+      ctx.fillRect(noseX, fy - 13, 16, 26);
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? noseX + 2 : noseX + 8, fy - 7, 3, 14);
+      ctx.fillRect(flip ? noseX + 2 : noseX + 10, fy - 9, 4, 18);
       // The open troop bay: darker floor, bench lines, helmets.
-      const bayX = flip ? fx - 3 : fx - 32;
+      const bayX = flip ? fx - 4 : fx - 39;
       ctx.fillStyle = "#33362E";
-      ctx.fillRect(bayX, fy - 8, 29, 16);
+      ctx.fillRect(bayX, fy - 10, 35, 20);
       ctx.fillStyle = "#3E4238";
-      ctx.fillRect(bayX + 3, fy - 8, 3, 16);
-      ctx.fillRect(bayX + 23, fy - 8, 3, 16);
+      ctx.fillRect(bayX + 4, fy - 10, 3, 20);
+      ctx.fillRect(bayX + 28, fy - 10, 3, 20);
       ctx.fillStyle = "#3A4526";
-      ctx.fillRect(bayX + 8, fy - 5, 6, 6);
-      ctx.fillRect(bayX + 17, fy + 2, 6, 6);
-      // The mounted MG at the bay's front edge.
-      const mgX = flip ? fx - 9 : fx + 4;
+      ctx.fillRect(bayX + 10, fy - 6, 7, 7);
+      ctx.fillRect(bayX + 20, fy + 3, 7, 7);
+      // The mounted MG on its pivot, turned on u.turret.
+      const mgX = flip ? fx - 11 : fx + 5;
+      ctx.save();
+      ctx.translate(mgX, fy);
+      ctx.rotate(u.turret);
+      ctx.fillStyle = "#3A3D33";
+      ctx.fillRect(-3, -7, 5, 14);
       ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(mgX, fy - 2, 4, 4);
-      ctx.fillRect(flip ? mgX - 11 : mgX + 4, fy - 1, 11, 2);
-      const w = 58;
+      ctx.fillRect(0, -2, 20, 4);
+      ctx.fillRect(-4, -3, 5, 6);
+      ctx.restore();
+      const w = 72;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 27, w, 4);
+      ctx.fillRect(fx - w / 2, fy - 32, w, 4);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 27, w * pct, 4);
+      ctx.fillRect(fx - w / 2, fy - 32, w * pct, 4);
       return;
     }
     if (u.vehicle) {
-      // A tank: hull, turret, barrel, tracks — a chunky pixel tank,
-      // not a man. No pose and no morale bar, just a health bar above
-      // it. Allied olive for the Sherman, German gray for the Panzer,
-      // so the two are easy to tell apart at a glance.
+      // A tank, redrawn bigger (Josh, 2026-11-13): a 120-long
+      // hull on track bands, and a turret that turns on its own
+      // angle (u.turret) with the barrel riding on it. Drawn
+      // from the reference pictures: a dark grey Panzer with
+      // its turret number and a black cross on the rear deck,
+      // an olive Sherman with the white star on the turret.
+      // No pose and no morale bar, just a health bar above.
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       const ally = u.side === "allies";
-      // Track bands first, then the hull over them: 96 long,
-      // twice a man's width on screen, 40 deep.
+      // Track bands first, then the hull over them: 120 long,
+      // 48 deep, two and a half men long on screen.
       ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(fx - 48, fy - 20, 96, 10);
-      ctx.fillRect(fx - 48, fy + 10, 96, 10);
+      ctx.fillRect(fx - 60, fy - 24, 120, 12);
+      ctx.fillRect(fx - 60, fy + 12, 120, 12);
       ctx.fillStyle = "#2C2C20";
-      for (let twx = -44; twx <= 44; twx += 11) {
-        ctx.fillRect(fx + twx, fy - 19, 6, 7);
-        ctx.fillRect(fx + twx, fy + 12, 6, 7);
+      for (let twx = -56; twx <= 52; twx += 12) {
+        ctx.fillRect(fx + twx, fy - 23, 7, 9);
+        ctx.fillRect(fx + twx, fy + 14, 7, 9);
       }
-      ctx.fillStyle = ally ? "#4A5A2E" : "#565650";
-      ctx.fillRect(fx - 43, fy - 13, 86, 26);
-      ctx.fillStyle = ally ? "#5A6E3A" : "#6A6A66";
-      ctx.fillRect(fx - 14, fy - 11, 28, 16);
+      // Hull plate and its top highlight, front glacis shaded.
+      ctx.fillStyle = ally ? "#4A5A2E" : "#4C4C4A";
+      ctx.fillRect(fx - 54, fy - 16, 108, 32);
+      ctx.fillStyle = ally ? "#556636" : "#595955";
+      ctx.fillRect(fx - 54, fy - 16, 108, 6);
+      ctx.fillStyle = ally ? "#3E4C26" : "#3E3E3C";
+      ctx.fillRect(flip ? fx - 54 : fx + 42, fy - 14, 12, 28);
+      // Engine deck grilles at the rear.
+      ctx.fillStyle = "rgba(0,0,0,0.25)";
+      const deckX = flip ? fx + 30 : fx - 48;
+      for (let g = 0; g < 3; g++) ctx.fillRect(deckX + g * 6, fy - 9, 3, 18);
+      if (!ally) {
+        // The Panzer's cross on the rear deck: white arms,
+        // black core.
+        const cxp = flip ? fx + 40 : fx - 40;
+        ctx.fillStyle = "#CFC8B0";
+        ctx.fillRect(cxp - 7, fy - 2, 14, 4);
+        ctx.fillRect(cxp - 2, fy - 7, 4, 14);
+        ctx.fillStyle = "#1B1B15";
+        ctx.fillRect(cxp - 5, fy - 1, 10, 2);
+        ctx.fillRect(cxp - 1, fy - 5, 2, 10);
+      }
+      // The turret, turned on its own angle: body, hatch,
+      // barrel with its muzzle brake, riding over the hull.
+      ctx.save();
+      ctx.translate(fx - 4, fy);
+      ctx.rotate(u.turret);
+      ctx.fillStyle = ally ? "#526432" : "#565650";
+      ctx.fillRect(-20, -11, 38, 22);
+      ctx.fillStyle = ally ? "#5F7439" : "#63635F";
+      ctx.fillRect(-20, -11, 38, 5);
       ctx.fillStyle = "#2E2E20";
-      ctx.fillRect(flip ? fx - 44 : fx + 14, fy - 9, 30, 5);
-      const w = 66;
+      ctx.fillRect(16, -3, 40, 6);
+      ctx.fillRect(50, -5, 7, 10);
+      ctx.fillStyle = ally ? "#42522A" : "#484844";
+      ctx.fillRect(-13, -6, 11, 12);
+      if (ally) {
+        // The Sherman's white star on the turret top.
+        ctx.fillStyle = "#E8E6DA";
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+          const a = -Math.PI / 2 + (i * 4 * Math.PI) / 5;
+          const sx = 4 + Math.cos(a) * 8;
+          const sy = Math.sin(a) * 8;
+          if (i === 0) ctx.moveTo(sx, sy);
+          else ctx.lineTo(sx, sy);
+        }
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        // The Panzer's turret number.
+        ctx.fillStyle = "#D8D2BC";
+        ctx.font = "bold 11px monospace";
+        ctx.textAlign = "center";
+        ctx.fillText("214", 2, 4);
+      }
+      ctx.restore();
+      const w = 84;
       const pct = Math.max(0, u.hp / u.maxHp);
       ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 31, w, 5);
+      ctx.fillRect(fx - w / 2, fy - 37, w, 5);
       ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 31, w * pct, 5);
+      ctx.fillRect(fx - w / 2, fy - 37, w * pct, 5);
       return;
     }
     const isAlly = u.side === "allies";

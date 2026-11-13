@@ -11,6 +11,7 @@ export type EnemyTypeId =
   | "panzerfaust"
   | "flak"
   | "scharfschutze"
+  | "spotter"
   | "mortar"
   | "fallschirmjager"
   | "medic"
