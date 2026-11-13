@@ -1,7 +1,7 @@
 // Hand-written mirrors of the backend Pydantic models (backend/models/models.py).
 // Nothing infers across the HTTP boundary — keep these in sync in the same edit.
 
-export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at" | "radioman" | "tank";
+export type UnitTypeId = "rifleman" | "medic" | "mg" | "sniper" | "at" | "radioman" | "recon" | "engineer" | "tank";
 export type EnemyTypeId =
   | "volks"
   | "funk"
@@ -99,6 +99,9 @@ export interface Decor {
   kind: DecorKind;
   x: number;
   y: number;
+  /** The fallen man this tribute belongs to (null only on legacy
+   * field scatter placed before tributes were per-man). */
+  entry_id: string | null;
 }
 
 export interface BattleResult {

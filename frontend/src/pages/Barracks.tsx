@@ -14,7 +14,7 @@ import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
 import { useMusic } from "@/game/music";
 
-const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at", "radioman"];
+const UNIT_ORDER: UnitTypeId[] = ["rifleman", "medic", "mg", "sniper", "at", "radioman", "recon", "engineer"];
 
 const errDetail = (e: unknown, fallback: string) =>
   e instanceof ApiError && e.body && typeof e.body === "object" && "detail" in e.body

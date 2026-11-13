@@ -167,7 +167,7 @@ describe("radioman", () => {
 
   it("when the radioman dies the radio dies with him", async () => {
     const { e, hud } = await makeEngine(WITH_RADIO);
-    const radio = e.units.find((u) => u.type === "radioman")!;
+    const radio = e.units.find((u) => u.type === "radioman" && !u.npc)!;
     e.damage(radio, 999, "rifle", null);
     expect(radio.alive).toBe(false);
     expect(e.radioLive()).toBe(false);
@@ -177,7 +177,7 @@ describe("radioman", () => {
 
   it("a second radioman keeps the net up after the first dies", async () => {
     const { e } = await makeEngine(TWO_RADIO);
-    const radios = e.units.filter((u) => u.type === "radioman");
+    const radios = e.units.filter((u) => u.type === "radioman" && !u.npc);
     expect(radios.length).toBe(2);
     e.damage(radios[0], 999, "rifle", null);
     expect(e.radioLive()).toBe(true);
@@ -188,7 +188,7 @@ describe("radioman", () => {
 
   it("Rally Call lifts nearby morale over the radio", async () => {
     const { e } = await makeEngine(WITH_RADIO);
-    const radio = e.units.find((u) => u.type === "radioman")!;
+    const radio = e.units.find((u) => u.type === "radioman" && !u.npc)!;
     const mate = e.units.find((u) => u.type === "rifleman")!;
     // Stand them together and shake the rifleman's nerve.
     radio.x = 200; radio.y = 600; mate.x = 210; mate.y = 600; mate.morale = 50;
@@ -200,7 +200,7 @@ describe("radioman", () => {
 
   it("Rally Call does not spend its cooldown when nobody needs rallying", async () => {
     const { e } = await makeEngine(WITH_RADIO);
-    const radio = e.units.find((u) => u.type === "radioman")!;
+    const radio = e.units.find((u) => u.type === "radioman" && !u.npc)!;
     for (const u of e.units) if (u.side === "allies") u.morale = 100;
     const cast = e as unknown as { castAuto: (u: U) => void };
     cast.castAuto(radio);

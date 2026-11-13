@@ -155,13 +155,15 @@ describe("medics on both sides", () => {
     expect(endDist).toBeLessThan(200);
   });
 
-  it("2nd Platoon has 12 NPCs and exactly one medic", async () => {
+  it("2nd Platoon has 12 NPCs with a medic in each squad", async () => {
     const e = await makeEngine();
     const npcs = e.units.filter((u) => u.side === "allies" && u.npc);
     expect(npcs).toHaveLength(12);
+    // Squads of 8 + 4 (Josh, 2026-11-12): each squad carries its
+    // own medic, so the platoon fields two, not one.
     const medics = npcs.filter((u) => u.type === "medic");
-    expect(medics).toHaveLength(1);
-    expect(npcs.filter((u) => u.type === "rifleman")).toHaveLength(11);
+    expect(medics).toHaveLength(2);
+    expect(npcs.filter((u) => u.type === "rifleman")).toHaveLength(6);
   });
 
   it("a 2nd Platoon medic's aura mends a wounded NPC nearby", async () => {

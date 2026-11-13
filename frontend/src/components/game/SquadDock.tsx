@@ -39,9 +39,9 @@ function UnitCard({
     <div
       data-testid={`unit-dock-card-${index}`}
       onClick={() => onSelect(unit.id)}
-      className={`group relative w-44 shrink-0 cursor-pointer border px-3 py-2 short:w-full short:px-2 short:py-1 text-left transition-colors duration-150 ${
-        unit.alive ? "bg-[#1A1D17]" : "bg-[#15170F] opacity-60"
-      } ${selected ? "border-[#4ECDC4]" : "border-[#2E3628] hover:border-[#E5A93C]"}`}
+      className={`group relative w-40 shrink-0 cursor-pointer border px-2.5 py-1.5 short:w-full short:px-2 short:py-1 text-left transition-colors duration-150 ${
+        unit.alive ? "bg-[#0D0F0C]/85" : "bg-[#0D0F0C]/60 opacity-60"
+      } ${selected ? "border-[#E5A93C]" : "border-[#2E3628] hover:border-[#E5A93C]"}`}
     >
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate font-mono text-[13px] font-semibold text-[#EDEDE2]">
@@ -113,9 +113,9 @@ function UnitCard({
         ) : (
           <span
             className="flex h-5 flex-1 items-center justify-center border border-[#2E3628] px-1 font-mono text-[10px] text-[#8D9A83]"
-            title="He follows the leader and uses his ability on his own judgment"
+            title="AUTO: he follows the leader and uses his ability on his own judgment"
           >
-            {unit.alive ? `${spec.ability.name} — ON HIS OWN` : "OUT OF ACTION"}
+            {unit.alive ? `${spec.ability.name} — AUTO` : "OUT OF ACTION"}
           </span>
         )}
         {unit.orders > 0 && (

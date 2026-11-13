@@ -6,7 +6,7 @@ from typing import Dict, List, Literal, Optional
 from pydantic import BaseModel, Field
 import uuid
 
-UnitType = Literal["rifleman", "medic", "mg", "sniper", "at", "radioman"]
+UnitType = Literal["rifleman", "medic", "mg", "sniper", "at", "radioman", "recon", "engineer"]
 SoldierStatus = Literal["active", "reserve"]
 EnemyType = Literal["volks", "grenadier", "mg42", "officer", "panzerfaust", "flak", "scharfschutze", "mortar", "fallschirmjager", "medic", "funk", "panzer"]
 DecorKind = Literal["poppies", "roses", "lilies", "wreath", "candle", "flag"]
@@ -141,15 +141,11 @@ class MemorialOut(BaseModel):
     grave_y: Optional[float] = None
 
 
-class GraveIn(BaseModel):
-    x: Optional[float] = Field(default=None, ge=0, le=1)
-    y: Optional[float] = Field(default=None, ge=0, le=1)
-
-
 class DecorIn(BaseModel):
     kind: DecorKind
-    x: float = Field(ge=0, le=1)
-    y: float = Field(ge=0, le=1)
+    # Tributes belong to a man (Josh, 2026-11-12): the client says
+    # WHOSE grave and WHAT kind; the server lays it by his stone.
+    entry_id: str
 
 
 class DecorMoveIn(BaseModel):
@@ -162,6 +158,9 @@ class DecorOut(BaseModel):
     kind: DecorKind
     x: float
     y: float
+    # The fallen man this tribute belongs to. None only on legacy
+    # field-scatter tributes placed before tributes were per-man.
+    entry_id: Optional[str] = None
 
 
 class BattleResultOut(BaseModel):

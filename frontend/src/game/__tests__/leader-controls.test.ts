@@ -219,4 +219,20 @@ describe("team leader", () => {
     step(e, 2.5);
     expect(foe.hp).toBeLessThan(hp0);
   });
+
+  it("the leader never walks himself to cover while idle", async () => {
+    const e = await makeEngine();
+    e.begin();
+    const leader = e.leaderUnit()!;
+    // Park the enemy far away: nobody is in range, so the only
+    // thing that could move an idle man on his own is the
+    // generic cover-seek rule — the leader is exempt from it
+    // because Josh puts him where he wants him.
+    for (const u of e.units) if (u.side === "axis") { u.x = 3900; u.y = 1200; }
+    leader.x = 700; leader.y = 675;
+    const x0 = leader.x, y0 = leader.y;
+    step(e, 6);
+    expect(Math.abs(leader.x - x0)).toBeLessThan(1.5);
+    expect(Math.abs(leader.y - y0)).toBeLessThan(1.5);
+  });
 });

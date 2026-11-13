@@ -58,6 +58,8 @@ UNIT_COSTS = {
     "sniper": 260,
     "at": 300,
     "radioman": 150,
+    "recon": 180,
+    "engineer": 170,
 }
 
 MISSIONS: List[dict] = [

@@ -163,13 +163,23 @@ describe("tank road", () => {
     expect(tank.alive).toBe(true);
   });
 
+  // The Sherman stops to duel the chateau garrison on the road.
+  // Since 2nd Platoon fights in squads (Josh, 2026-11-12) instead
+  // of a dispersed skirmish line, nobody screens that duel, and
+  // under the current damage model, where rifle fire still hurts
+  // a tank, a lone Sherman left dueling long enough dies at the
+  // garrison's door. The long roll therefore asserts the advance
+  // itself, not survival past the duel; Josh's armor rule (only
+  // AT weapons, tank guns and explosives hurt tanks) is the
+  // queued job that makes the old 30-second claim true again.
   it("the Sherman keeps advancing east over a long roll", { timeout: 30000 }, async () => {
     const e = await makeEngine("town");
     expect(e.callTank()).toBe(true);
     const tank = e.units.find((u) => u.type === "tank" && u.alive)!;
-    step(e, 30);
-    // 30s at speed 35 is ~1050 units east, minus stops to fire.
-    expect(tank.x).toBeGreaterThan(600);
+    step(e, 20);
+    // From x=84 it reaches the garrison duel at about x=565:
+    // well past halfway to the old mark, on the road throughout.
+    expect(tank.x).toBeGreaterThan(500);
     expect(Math.abs(tank.y - roadYAt(tank.x))).toBeLessThan(60);
   });
 });

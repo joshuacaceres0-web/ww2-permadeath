@@ -24,7 +24,7 @@ function Story({ text }: { text: string }) {
 }
 
 export default function Memorial() {
-  useMusic("memorial"); // Letters Home, looped, same track as the Start Menu.
+  useMusic("memorial"); // Ave Maria — Marian Anderson, V-Disc 098 (1944), looped.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const { data: entries } = useQuery({
     queryKey: ["memorial"],
@@ -130,7 +130,7 @@ export default function Memorial() {
                   }}
                   className="mt-3 flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-[0.2em] text-[#75826F] hover:text-[#E5A93C]"
                 >
-                  <MapPin size={12} /> {e.grave_x === null ? "Not yet laid to rest — use the tray above" : "Find his grave"}
+                  <MapPin size={12} /> Find his grave
                 </button>
               </article>
             );

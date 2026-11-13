@@ -30,10 +30,10 @@ export default function StartMenu() {
     onSuccess: async () => {
       setConfirmOpen(false);
       await qc.invalidateQueries();
-      toast.success("New campaign begun. Fresh squad reporting.");
+      toast.success("New game begun. Fresh squad reporting.");
       navigate("/war-room");
     },
-    onError: () => toast.error("Couldn't start a new campaign — nothing was changed. Try again."),
+    onError: () => toast.error("Couldn't start a new game — nothing was changed. Try again."),
   });
 
   const hasSave = !!save?.exists;
@@ -154,9 +154,12 @@ export default function StartMenu() {
       <Dialog open={confirmOpen} onOpenChange={(o) => !newGame.isPending && setConfirmOpen(o)}>
         <DialogContent showCloseButton={false} className="border-2 border-[#5C2626] bg-[#1A1D17] text-[#E3E7DC]" data-testid="new-game-dialog">
           <DialogHeader>
-            <DialogTitle className="font-[Silkscreen] text-lg text-[#F0B4B4]">NEW CAMPAIGN</DialogTitle>
+            <DialogTitle className="font-[Silkscreen] text-lg text-[#F0B4B4]">NEW GAME</DialogTitle>
             <DialogDescription className="font-mono text-sm text-[#E3E7DC]" data-testid="new-game-warning">
-              Start a new campaign? Your current squad, RP, and Memorial will be lost.
+              Start a new game? Everything is wiped: your squad, your commander's career rank and level and his
+              radio unlocks with them, RP, campaign, and the Memorial itself, every grave, story, and decoration.
+              This is the only way to clear the Memorial. Starting a new campaign after finishing one is
+              different: your survivors, your commander's career, and the Memorial carry over.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2">

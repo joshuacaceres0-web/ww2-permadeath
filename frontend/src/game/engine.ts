@@ -81,7 +81,7 @@ interface Corpse {
 // Sprite look for each unit: palette, headgear, weapon.
 function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean }): { pal: string; head: Head; weapon: Weapon } {
   if (u.side === "allies") {
-    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", tank: "none" } as const)[u.type];
+    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", recon: "smg", engineer: "rifle", tank: "none" } as const)[u.type];
     return { pal: u.npc ? "usNpc" : "us", head: u.type === "medic" ? "us-medic" : "us", weapon };
   }
   switch (u.enemyType) {
@@ -114,6 +114,22 @@ export const MAX_REINFORCEMENTS = 3;
 export type RadioSupportKind = "artillery" | "supply" | "recon" | "mortar" | "smoke" | "tank";
 export const ARTILLERY_CD = 60;
 export const SUPPLY_CD = 45;
+/** Recon (Josh, 2026-11-12): a sniper fights at full range only
+ * with a Recon near him; alone he self-spots at solo range. A
+ * Recon hidden in foliage is spotted by the enemy at barely
+ * half the normal distance, until his own fire gives him away. */
+export const RECON_PAIR_DIST = 90;
+export const SNIPER_SOLO_RANGE = 260;
+export const RECON_SPOT_FACTOR = 0.55;
+export const RECON_REVEAL_SECONDS = 3;
+/** Engineer (Josh, 2026-11-12): the detector finds mines
+ * within 70; a revealed mine within reach gets four seconds of
+ * still, exposed work to clear; he walks to a revealed mine
+ * within 130 when the field is quiet. */
+export const ENGINEER_DETECT_RANGE = 70;
+export const ENGINEER_CLEAR_RANGE = 26;
+export const ENGINEER_CLEAR_SECONDS = 4;
+export const ENGINEER_SEEK_RANGE = 130;
 export const RECON_CD = 30;
 export const MORTAR_CD = 25;
 export const SMOKE_CD = 45;
@@ -272,6 +288,25 @@ interface Unit {
    * there until healed above 60%, then rejoins. Set and cleared by
    * the fallback check in update; all NPC allies, every mission. */
   npcFallback?: boolean;
+  /** NPC squads (Josh, 2026-11-12): 2nd Platoon men deploy in
+   * squads of 8 with a leader; followers anchor to their leader
+   * like the player's men anchor to theirs. Undefined for the
+   * player's men, paid reinforcement teams, and lone NPCs. */
+  npcSquad?: number;
+  /** The current leader of his NPC squad, kept fresh by
+   * npcSquadLeaderOf (succession: rank, then kills, then level). */
+  npcLeader?: boolean;
+  /** Marked by a Recon (until this time): the squad sees him
+   * through fog and his wounds run heavier under their fire. */
+  markedUntil?: number;
+  /** The mark came from a hidden Recon: the first allied hit
+   * springs the ambush and hits hardest, once. */
+  markedAmbush?: boolean;
+  /** When this unit last fired a shot (battle clock). A Recon
+   * who just fired has given himself away for a few seconds. */
+  lastShotT?: number;
+  /** Engineer at work on a mine this tick: hands busy, no fire. */
+  clearing?: boolean;
   /** Prone: dropped flat under heavy fire (suppression 70+).
    * Harder to hit at range, no protection up close, slower
    * movement and fire. Footmen only. */
@@ -337,6 +372,10 @@ interface Unit {
   chaseBanT: number;
   // animation
   deathT?: number;
+  /** Battle time of death, stamped in kill(). Drives the squad
+   * dock order: the fallen collect at the far right in the order
+   * they fell (Josh, 2026-11-12). Undefined while alive. */
+  diedAt?: number;
   shootT?: number;
   prevWalk?: number;
 }
@@ -459,6 +498,9 @@ export interface HudUnit {
   abilityCdMax: number;
   kills: number;
   alive: boolean;
+  /** Battle time of death (null while alive). The dock lists the
+   * fallen at the far right in fall order. */
+  diedAt: number | null;
   orders: number;
 }
 
@@ -858,8 +900,10 @@ export class GameEngine {
    * and in the airborne landing fields (x 480-1560). An armed
    * mine under an allied man's feet goes off once; the axis
    * never triggers its own fields. Drawn small and dark — you
-   * find them by stepping on them, or by spotting the marks. */
-  private mines: { x: number; y: number; armed: boolean }[] = [];
+   * find them by stepping on them, or by bringing an Engineer:
+   * his detector reveals the mines near him (red ring and flag),
+   * and he can clear a revealed one with four seconds of work. */
+  private mines: { x: number; y: number; armed: boolean; revealed?: boolean; cleared?: boolean; clearT?: number }[] = [];
   private corpses: Corpse[] = [];
   private wrecks: Wreck[] = [];
   /** A fall back is in progress: the squad is withdrawing to
@@ -1337,9 +1381,10 @@ export class GameEngine {
    * team leader. During an intro the lock sits on his landing
    * spot (his boat grounds there, his parachute comes down
    * there). When he is down or out, the middle of the men
-   * still on the field — a retreating squad is watched as a
-   * group once its leader is gone. Null only when there is
-   * nobody to watch. */
+   * still on the field. In a retreat the lock does not run at
+   * all: the view is the fitted full map until the battle
+   * files (see retreat()). Null only when there is nobody to
+   * watch. */
   private cameraTarget(): { x: number; y: number } | null {
     const L = this.leaderUnit();
     if (this.introT >= 0 && L) return { x: L.landX ?? L.x, y: L.landY ?? L.y };
@@ -1706,8 +1751,11 @@ export class GameEngine {
   }
 
   /** Full-map view on/off: zoom out to the whole map, or back to the
-   * normal camera window. Re-runs resize so it takes effect at once. */
+   * normal camera window. Re-runs resize so it takes effect at once.
+   * While a retreat runs, the full map is the retreat's view (Josh,
+   * 2026-11-12) and cannot be switched off until the battle files. */
   setFitMap(on: boolean) {
+    if (!on && this.retreating) return;
     if (this.fitWholeMap === on) return;
     this.fitWholeMap = on;
     this.resize();
@@ -1737,6 +1785,16 @@ export class GameEngine {
   retreat() {
     if (this.phase !== "battle" || this.battleState !== "active" || this.retreating) return;
     this.retreating = true;
+    // The retreat is watched whole (Josh, 2026-11-12): the view
+    // pulls out to the fitted full map the moment the retreat
+    // starts and stays there, live, until the battle files —
+    // the squad running west, the platoon covering, the
+    // flankers coming in — superseding the retreat camera lock
+    // (last leader, then the runners' middle) that shipped with
+    // the camera hard lock. It is NOT the Esc menu's paused
+    // full-map look: update() lets this fit live while the
+    // battle runs, and setFitMap refuses to drop it mid-retreat.
+    this.setFitMap(true);
     // The enemy does not watch a retreat leave: a few seconds
     // in, flanking groups come in off the north and south edges
     // to cut the withdrawal off (Josh, 2026-11-12).
@@ -1793,28 +1851,90 @@ export class GameEngine {
     this.dirty = true;
   }
 
+  /** NPC squad makeup (Josh, 2026-11-12): squads of 8 built from
+   * the same classes the player hires. Slot 0 is the leader, a
+   * rifleman; medic and MG are always aboard; the support slot
+   * rotates sniper, AT, recon, engineer by squad number, so a
+   * 32-man landing fields one of each. A radioman rides in a full
+   * squad too (he is the platoon's own set; he does NOT open the
+   * player's radio, radioLive counts only the player's men).
+   * Small squads keep leader, medic and MG in the first slots. */
+  private npcSquadTypes(squadIdx: number, size: number): UnitTypeId[] {
+    const support: UnitTypeId[] = ["sniper", "at", "recon", "engineer"];
+    if (size >= 8) {
+      return ["rifleman", "rifleman", "rifleman", "medic", "mg", support[squadIdx % 4], "radioman", "rifleman"];
+    }
+    const small: UnitTypeId[] = ["rifleman", "rifleman", "medic", "mg", "rifleman", support[squadIdx % 4], "radioman"];
+    return small.slice(0, size);
+  }
+
   private spawnNpcAllies(n: number, rng: () => number) {
-    // Weak riflemen only: the old types list gave the NPCs an MG and an AT
-    // gun at full damage, so they could win a wave on their own.
-    // Spread down the western edge instead of clustering at one y, so
-    // they do not spawn stacked and deadlock on each other.
-    // The first man is 2nd Platoon's medic: one rifleman becomes the
-    // medic, so the platoon count stays the same and it heals its
-    // own wounded with the same aura and triage as every other medic.
-    for (let i = 0; i < n; i++) {
-      const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
-      if (this.variant === "airborne") {
-        // The drop: the platoon's sticks scatter across the same
-        // drop zone as the player's squad (x 120-640, west of the
-        // bluff gun line), so the whole force lands together and
-        // forms up together. On the west-edge line they arrived
-        // behind the squad and the squad died alone at the guns:
-        // AUTO went 0 for 6 with 0 squad kills (2026-11-12).
-        this.addNpc(i === 0 ? "medic" : "rifleman", 120 + rng() * 520, 80 + rng() * (MAP_H - 160), i, rng(), true);
-      } else {
-        this.addNpc(i === 0 ? "medic" : "rifleman", 90 + rng() * 80, py, i, rng(), true);
+    // 2nd Platoon deploys in squads (Josh, 2026-11-12): chunks of
+    // 8, each with its own leader and anchor point, spread down
+    // the western edge (or across the drop zone when airborne) so
+    // a squad lands together and forms up together. Men keep the
+    // weak 2nd Platoon scaling (see addNpc): they support the
+    // fight instead of winning it alone.
+    const squadCount = Math.max(1, Math.ceil(n / 8));
+    let placedCount = 0;
+    for (let s = 0; s < squadCount && placedCount < n; s++) {
+      const size = Math.min(8, n - placedCount);
+      const types = this.npcSquadTypes(s, size);
+      const anchorY = squadCount === 1 ? MAP_H / 2 : 170 + (s * (MAP_H - 340)) / (squadCount - 1);
+      for (let j = 0; j < size; j++) {
+        if (this.variant === "airborne") {
+          this.addNpc(types[j], 160 + s * 110 + rng() * 70, anchorY + (rng() * 130 - 65), j, rng(), true, s, j === 0);
+        } else {
+          this.addNpc(types[j], 90 + rng() * 80, anchorY + (j - (size - 1) / 2) * 36 + rng() * 14, j, rng(), true, s, j === 0);
+        }
+        placedCount++;
       }
     }
+  }
+
+  /** The living leader of an NPC squad: the most senior man left,
+   * by rank, then kills, then level (the player's succession
+   * order, with kills ahead of level for men whose rank field is
+   * a name prefix). Keeps the npcLeader flags fresh as a side
+   * effect. Null when the squad is wiped out. */
+  npcSquadLeaderOf(squadIdx: number): Unit | null {
+    const members = this.units.filter((u) => u.npc && u.alive && u.npcSquad === squadIdx);
+    if (!members.length) return null;
+    const seniority = (u: Unit) => ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."].indexOf(u.rank);
+    const leader = [...members].sort(
+      (a, b) => seniority(b) - seniority(a) || b.kills - a.kills || b.level - a.level || a.id - b.id,
+    )[0];
+    for (const m of members) m.npcLeader = m.id === leader.id;
+    return leader;
+  }
+
+  /** NPC follower anchoring: a 2nd Platoon man stays with his
+   * squad leader the way a follower stays with the team leader.
+   * Returns true/false when the anchor decides this tick, null to
+   * run the normal prey logic. The leader himself runs the normal
+   * logic: he is the one advancing the squad. */
+  private npcAnchorMove(u: Unit, prey: Unit | null, dt: number): boolean | null {
+    if (this.stalemateActive) return null;
+    if (u.npcSquad === undefined) return null;
+    const anchor = this.npcSquadLeaderOf(u.npcSquad);
+    if (!anchor || anchor.id === u.id) return null;
+    // A medic may leave his post for a wounded squadmate nearby,
+    // same leash as the player's medic (near the anchor).
+    if (this.isMedic(u) && prey && prey.side === u.side && dist(prey.x, prey.y, anchor.x, anchor.y) <= 160) return null;
+    const mates = this.units.filter((m) => m.npc && m.alive && m.npcSquad === u.npcSquad && m.id !== anchor.id);
+    const idx = Math.max(0, mates.findIndex((m) => m.id === u.id));
+    const off = this.formationSlot(idx, Math.max(1, mates.length), anchor.facing);
+    const slot = {
+      x: Math.max(12, Math.min(MAP_W - 12, anchor.x + off.x)),
+      y: Math.max(12, Math.min(MAP_H - 12, anchor.y + off.y)),
+    };
+    // An enemy hard on the squad: free to fight it, leashed.
+    if (prey && prey.side !== u.side && dist(prey.x, prey.y, anchor.x, anchor.y) <= 200 && dist(u.x, u.y, anchor.x, anchor.y) <= 300) {
+      return null;
+    }
+    if (dist(u.x, u.y, slot.x, slot.y) > 36) return this.chaseTo(u, slot.x, slot.y, dt);
+    u.chase = [];
+    return false;
   }
 
   /** The radioman's level (0-6): the highest level among the living
@@ -1977,9 +2097,27 @@ export class GameEngine {
   /** Fresh allies for the next wave: 2 weak 2nd Platoon riflemen from the west edge. */
   private spawnWaveAllies(n: number) {
     const rng = Math.random;
+    // Wave-clear men join a living NPC squad (Josh, 2026-11-12):
+    // the smallest one, so squads fill back up instead of a new
+    // pair wandering alone. When every squad is gone they form a
+    // fresh one and the first man leads it.
+    const living = new Map<number, number>();
+    let maxSquad = -1;
+    for (const u of this.units) {
+      if (u.npcSquad === undefined) continue;
+      maxSquad = Math.max(maxSquad, u.npcSquad);
+      if (u.npc && u.alive) living.set(u.npcSquad, (living.get(u.npcSquad) ?? 0) + 1);
+    }
+    let squadIdx: number;
+    if (living.size) {
+      squadIdx = [...living.entries()].sort((a, b) => a[1] - b[1] || a[0] - b[0])[0][0];
+    } else {
+      squadIdx = maxSquad + 1;
+    }
+    const fresh = living.size === 0;
     for (let i = 0; i < n; i++) {
       const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
-      this.addNpc("rifleman", 90 + rng() * 80, py, this.nextId + i, rng(), true);
+      this.addNpc("rifleman", 90 + rng() * 80, py, this.nextId + i, rng(), true, squadIdx, fresh && i === 0);
     }
     this.pushLog(`2nd Platoon sends ${n} fresh men up the line.`, "info");
   }
@@ -2189,11 +2327,18 @@ export class GameEngine {
     this.dirty = true;
   }
 
-  private addNpc(type: UnitTypeId, px: number, py: number, i: number, r: number, weak = false) {
+  private addNpc(type: UnitTypeId, px: number, py: number, i: number, r: number, weak = false, squad?: number, squadLeader = false) {
     {
       const spec = UNIT_TYPES[type];
       const [cx, cy] = nearestOpen(this.blocked, Math.floor(Math.max(12, Math.min(MAP_W - 12, px)) / CELL), Math.floor(Math.max(12, Math.min(MAP_H - 12, py)) / CELL));
       const SURN = ["Reilly", "Haskins", "Moreau", "Kaplan", "Briggs", "Delgado", "Novak", "Pruitt", "Lindqvist", "O'Hara", "Tasker", "Wexler"];
+      // NPC squads carry real ranks: the leader is a sergeant and
+      // succession walks down them (see npcSquadLeaderOf). Lone
+      // NPCs keep the old rotating junior ranks.
+      const squadRank = squadLeader
+        ? "Sgt."
+        : ["Cpl.", "Pfc.", "Pvt.", "Pfc.", "Cpl.", "Pvt.", "Pfc."][i % 7];
+      const rank = squad !== undefined ? squadRank : ["Pvt.", "Pfc.", "Cpl."][i % 3];
       // 2nd Platoon NPCs: buffed 2026-11-11 at Josh's pick, after Wave 3
       // made battles unwinnable — 75% damage (was 50%), 90% health
       // (was 70%), near-full speed and vision, faster fire. Still
@@ -2203,8 +2348,9 @@ export class GameEngine {
       const hp = weak ? Math.round(spec.hp * 0.9) : spec.hp;
       this.units.push({
         id: this.nextId++, side: "allies", type, enemyType: null, soldierId: null,
-        name: `${["Pvt.", "Pfc.", "Cpl."][i % 3]} ${SURN[i % SURN.length]}`,
-        rank: "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0, homeX: cx * CELL + CELL / 2, homeY: cy * CELL + CELL / 2, patrolX: cx * CELL + CELL / 2, patrolY: cy * CELL + CELL / 2,
+        name: `${rank} ${SURN[i % SURN.length]}`,
+        rank: squad !== undefined ? rank : "", level: 0, reaction: 0.6, x: cx * CELL + CELL / 2, y: cy * CELL + CELL / 2, facing: 0, homeX: cx * CELL + CELL / 2, homeY: cy * CELL + CELL / 2, patrolX: cx * CELL + CELL / 2, patrolY: cy * CELL + CELL / 2,
+        npcSquad: squad, npcLeader: squad !== undefined ? squadLeader : undefined,
         hp, maxHp: hp, speed: spec.speed * (weak ? 0.95 : 0.9), range: spec.range, vision: spec.vision * (weak ? 0.9 : 1),
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
@@ -2694,8 +2840,90 @@ export class GameEngine {
       u.facing = Math.atan2(y - u.y, x - u.x);
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} walks a barrage across the grid.`, "info");
+    } else if (u.type === "engineer") {
+      // Deploy Cover: a sandbag position where he aims, within
+      // carrying distance. Real cover in every system that reads
+      // covers and blockers, and it wears down and dies like any
+      // other sandbag (destroyCover takes the blocker with it).
+      const d0 = dist(u.x, u.y, x, y);
+      const px = d0 > 220 ? u.x + ((x - u.x) / d0) * 220 : x;
+      const py = d0 > 220 ? u.y + ((y - u.y) / d0) * 220 : y;
+      if (this.blockers.some((b) => dist(px, py, b.x, b.y) < b.r + 14)) {
+        this.pushLog(`${u.name}: no room to build there.`, "info");
+        return;
+      }
+      // Cover-only, exactly like the terrain's own sandbags: the
+      // shelter lives in the cover roll, and the position draws
+      // and wears down like any other sandbag.
+      this.covers.push({ x: px, y: py, r: 15, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110, type: "light" });
+      u.abilityCd = spec.cd;
+      this.pushLog(`${u.name} throws up a sandbag position.`, "info");
     }
     this.dirty = true;
+  }
+
+  /** Engineers work the minefields (Josh, 2026-11-12). The
+   * detector reveals every armed mine within 70 of a living
+   * engineer. A revealed mine within 26 gets cleared after
+   * ENGINEER_CLEAR_SECONDS of work: the engineer must hold
+   * still over it (moving pauses the work, it does not reset
+   * it) and he does not fire while his hands are in the dirt —
+   * crossing a field is a slow, covered job, not a stroll. When
+   * the field is quiet and he has no orders, he walks to the
+   * nearest revealed mine within 130 and gets to work. A squad
+   * with no engineer gets none of this: their men find mines
+   * the old way. */
+  private stepEngineers(dt: number) {
+    if (!this.mines.length) return;
+    for (const e of this.units) {
+      if (e.side !== "allies" || e.type !== "engineer") continue;
+      e.clearing = false;
+      if (!e.alive || e.broken) continue;
+      for (const m of this.mines) {
+        if (m.armed && !m.revealed && dist(e.x, e.y, m.x, m.y) <= ENGINEER_DETECT_RANGE) {
+          m.revealed = true;
+        }
+      }
+      let work: (typeof this.mines)[number] | null = null;
+      let workD = ENGINEER_CLEAR_RANGE;
+      for (const m of this.mines) {
+        if (!m.armed || !m.revealed) continue;
+        const d = dist(e.x, e.y, m.x, m.y);
+        if (d < workD) {
+          work = m;
+          workD = d;
+        }
+      }
+      if (work) {
+        e.clearing = true;
+        if (e.movedT !== this.elapsed) {
+          work.clearT = (work.clearT ?? 0) + dt;
+          if (work.clearT >= ENGINEER_CLEAR_SECONDS) {
+            work.armed = false;
+            work.cleared = true;
+            work.clearT = 0;
+            this.pushLog(`${e.name} clears a mine.`, "info");
+          }
+        }
+        continue;
+      }
+      if (!e.orders.length && !e.chase.length && !e.targetId) {
+        let seek: (typeof this.mines)[number] | null = null;
+        let seekD = ENGINEER_SEEK_RANGE;
+        for (const m of this.mines) {
+          if (!m.armed || !m.revealed) continue;
+          const d = dist(e.x, e.y, m.x, m.y);
+          if (d < seekD) {
+            seek = m;
+            seekD = d;
+          }
+        }
+        if (seek) {
+          const ang = Math.atan2(e.y - seek.y, e.x - seek.x);
+          e.orders = findPath(this.blocked, e.x, e.y, seek.x + Math.cos(ang) * 18, seek.y + Math.sin(ang) * 18);
+        }
+      }
+    }
   }
 
   /** A friendly medic within 120: morale recovers faster beside him. */
@@ -2826,6 +3054,34 @@ export class GameEngine {
       });
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} fires the tube.`, "info");
+    } else if (u.type === "recon") {
+      // Mark Target: he spots at vision range, far beyond his
+      // carbine. The marked man shows through fog and takes
+      // heavier fire; a mark laid from concealment sets an
+      // ambush, and the first hit on him springs it.
+      let best: Unit | null = null;
+      let bestD = u.vision;
+      for (const e of this.units) {
+        if (e.side === u.side || !e.alive) continue;
+        const d = dist(u.x, u.y, e.x, e.y);
+        if (d < bestD && this.los(u, e)) {
+          best = e;
+          bestD = d;
+        }
+      }
+      if (!best) {
+        this.pushLog(`${u.name}: nothing in sight to mark.`, "info");
+        return;
+      }
+      best.markedUntil = this.elapsed + 10;
+      best.markedAmbush = this.inFoliage(u);
+      u.abilityCd = spec.cd;
+      this.pushLog(
+        best.markedAmbush
+          ? `${u.name} marks a target from the treeline. Ambush set.`
+          : `${u.name} marks a target for the squad.`,
+        "info",
+      );
     }
     this.dirty = true;
   }
@@ -2833,6 +3089,10 @@ export class GameEngine {
   private autoUseAbilities() {
     for (const u of this.units) {
       if (u.side !== "allies" || u.npc || !u.alive || u.abilityCd > 0 || u.broken) continue;
+      // The team leader's ability is the player's to spend in a
+      // manual battle. Under the AUTO test driver he casts like
+      // everyone else, as he always has.
+      if (!this.autoBattle && u.id === this.leaderId) continue;
       if (u.type === "medic") {
         const hurt = this.units.some(
           (a) => a.side === "allies" && a.alive && a.hp < a.maxHp && dist(u.x, u.y, a.x, a.y) <= 130,
@@ -2841,10 +3101,65 @@ export class GameEngine {
       } else if (u.type === "sniper" || u.type === "at") {
         if (this.bestTarget(u, (a, b) => a.maxHp - b.maxHp)) this.castAuto(u);
       } else if (u.type === "radioman") {
-        const wavering = this.units.some(
-          (a) => a.side === "allies" && a.alive && a.morale < 70 && dist(u.x, u.y, a.x, a.y) <= 150,
+        // AI rally is for the broken only: the morale system is
+        // built for a wavering man to break at 20 and be steadied
+        // back, and a radioman who tops up everyone under 70
+        // would quietly abolish breaking altogether. A human
+        // player can still spend the call early by hand.
+        const brokenNear = this.units.some(
+          (a) => a.side === "allies" && a.alive && a.broken && dist(u.x, u.y, a.x, a.y) <= 150,
         );
-        if (wavering) this.castAuto(u);
+        if (brokenNear) this.castAuto(u);
+      } else if (u.type === "recon") {
+        const unmarked = this.units.some(
+          (e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= u.vision && !(e.markedUntil !== undefined && e.markedUntil > this.elapsed),
+        );
+        if (unmarked) this.castAuto(u);
+      } else if (u.type === "engineer") {
+        // Build where he stands when the enemy is close and he
+        // has no real cover of his own yet.
+        const threatened = this.units.some((e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= u.range + 80);
+        if (threatened && !u.cover) {
+          this.castGround(u, u.x + Math.cos(u.facing) * 34, u.y + Math.sin(u.facing) * 34);
+        }
+      } else if (u.type === "rifleman" || u.type === "mg") {
+        const t = this.autoTarget(u);
+        if (t) this.castGround(u, t.x, t.y);
+      }
+    }
+  }
+
+  /** NPC allies use their class abilities on their own judgment
+   * (Josh, 2026-11-12), the same triggers the player's followers
+   * use: the sniper and AT man fire their specials at the biggest
+   * target in reach, the recon marks, the MG walks a barrage,
+   * the radioman rallies a broken squadmate, the medic casts
+   * his triage. (His aura and ladder triage already ran.) */
+  private npcUseAbilities() {
+    for (const u of this.units) {
+      if (u.side !== "allies" || !u.npc || !u.alive || u.abilityCd > 0 || u.broken) continue;
+      if (u.type === "sniper" || u.type === "at") {
+        if (this.bestTarget(u, (a, b) => a.maxHp - b.maxHp)) this.castAuto(u);
+      } else if (u.type === "recon") {
+        const unmarked = this.units.some(
+          (e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= u.vision && !(e.markedUntil !== undefined && e.markedUntil > this.elapsed),
+        );
+        if (unmarked) this.castAuto(u);
+      } else if (u.type === "medic") {
+        const hurt = this.units.some(
+          (a) => a.side === "allies" && a.alive && a.hp < a.maxHp && dist(u.x, u.y, a.x, a.y) <= 130,
+        );
+        if (hurt) this.castAuto(u);
+      } else if (u.type === "radioman") {
+        const brokenNear = this.units.some(
+          (a) => a.side === "allies" && a.alive && a.broken && dist(u.x, u.y, a.x, a.y) <= 150,
+        );
+        if (brokenNear) this.castAuto(u);
+      } else if (u.type === "engineer") {
+        const threatened = this.units.some((e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= u.range + 80);
+        if (threatened && !u.cover) {
+          this.castGround(u, u.x + Math.cos(u.facing) * 34, u.y + Math.sin(u.facing) * 34);
+        }
       } else if (u.type === "rifleman" || u.type === "mg") {
         const t = this.autoTarget(u);
         if (t) this.castGround(u, t.x, t.y);
@@ -2854,10 +3169,41 @@ export class GameEngine {
 
   private bestTarget(u: Unit, cmp: (a: Unit, b: Unit) => number): Unit | null {
     const inRange = this.units.filter(
-      (e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= u.range
+      (e) => e.side === "axis" && e.alive && dist(u.x, u.y, e.x, e.y) <= this.effRange(u)
     );
     if (inRange.length === 0) return null;
     return inRange.reduce((a, b) => (cmp(a, b) >= 0 ? a : b));
+  }
+
+  /** A Recon of his own side within pairing distance, alive —
+   * the man who feeds the sniper his targets. */
+  reconPaired(u: Unit): boolean {
+    return this.units.some(
+      (a) => a.side === u.side && a.alive && a.id !== u.id && a.type === "recon" && dist(u.x, u.y, a.x, a.y) <= RECON_PAIR_DIST,
+    );
+  }
+
+  /** The range this unit can actually engage at. A sniper (the
+   * player's or an NPC's) reaches his full range only with a
+   * Recon paired near him; alone he self-spots at solo range.
+   * Everyone else fights at their listed range. (Enemy snipers
+   * keep full range until the enemy fields spotters of its own:
+   * the ranges pass owns that half of the rule.) */
+  effRange(u: Unit): number {
+    if (u.side === "allies" && u.type === "sniper" && !this.reconPaired(u)) {
+      return Math.min(u.range, SNIPER_SOLO_RANGE);
+    }
+    return u.range;
+  }
+
+  /** A Recon concealed in foliage: in the green, and he has not
+   * fired in the last few seconds to give himself away. The
+   * enemy spots him at a fraction of the normal distance. His
+   * own spotting is unaffected — that is the whole point of him. */
+  reconHidden(u: Unit): boolean {
+    if (u.side !== "allies" || u.type !== "recon" || !u.alive) return false;
+    if (!this.inFoliage(u)) return false;
+    return u.lastShotT === undefined || this.elapsed - u.lastShotT > RECON_REVEAL_SECONDS;
   }
 
   // ---------------- spawning ----------------
@@ -3391,7 +3737,9 @@ export class GameEngine {
     // Full map is a paused look only (Josh, 2026-11-12): the
     // Esc menu opens it while the battle is paused, and the
     // moment the battle runs again the view snaps back to the
-    // locked leader view.
+    // locked leader view. The one exception is a retreat in
+    // progress: its full map is live and stays until the battle
+    // files (setFitMap itself refuses the off switch there).
     if (this.fitWholeMap) this.setFitMap(false);
     // The intro runs first and alone: enemies frozen, no combat,
     // no replay frames — the battle starts when it ends.
@@ -3570,15 +3918,24 @@ export class GameEngine {
       }
     }
 
-    // Auto Battle add-on 1: once a second, each squad man uses his
-    // ability on his own — medic heals, sniper / AT pick a target,
-    // rifleman frags and MG barrages the nearest enemy in range.
-    // Guards run first so castAuto never spams "no shot" log lines.
-    if (this.autoBattle) {
+    // Abilities on their own judgment: once a second, each
+    // follower and NPC ally uses his class ability — medic
+    // heals, sniper / AT pick a target, rifleman frags and MG
+    // barrages the nearest enemy in range, recon marks. This
+    // driver used to run only under the old AUTO mode; when the
+    // leader rework retired AUTO as a player mode it took the
+    // followers' judgment with it (no button on their cards
+    // either). Josh's class spec (2026-11-12) puts abilities on
+    // AI logic for followers and NPCs, so the driver runs in
+    // every live battle now. The leader's own ability stays on
+    // the player's hand (Q / right click / button): both drivers
+    // skip him (he is not a follower and not an NPC).
+    {
       this.autoAbilityT -= dt;
       if (this.autoAbilityT <= 0) {
         this.autoAbilityT = 1;
         this.autoUseAbilities();
+        this.npcUseAbilities();
       }
     }
 
@@ -3837,7 +4194,7 @@ export class GameEngine {
         // the road is kept clear of obstacles, so it always has a
         // clear path. At the far east edge it holds and fires.
         const prey = this.nearestAlly(u);
-        const inRange = prey && dist(u.x, u.y, prey.x, prey.y) <= u.range * 0.9 && this.los(u, prey);
+        const inRange = prey && dist(u.x, u.y, prey.x, prey.y) <= this.effRange(u) * 0.9 && this.los(u, prey);
         if (inRange) {
           u.chase = []; // hold and fire from where it stands
         } else if (u.x < MAP_W - 120) {
@@ -3889,6 +4246,16 @@ export class GameEngine {
             moving = fm;
           }
         }
+        // NPC squad men answer to their own squad leader the same
+        // way (2nd Platoon squads, 2026-11-12). The squad leader
+        // himself gets null back and runs the normal logic.
+        if (u.npc && u.npcSquad !== undefined) {
+          const nm = this.npcAnchorMove(u, prey, dt);
+          if (nm !== null) {
+            skipPrey = true;
+            moving = nm;
+          }
+        }
         if (prey && !skipPrey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           // Camp and defend: an axis unit holds its ground until it
@@ -3901,7 +4268,7 @@ export class GameEngine {
           // its prey is a wounded man on its own side, not the player,
           // so it moves to heal regardless.
           const isEnemyPrey = prey.side !== u.side;
-          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision && this.los(u, prey));
+          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision * (isEnemyPrey && this.reconHidden(prey) ? RECON_SPOT_FACTOR : 1) && this.los(u, prey));
           if (!spotted) {
             // Camping, but not frozen: patrol slowly around the
             // garrison home. A static gun or a vehicle never patrols.
@@ -3933,7 +4300,7 @@ export class GameEngine {
             } else {
               u.chase = []; // camping: hold position
             }
-          } else if (pd > u.range * 0.9 || !this.los(u, prey)) {
+          } else if (pd > this.effRange(u) * 0.9 || !this.los(u, prey)) {
             moving = this.chaseTo(u, prey.x, prey.y, dt);
           } else {
             // In range with line of sight: the unit stops to fire, so
@@ -3958,7 +4325,7 @@ export class GameEngine {
         // the next wave. The old push-east made 2nd Platoon meet Wave 1
         // in the middle and clear it alone while the player's squad
         // stood idle at the west edge.
-      } else if (u.side === "allies" && attackOrder && u.id !== this.leaderId && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
+      } else if (u.side === "allies" && attackOrder && u.id !== this.leaderId && (d > this.effRange(u) * 0.92 || !this.los(u, attackOrder))) {
         moving = this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
       } else if (u.side === "allies" && attackOrder && u.id !== this.leaderId) {
         // In range with line of sight: firing, not chasing — clear the
@@ -4133,7 +4500,7 @@ export class GameEngine {
       // behind its own cover.
       if (!u.isStatic && !u.vehicle && !u.trenchHold && !u.npcFallback && u.cover && (u.npc || u.side === "axis" || (this.autoBattle && u.side === "allies" && !u.npc)) && u.orders.length === 0 && u.chase.length === 0 && !u.attackId) {
         const prey = this.nearestAlly(u);
-        const hasLosTarget = focus && d <= u.range && this.los(u, focus);
+        const hasLosTarget = focus && d <= this.effRange(u) && this.los(u, focus);
         if (prey && !hasLosTarget) {
           u.coverIdleT += dt;
           if (u.coverIdleT > 4) {
@@ -4159,7 +4526,16 @@ export class GameEngine {
       // in-range cover branch above, so they do not just camp.
       // A vehicle never seeks cover: the Sherman follows the road, and
       // a cover order would pull it off the road toward a sandbag.
-      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle && !u.npcFallback) {
+      // The team leader never seeks cover either in a manual battle:
+      // he is the player's own hands, and Josh puts him where he
+      // wants him. An idle leader standing in the open used to walk
+      // himself up to 280 units to the nearest cover spot, fighting
+      // the player's positioning (and dragging the hard locked
+      // camera with him). Followers keep their anchored version.
+      // In the AUTO test driver there is no player, so the man
+      // picked as leader still dives like everyone else.
+      const isPlayerLeader = !this.autoBattle && this.leaderId === u.id;
+      if (!u.isStatic && !u.cover && u.coverSeekT <= 0 && !u.vehicle && !u.npcFallback && !isPlayerLeader) {
         const underFire = u.pinned || u.suppression >= 35;
         const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
         const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
@@ -4219,7 +4595,7 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && focus && d <= u.range && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
+      } else if (u.cooldown <= 0 && focus && d <= this.effRange(u) && (!u.pinned || u.cover) && !u.broken && !u.clearing && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
         // A pinned man in the open keeps his head down and cannot
         // fire. A pinned man IN COVER still shoots back, at a
         // slower rate: before this, rounds stopped by his cover
@@ -4406,6 +4782,10 @@ export class GameEngine {
       }
     }
 
+    // Engineers and their mines (Josh, 2026-11-12): detection,
+    // clearing, and walking to the next revealed mine.
+    this.stepEngineers(dt);
+
     // Beach mines: a landing-force man who steps on one sets it
     // off. Axis men never trigger them — their own field, marked
     // lanes. One detonation per mine, ever.
@@ -4484,12 +4864,23 @@ export class GameEngine {
   }
 
   private autoTarget(u: Unit): Unit | null {
+    const range = this.effRange(u);
     let best: Unit | null = null;
-    let bestD = u.range * 1.05;
+    let bestD = range * 1.05;
     for (const e of this.units) {
       if (e.side === u.side || !e.alive) continue;
       const d = dist(u.x, u.y, e.x, e.y);
-      if (d < bestD && this.los(u, e)) {
+      // A hidden Recon is spotted at a fraction of the distance:
+      // the searcher's reach against him shrinks, nobody else's.
+      const cap = u.side === "axis" && this.reconHidden(e) ? range * RECON_SPOT_FACTOR : range * 1.05;
+      if (d < bestD && d <= cap && this.los(u, e)) {
+        // AT men pick armor over infantry when both are in reach.
+        if (u.type === "at" && best && best.vehicle && !e.vehicle) continue;
+        if (u.type === "at" && e.vehicle && best && !best.vehicle) {
+          best = e;
+          bestD = d;
+          continue;
+        }
         best = e;
         bestD = d;
       }
@@ -4776,6 +5167,12 @@ export class GameEngine {
     const men = this.units.filter((u) => u.side === "allies" && u.npc && u.alive && !u.broken);
     for (const u of men) {
       if (u.cover) continue;
+      // A man in a formed NPC squad holds a formation slot around
+      // his leader: the formation IS his spacing (slots sit 30-40
+      // apart, inside this radius), so the safety net would fight
+      // his anchor every tick. Squad men are exempt as movers;
+      // they still count as neighbours for lone NPCs.
+      if (u.npcSquad !== undefined) continue;
       let cx = 0;
       let cy = 0;
       let n = 0;
@@ -4814,6 +5211,7 @@ export class GameEngine {
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number) {
     u.shootT = 0.16;
+    u.lastShotT = this.elapsed;
     if (u.side === "allies" || this.visible[this.cellAt(u.x, u.y)]) sfx(u.type === "mg" || u.enemyType === "mg42" || u.enemyType === "grenadier" ? "mg" : "shot");
     const ang = Math.atan2(ty - u.y, tx - u.x) + (Math.random() - 0.5) * spread * 2;
     const mx = u.x + Math.cos(u.facing) * 14;
@@ -4856,6 +5254,20 @@ export class GameEngine {
 
   private damage(u: Unit, dmg: number, sourceType: string, killerId: number | null) {
     if (!u.alive) return;
+    // A Recon's mark: the squad's fire on a marked man runs
+    // heavier, and the first hit on an ambush mark springs it
+    // hardest of all, once.
+    if (u.markedUntil !== undefined && u.markedUntil > this.elapsed && killerId !== null) {
+      const killer = this.unitById(killerId);
+      if (killer && killer.side !== u.side) {
+        if (u.markedAmbush) {
+          dmg *= 1.6;
+          u.markedAmbush = false;
+        } else {
+          dmg *= 1.3;
+        }
+      }
+    }
     u.hp -= dmg;
     // Under fire: every hit shakes nerve, 0.3 morale per HP lost.
     // A rifle hit costs about 4, a sniper round about 12, a
@@ -4872,6 +5284,7 @@ export class GameEngine {
   private kill(u: Unit, sourceType: string, killerId: number | null) {
     u.alive = false;
     u.hp = 0;
+    u.diedAt = this.elapsed;
     // A vehicle does not fall down like a man: it blows up and
     // stays as a burnt wreck (Josh, 2026-11-12). deathT 99
     // takes it straight out of the dying/corpse path.
@@ -5320,6 +5733,16 @@ export class GameEngine {
         }
       }
     }
+    // A Recon's marked man stays lit for the squad while the
+    // mark lasts: his cell counts as seen, fog or no fog.
+    for (const u of this.units) {
+      if (u.side !== "axis" || !u.alive) continue;
+      if (u.markedUntil !== undefined && u.markedUntil > this.elapsed) {
+        const cell = this.cellAt(u.x, u.y);
+        this.visible[cell] = 1;
+        this.explored[cell] = 1;
+      }
+    }
     const f = this.fogCtx;
     if (!f) return;
     f.clearRect(0, 0, COLS, ROWS);
@@ -5363,8 +5786,19 @@ export class GameEngine {
         abilityCdMax: UNIT_TYPES[u.type].ability.cd,
         kills: u.kills,
         alive: u.alive,
+        diedAt: u.diedAt ?? null,
         orders: u.orders.length,
       }));
+    // Squad dock order (Josh, 2026-11-12): the living stay grouped
+    // on the left in their normal order; a man who falls moves to
+    // the far right, and the fallen collect there in the order
+    // they fell. The sort is stable, so the living keep engine
+    // order and equal death stamps keep theirs.
+    units.sort((a, b) => {
+      if (a.alive !== b.alive) return a.alive ? -1 : 1;
+      if (a.alive) return 0;
+      return (a.diedAt ?? 0) - (b.diedAt ?? 0);
+    });
     this.onHud({
       elapsed: this.elapsed,
       paused: this.paused,
@@ -5923,6 +6357,20 @@ export class GameEngine {
       ctx.fill();
       ctx.fillStyle = "#57543F";
       ctx.fillRect(x - PX, y - PX, 2 * PX, 2 * PX);
+      // An Engineer's find: red ring and a little marker flag,
+      // so the squad can see the danger and route around it (or
+      // watch him work it).
+      if (m.revealed) {
+        ctx.strokeStyle = "#E24A4A";
+        ctx.lineWidth = PX;
+        ctx.beginPath();
+        ctx.arc(x, y, 7 * PX, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = "#8D9A83";
+        ctx.fillRect(x + 5 * PX, y - 10 * PX, PX, 7 * PX);
+        ctx.fillStyle = "#E24A4A";
+        ctx.fillRect(x + 6 * PX, y - 10 * PX, 4 * PX, 3 * PX);
+      }
     }
   }
 
@@ -6300,6 +6748,19 @@ export class GameEngine {
       ctx.fillText("BROKEN", fx + PX, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4) + PX);
       ctx.fillStyle = "#E24A4A";
       ctx.fillText("BROKEN", fx, headY - PX * (isAlly && this.selected.includes(u.id) ? 12 : 4));
+    }
+    // A Recon's mark: a small amber diamond over the man's head,
+    // visible while the mark lasts (he only draws at all when his
+    // cell is seen, and the mark itself keeps his cell seen).
+    if (u.side === "axis" && u.markedUntil !== undefined && u.markedUntil > this.elapsed) {
+      ctx.fillStyle = "#E5A93C";
+      ctx.beginPath();
+      ctx.moveTo(fx, headY - PX * 9);
+      ctx.lineTo(fx + PX * 2, headY - PX * 7);
+      ctx.lineTo(fx, headY - PX * 5);
+      ctx.lineTo(fx - PX * 2, headY - PX * 7);
+      ctx.closePath();
+      ctx.fill();
     }
   }
 }

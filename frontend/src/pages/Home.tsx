@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Flame, Medal, Radio, Skull } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { apiGet, apiPost } from "@/lib/api";
 import type { GameState, MemorialEntry, Mission, Soldier } from "@/lib/types";
@@ -28,6 +29,7 @@ const THREAT_TEXT: Record<string, string> = {
 export default function Home() {
   useMusic("war-room"); // Battle Drums, looped; stops on leaving the War Room.
   const navigate = useNavigate();
+  const [newCampaignOpen, setNewCampaignOpen] = useState(false);
   const qc = useQueryClient();
 
   const { data: state, isLoading: stateLoading, isError: stateError } = useQuery({ queryKey: ["state"], queryFn: () => apiGet<GameState>("/state"), retry: false });
@@ -54,9 +56,10 @@ export default function Home() {
   const reset = useMutation({
     mutationFn: () => apiPost<GameState>("/campaign/reset"),
     onSuccess: () => {
+      setNewCampaignOpen(false);
       qc.invalidateQueries({ queryKey: ["state"] });
       qc.invalidateQueries({ queryKey: ["squad"] });
-      toast.success("Fresh campaign drawn up. The memorial remembers.");
+      toast.success("Fresh campaign drawn up. Your survivors march with you, and the memorial remembers.");
     },
     onError: () => toast.error("Could not reset the campaign"),
   });
@@ -105,12 +108,34 @@ export default function Home() {
               <div className="flex flex-wrap gap-3 pt-2">
                 <button
                   data-testid="restart-campaign-btn"
-                  onClick={() => reset.mutate()}
+                  onClick={() => setNewCampaignOpen(true)}
                   disabled={reset.isPending}
                   className={buttonVariants({ variant: "default", size: "sm" })}
                 >
                   START A NEW CAMPAIGN
                 </button>
+                <Dialog open={newCampaignOpen} onOpenChange={(o) => !reset.isPending && setNewCampaignOpen(o)}>
+                  <DialogContent showCloseButton={false} className="border-2 border-[#2E3628] bg-[#1A1D17] text-[#E3E7DC]" data-testid="new-campaign-dialog">
+                    <DialogHeader>
+                      <DialogTitle className="font-[Silkscreen] text-lg text-[#F0F5EB]">NEW CAMPAIGN</DialogTitle>
+                      <DialogDescription className="font-mono text-sm text-[#E3E7DC]" data-testid="new-campaign-warning">
+                        The war starts over at Operation Overlord and RP resets to 300. What carries: every surviving
+                        man stays on your roster with his rank, kills, and medals, and the Memorial stands exactly as
+                        it is, every grave and decoration untouched. You carry too: your commander keeps his career
+                        rank and level, so every radio call he has unlocked stays unlocked. The fallen are never
+                        cleared by a new campaign, only by a New Game.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter className="gap-2">
+                      <Button variant="outline" onClick={() => setNewCampaignOpen(false)} disabled={reset.isPending} data-testid="new-campaign-cancel">
+                        CANCEL
+                      </Button>
+                      <Button onClick={() => reset.mutate()} disabled={reset.isPending} data-testid="new-campaign-confirm">
+                        {reset.isPending ? "DRAWING UP…" : "BEGIN NEW CAMPAIGN"}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
                 <Link
                   to="/memorial"
                   data-testid="visit-memorial-btn"

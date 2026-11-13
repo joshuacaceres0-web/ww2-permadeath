@@ -4,7 +4,9 @@
 // No free scroll, no edge pan, no focus jumps to other men.
 // When leadership passes on, the lock snaps to the successor.
 // Full map survives only while the battle is paused; the
-// moment it runs, the view is back on the leader.
+// moment it runs, the view is back on the leader. One exception,
+// also Josh 2026-11-12: a retreat in progress is watched on the
+// live full map until the battle files.
 import { describe, it, expect } from "vitest";
 
 function stubBrowser() {
@@ -142,6 +144,11 @@ describe("camera hard lock on the team leader", () => {
     // would break him and he would run, which is morale
     // working, not the camera failing.
     for (const u of e.units) if (u.side === "axis") { u.x = 100; u.y = 1300; }
+    // Park his own men too: a follower or a 2nd Platoon man
+    // marching east can bump the teleported leader a few units
+    // through collision separation, which is the world working,
+    // not the camera drifting (the center tracks him exactly —
+    // that is asserted on its own line above this one).
     // Teleport stages across the map, including past where the
     // old clamp used to pin the view (center capped at 3200):
     // a true hard lock centers him anyway. Stages sit on the
@@ -149,6 +156,8 @@ describe("camera hard lock on the team leader", () => {
     // blockers — teleporting into a building would rightly
     // get him shoved out by collision resolution.
     const { roadYAt } = await import("../engine");
+    const leaderNow = leaderOf(e);
+    for (const u of e.units) if (u.id !== leaderNow.id && u.side === "allies") { u.x = 100; u.y = 1300; }
     for (const x of [1500, 2500, 3900]) {
       const L = leaderOf(e);
       L.x = x;
@@ -200,26 +209,47 @@ describe("camera hard lock on the team leader", () => {
     expect(Math.abs(c.y - L.y)).toBeLessThan(2);
   });
 
-  it("retreat keeps the camera on the running leader, then on the group when he is gone", async () => {
+  it("retreat pulls the view out to the live full map and keeps it there until the battle files", async () => {
     const e = await makeEngine();
     e.begin();
     const men = e.units.filter((u) => u.side === "allies" && !u.npc);
     men.forEach((u, i) => { u.x = 1500; u.y = 600 + i * 30; });
+    const axisBefore = e.units.filter((u) => u.side === "axis").length;
     e.retreat();
+    // The whole battlefield is in frame from the first moment.
+    expect(e.isFitMap()).toBe(true);
+    expect(e.viewW).toBe(4000);
+    expect(e.viewH).toBe(1350);
+    // The battle is LIVE under it, not the paused look: the men
+    // are running west between ticks.
+    const x0 = Math.min(...men.map((u) => u.x));
     step(e, 2);
-    let c = center(e);
-    expect(Math.abs(c.x - leaderOf(e).x)).toBeLessThan(2);
-    // The leader goes down mid-retreat: no succession under a
-    // retreat, so the camera watches the middle of the men
-    // still running.
-    e.damage(leaderOf(e), 99999, "mg42", null);
-    step(e, 0.5);
-    const alive = men.filter((u) => u.alive);
-    expect(alive.length).toBeGreaterThan(0);
-    const gx = alive.reduce((s, u) => s + u.x, 0) / alive.length;
-    const gy = alive.reduce((s, u) => s + u.y, 0) / alive.length;
-    c = center(e);
-    expect(Math.abs(c.x - gx)).toBeLessThan(3);
-    expect(Math.abs(c.y - gy)).toBeLessThan(3);
-  });
+    expect(Math.min(...men.filter((u) => u.alive).map((u) => u.x))).toBeLessThan(x0);
+    expect(e.isFitMap()).toBe(true);
+    // Nobody can switch it off mid-retreat, not even the view's
+    // own toggle.
+    e.setFitMap(false);
+    expect(e.isFitMap()).toBe(true);
+    // Six seconds in the flankers arrive off the north and south
+    // edges, and they are in frame too, because the frame is the
+    // whole map.
+    step(e, 6);
+    const axis = e.units.filter((u) => u.side === "axis");
+    expect(axis.length).toBeGreaterThan(axisBefore);
+    const inFrame = (u: U) =>
+      u.x >= e.cam.x && u.x <= e.cam.x + e.viewW && u.y >= e.cam.y && u.y <= e.cam.y + e.viewH;
+    for (const u of axis) expect(inFrame(u)).toBe(true);
+    for (const u of men) expect(inFrame(u)).toBe(true);
+    expect(e.isFitMap()).toBe(true);
+    // And it holds for the rest of the retreat, however it ends:
+    // step until the battle files (or a long cap) and the fit
+    // must never have dropped on a live tick.
+    let filed = false;
+    for (let s = 0; s < 120 && !filed; s++) {
+      step(e, 1);
+      if (e.phase !== "battle") filed = true;
+      else expect(e.isFitMap()).toBe(true);
+    }
+    expect(filed).toBe(true);
+  }, 120000);
 });

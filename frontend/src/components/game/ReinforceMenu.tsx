@@ -7,10 +7,10 @@
 // Support is player-called from this menu (AUTO never calls it).
 import { useState } from "react";
 import { Radio } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import type { ReinforcementKind } from "@/lib/types";
 import type { RadioSupportKind, SupportCd } from "@/game/engine";
 import { ARTILLERY_CD, SUPPLY_CD, RECON_CD, MORTAR_CD, SMOKE_CD, RADIO_CALL_LEVEL } from "@/game/engine";
+import { PANEL_BTN, PANEL_LABEL, PANEL_SOLID } from "@/components/game/panel";
 
 export const REINFORCEMENTS: Array<{ kind: ReinforcementKind; label: string; men: string; cost: number }> = [
   { kind: "rifle", label: "RIFLE SQUAD", men: "3 riflemen", cost: 15 },
@@ -62,27 +62,25 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
   const reinforcementsLocked = commanderLevel < RADIO_CALL_LEVEL.reinforce;
   return (
     <div className="relative">
-      <Button
+      <button
         data-testid="reinforce-btn"
-        variant="outline"
-        size="xs"
-        className="border-[#4ECDC4]/60 text-[#4ECDC4]"
+        className={`flex items-center px-2 py-1.5 text-[10px] ${PANEL_BTN}`}
         disabled={disabled || !radioLive}
         title={!radioLive ? "Radio is down — no radioman in the squad. Hire one in the Barracks." : undefined}
         onClick={() => setOpen((o) => !o)}
       >
-        <Radio size={12} className="mr-1" /> {radioLive ? "RADIO" : "NO RADIOMAN"}{" "}
+        <Radio size={12} className="mr-1 text-[#4ECDC4]" /> <span className="text-[#4ECDC4]">{radioLive ? "RADIO" : "NO RADIOMAN"}</span>{" "}
         <span className="ml-1 text-[#8D9A83]">{left}/3</span>
-      </Button>
+      </button>
       {open && !disabled && radioLive && (
         <div
           data-testid="reinforce-menu"
-          className="absolute right-0 top-full z-30 mt-1 w-64 border border-[#2E3628] bg-[#0D0F0C]/95 p-2 shadow-xl backdrop-blur"
+          className={`absolute right-0 top-full z-30 mt-1 w-64 p-2 ${PANEL_SOLID}`}
         >
-          <p className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">
+          <p className={`mb-1.5 ${PANEL_LABEL}`}>
             Radio support · LVL {commanderLevel} · {rp} RP · {left} calls left
           </p>
-          <p className="mb-1.5 font-mono text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">
+          <p className={`mb-1.5 ${PANEL_LABEL}`}>
             Call 2nd Platoon {reinforcementsLocked ? "· LVL 2 to unlock" : ""}
           </p>
           {REINFORCEMENTS.map((r) => (
@@ -94,7 +92,7 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
                 onCall(r.kind);
                 setOpen(false);
               }}
-              className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#1A1D17] px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#4ECDC4] disabled:opacity-40"
+              className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#4ECDC4] disabled:opacity-40"
             >
               <span>
                 <span className="block font-semibold">{r.label}</span>
@@ -103,7 +101,7 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
               <span className="text-[#E5A93C]">{reinforcementsLocked ? "LVL 2" : `${reinforceCost[r.kind]} RP`}</span>
             </button>
           ))}
-          <p className="mb-1.5 mt-2 font-mono text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">
+          <p className={`mb-1.5 mt-2 ${PANEL_LABEL}`}>
             Radio support · needs a living radioman
           </p>
           {RADIO_SUPPORT.map((r) => {
@@ -122,7 +120,7 @@ export default function ReinforceMenu({ rp, left, disabled, pending, radioLive, 
                   onSupport(r.kind);
                   setOpen(false);
                 }}
-                className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#1A1D17] px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#E5A93C] disabled:opacity-40"
+                className="mb-1 flex w-full items-center justify-between border border-[#2E3628] bg-[#0D0F0C]/60 px-2 py-1.5 text-left font-mono text-[11px] text-[#E3E7DC] transition-colors duration-150 hover:border-[#E5A93C] disabled:opacity-40"
               >
                 <span>
                   <span className="block font-semibold">{r.label}</span>

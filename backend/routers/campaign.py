@@ -26,6 +26,7 @@ from lib.gen import XP_PER_KILL, XP_PER_MISSION, commander_level, COMMANDER_RANK
 from lib.medals import NAMES, award
 from lib.missions import RADIO_SUPPORT_COST, battle_reward, mission_by_index, mission_list, radio_cost
 from lib.state import DEFAULT_STATE, STATE_ID, career_wins, get_state, seed_squad, state_out
+from lib.graves import assign_graves
 
 router = APIRouter()
 
@@ -207,6 +208,10 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
     sole_survivor = len(input.survivors) == 1
 
     # Permadeath: every fallen soldier is deleted from the roster and etched onto the wall.
+    # His grave is laid by the game as the report files (Josh, 2026-11-12): keep a
+    # running picture of the memorial ground in fall order so each new stone takes
+    # the next clear plot behind the men who fell before him.
+    grave_docs = await S.memorial.find().to_list(1000)
     for fallen in input.fallen:
         doc = await S.soldiers.find_one({"id": fallen.soldier_id})
         if not doc:
@@ -221,26 +226,28 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         # Chester Pruitt on the wall twice.
         existing = await S.memorial.find_one({"id": doc["id"]})
         if not existing:
-            await S.memorial.insert_one(
-                {
-                    "id": doc["id"],
-                    "name": doc["name"],
-                    "type": doc["type"],
-                    "rank": rank_for(doc.get("missions", 0)),
-                    "kills": kills,
-                    "missions_survived": doc.get("missions", 0),
-                    "cause": cause,
-                    "mission_code": mission.code,
-                    "died_at": now,
-                    "unit": doc.get("unit", ""),
-                    "hometown": doc.get("hometown", ""),
-                    "portrait_seed": doc.get("portrait_seed", 0),
-                    "medals": doc.get("medals", []) + new_medals,
-                    "story": make_epitaph(doc, cause, mission.code, mission.location, kills),
-                    "grave_x": None,
-                    "grave_y": None,
-                }
-            )
+            new_entry = {
+                "id": doc["id"],
+                "name": doc["name"],
+                "type": doc["type"],
+                "rank": rank_for(doc.get("missions", 0)),
+                "kills": kills,
+                "missions_survived": doc.get("missions", 0),
+                "cause": cause,
+                "mission_code": mission.code,
+                "died_at": now,
+                "unit": doc.get("unit", ""),
+                "hometown": doc.get("hometown", ""),
+                "portrait_seed": doc.get("portrait_seed", 0),
+                "medals": doc.get("medals", []) + new_medals,
+                "story": make_epitaph(doc, cause, mission.code, mission.location, kills),
+                "grave_x": None,
+                "grave_y": None,
+            }
+            gx, gy = assign_graves(grave_docs + [new_entry])[doc["id"]]
+            new_entry["grave_x"], new_entry["grave_y"] = gx, gy
+            await S.memorial.insert_one(new_entry)
+            grave_docs.append(new_entry)
         await S.soldiers.delete_one({"id": fallen.soldier_id})
         memorial_names.append(doc["name"])
 
@@ -348,13 +355,20 @@ async def wipe_everything(input: WipeIn):
 
 @router.post("/campaign/reset", response_model=GameStateOut)
 async def reset_campaign():
-    """Fresh campaign: state + roster reset. The memorial, graveyard and the commander's
-    career (rank, name) stand forever. Held under the save lock for the whole
-    reset, so a concurrent first touch cannot re-seed the old squad mid-reset
-    (the old code called seed_all() unlocked, which raced get_state())."""
+    """New campaign (Josh, 2026-11-12): the war starts over, the men
+    and the dead do not. Campaign state (operation, RP, battle
+    record) resets and the commander keeps his career and name,
+    but every living soldier stays on the roster exactly as he
+    stands — rank, kills, missions, medals, active or reserve —
+    and the memorial and graveyard stand untouched: the fallen
+    are a permanent record, and the only way to clear them is a
+    full New Game wipe. Only a roster left completely empty (the
+    whole squad fell) is refilled, by the founding squad
+    reporting as replacements. Held under the save lock for the
+    whole reset, so a concurrent first touch cannot re-seed
+    mid-reset."""
     async with save_lock():
         state = await get_state()
-        await S.soldiers.delete_many({})
         await S.game_state.update_one(
             {"id": STATE_ID},
             {
@@ -367,9 +381,12 @@ async def reset_campaign():
                     "campaign_complete": False,
                     "career_wins": career_wins(state),
                     "filed_battles": [],
+                    "reinforcements_used": 0,
+                    "reinforcements_mission": None,
                 }
             },
             upsert=True,
         )
-        await seed_squad()
+        if await S.soldiers.count_documents({}) == 0:
+            await seed_squad()
         return state_out(await get_state())

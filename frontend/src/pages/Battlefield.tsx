@@ -9,6 +9,7 @@ import ReplayViewer from "@/components/game/ReplayViewer";
 import SquadDock from "@/components/game/SquadDock";
 import TouchControls, { FORMATIONS } from "@/components/game/TouchControls";
 import ReinforceMenu, { REINFORCEMENTS } from "@/components/game/ReinforceMenu";
+import { PANEL, PANEL_BTN, PANEL_BTN_ACTIVE, PANEL_LABEL, PANEL_REST, PANEL_SOLID } from "@/components/game/panel";
 import { RotateCw, Shield } from "lucide-react";
 import Portrait from "@/components/Portrait";
 import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
@@ -422,7 +423,7 @@ export default function Battlefield() {
             menu. The old in-battle hints and the terrain legend
             moved to the briefing. */}
         {!fullMap && !hud?.briefing && (
-          <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-2.5 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px]" data-testid="battle-status">
+          <div className={`pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-2.5 px-2 py-1 font-mono text-[10px] ${PANEL}`} data-testid="battle-status">
             <span className="font-bold tracking-wider text-[#F0F5EB]">{mission.code}</span>
             <span className="text-[#E5A93C]" data-testid="battle-rp">{state?.requisition ?? "—"} RP</span>
             <span className="text-[#8D9A83]" data-testid="battle-timer">T+{mmss(hud?.elapsed ?? 0)}</span>
@@ -442,9 +443,9 @@ export default function Battlefield() {
         {hud?.retreating && hud?.state === "active" && (
           <div
             data-testid="retreat-banner"
-            className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 border border-[#B3402E] bg-[#2A0E08]/90 px-4 py-2 text-center"
+            className="pointer-events-none absolute left-1/2 top-3 z-20 -translate-x-1/2 border border-[#B3402E] bg-[#2A0E08]/85 px-4 py-2 text-center shadow-[0_2px_12px_rgba(0,0,0,0.5)]"
           >
-            <div className="font-mono text-[12px] font-bold tracking-[0.2em] text-[#FF8A70]">RETREATING</div>
+            <div className="font-mono text-[12px] font-bold tracking-[0.2em] text-[#FF8A70]">RETREATING — AUTO</div>
             <div className="mt-0.5 font-mono text-[10px] tracking-wider text-[#E3E7DC]">
               Your squad is falling back on its own. Control is gone until the battle is filed.
             </div>
@@ -454,13 +455,13 @@ export default function Battlefield() {
           <button
             data-testid="esc-menu-btn"
             onClick={() => { engineRef.current?.setPaused(true); setEscOpen(true); }}
-            className="absolute right-2 top-2 z-20 border border-[#2E3628] bg-[#0D0F0C]/85 px-3 py-2 font-mono text-[11px] tracking-wider text-[#E3E7DC]"
+            className={`absolute right-2 top-2 z-20 px-3 py-2 font-mono text-[11px] tracking-wider text-[#E3E7DC] ${PANEL} ${PANEL_REST}`}
           >
             ☰ MENU
           </button>
         )}
         {!fullMap && !hud?.briefing && hud?.state === "active" && (
-          <div className="absolute bottom-2 right-2 z-20 flex flex-col items-end gap-1.5" data-testid="battle-controls">
+          <div className={`absolute bottom-2 right-2 z-20 flex flex-col gap-1.5 p-1.5 ${PANEL} ${PANEL_REST}`} data-testid="battle-controls">
             <div className="flex items-center gap-1" data-testid="order-controls" title="Squad orders: your men follow the leader under the order given">
               {([
                 ["attack", "ATTACK", "1"],
@@ -471,29 +472,21 @@ export default function Battlefield() {
                   key={id}
                   data-testid={`order-${id}`}
                   onClick={() => engineRef.current?.setSquadOrder(id)}
-                  className={`border px-2 py-1.5 font-mono text-[10px] tracking-wider transition-colors duration-150 ${
-                    (hud?.squadOrder ?? "formup") === id
-                      ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]"
-                      : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83] hover:text-[#E3E7DC]"
-                  }`}
+                  className={`px-2 py-1.5 text-[10px] ${PANEL_BTN} ${(hud?.squadOrder ?? "formup") === id ? PANEL_BTN_ACTIVE : ""}`}
                 >
                   {label} <span className="opacity-60">{key}</span>
                 </button>
               ))}
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-1.5">
+            <div className="flex flex-wrap items-center justify-end gap-1 border-t border-[#2E3628] pt-1.5">
               {!touch && (
-                <div className="flex items-center gap-0.5" data-testid="formation-picker" title="Formation (F)">
+                <div className="flex items-center gap-1" data-testid="formation-picker" title="Formation (F)">
                   {FORMATIONS.map((f) => (
                     <button
                       key={f.id}
                       data-testid={`formation-${f.id}`}
                       onClick={() => engineRef.current?.setFormation(f.id)}
-                      className={`border px-1.5 py-1 font-mono text-[10px] tracking-wider transition-colors duration-150 ${
-                        (hud?.formation ?? "wedge") === f.id
-                          ? "border-[#4ECDC4] text-[#4ECDC4]"
-                          : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83] hover:text-[#E3E7DC]"
-                      }`}
+                      className={`px-1.5 py-1 text-[10px] ${PANEL_BTN} ${(hud?.formation ?? "wedge") === f.id ? PANEL_BTN_ACTIVE : ""}`}
                     >
                       {f.glyph} {f.label}
                     </button>
@@ -514,39 +507,37 @@ export default function Battlefield() {
                 onCall={callIn}
                 onSupport={callSupport}
               />
-              <Button
+              <button
                 data-testid="take-cover-btn"
-                variant="outline"
-                size="xs"
                 onClick={() => engineRef.current?.takeCover()}
                 title="Leader takes cover (C)"
+                className={`flex items-center px-2 py-1.5 text-[10px] ${PANEL_BTN}`}
               >
                 <Shield size={12} className="mr-1" /> COVER
-              </Button>
-              <Button
+              </button>
+              <button
                 data-testid="tactical-pause-btn"
-                variant="outline"
-                size="xs"
                 onClick={() => engineRef.current?.togglePause()}
+                className={`flex items-center px-2 py-1.5 text-[10px] ${PANEL_BTN}`}
               >
                 {hud?.paused ? <Play size={12} className="mr-1" /> : <Pause size={12} className="mr-1" />}
                 {hud?.paused ? "RESUME" : "PAUSE"}
-              </Button>
+              </button>
             </div>
           </div>
         )}
         {escOpen && !hud?.briefing && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#0D0F0C]/80 p-4" data-testid="esc-menu">
-            <div className="w-full max-w-sm border border-[#2E3628] bg-[#1A1D17] p-4">
-              <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#8D9A83]">Battle menu</p>
+            <div className={`w-full max-w-sm p-4 ${PANEL_SOLID}`}>
+              <p className={PANEL_LABEL}>Battle menu</p>
               <h3 className="mt-1 font-heading text-xl font-bold text-[#F0F5EB]">{mission.code} — PAUSED</h3>
               <div className="mt-4 flex flex-col gap-2">
                 <Button data-testid="esc-resume" onClick={() => closeEsc(true)}>RESUME</Button>
                 <Button data-testid="esc-fullmap" variant="outline" onClick={() => { toggleFullMap(); closeEsc(false); }}>
                   FULL MAP — PAUSED LOOK
                 </Button>
-                <div className="flex items-center justify-between border border-[#2E3628] px-2 py-1.5">
-                  <span className="font-mono text-[10px] tracking-wider text-[#8D9A83]">REINFORCE / RADIO</span>
+                <div className="flex items-center justify-between border-t border-[#2E3628] pt-2">
+                  <span className={PANEL_LABEL}>REINFORCE / RADIO</span>
                   <ReinforceMenu
                     rp={state?.requisition ?? 0}
                     left={hud?.reinforcementsLeft ?? 3}
@@ -624,7 +615,7 @@ export default function Battlefield() {
           <button
             data-testid="show-controls-btn"
             onClick={() => { toggleFullMap(); engineRef.current?.setPaused(false); }}
-            className="absolute bottom-3 right-3 z-20 border border-[#4ECDC4] bg-[#0D0F0C]/90 px-3 py-2 font-mono text-[11px] tracking-wider text-[#4ECDC4]"
+            className={`absolute bottom-3 right-3 z-20 px-3 py-2 font-mono text-[11px] tracking-wider text-[#4ECDC4] ${PANEL} ${PANEL_REST}`}
           >
             BACK TO LEADER
           </button>
@@ -877,6 +868,7 @@ export default function Battlefield() {
                 abilityCdMax: UNIT_TYPES[soldier.type].ability.cd,
                 kills: soldier.kills,
                 alive: true,
+                diedAt: null,
                 orders: 0,
               })),
               selectedIds: [],
@@ -895,6 +887,7 @@ export default function Battlefield() {
               reinforceCost: { rifle: 15, heavy: 25 },
               enemyRadioLive: false,
               autoBattle: false,
+              retreating: false,
               leaderId: null,
               squadOrder: "formup" as const,
               teamA: [],

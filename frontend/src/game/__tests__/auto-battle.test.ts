@@ -164,7 +164,7 @@ describe("Auto Battle — core", () => {
     expect((hurt.hp as number)).toBeGreaterThanOrEqual(60);
   }, 120000);
 
-  it("add-on 1: without AUTO the medic does not heal on his own", async () => {
+  it("add-on 1: without AUTO a follower medic still heals on his own (AI logic drives followers)", async () => {
     const { engine } = await makeBattle();
     const units = (engine as unknown as AnyEngine).units as Array<Record<string, unknown>>;
     const medic = units.find((u) => u.side === "allies" && !u.npc && u.type === "medic")!;
@@ -173,9 +173,32 @@ describe("Auto Battle — core", () => {
     hurt.x = medic.x;
     hurt.y = medic.y;
     step(engine, 3);
-    expect((medic.abilityCd as number)).toBe(0);
+    // Josh's class spec (2026-11-12): followers use their
+    // abilities on their own judgment in every live battle, AUTO
+    // or not — the medic's Heal lands and spends his cooldown.
+    expect((medic.abilityCd as number)).toBeGreaterThan(0);
+    expect((hurt.hp as number)).toBeGreaterThan(40);
+  }, 120000);
+
+  it("add-on 1b: the leader's own ability stays the player's in a manual battle", async () => {
+    const { GameEngine } = await loadEngine();
+    const canvas = (document as unknown as { createElement: (t: string) => HTMLCanvasElement }).createElement("canvas");
+    const engine = new GameEngine(canvas, () => {}) as unknown as AnyEngine & {
+      setup: (m: unknown, s: unknown, b: number, v: string, cl: number, leader: string) => void;
+    };
+    // The medic leads this time: his Heal is on the player's hand.
+    engine.setup(MISSION as never, SQUAD as never, 0, "", 1, "s4");
+    engine.begin();
+    const units = engine.units as Array<Record<string, unknown>>;
+    const leaderMedic = units.find((u) => u.side === "allies" && !u.npc && u.type === "medic")!;
+    const hurt = units.find((u) => u.side === "allies" && !u.npc && u.type === "rifleman")!;
+    hurt.hp = 20;
+    hurt.x = leaderMedic.x;
+    hurt.y = leaderMedic.y;
+    step(engine, 3);
+    expect((leaderMedic.abilityCd as number)).toBe(0);
     // Only the medic's passive aura (~3 hp/sec) applies, no +50 ability.
-    expect((hurt.hp as number)).toBeLessThan(30);
+    expect((hurt.hp as number)).toBeLessThan(40);
   }, 120000);
 
   it("replay: the engine records a frame every 0.5s for the debrief screen", async () => {

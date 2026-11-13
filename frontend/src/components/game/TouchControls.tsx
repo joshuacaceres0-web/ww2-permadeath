@@ -1,5 +1,6 @@
 import { useRef, useState, type ReactNode, type RefObject } from "react";
 import type { GameEngine, Formation, SquadOrder } from "@/game/engine";
+import { PANEL_BTN, PANEL_BTN_ACTIVE } from "@/components/game/panel";
 
 interface Props {
   engineRef: RefObject<GameEngine | null>;
@@ -55,7 +56,7 @@ function Stick({
   return (
     <div
       ref={baseRef}
-      className="pointer-events-auto relative h-32 w-32 shrink-0 touch-none rounded-full border bg-[#0D0F0C]/60"
+      className="pointer-events-auto relative h-32 w-32 shrink-0 touch-none rounded-full border bg-[#0D0F0C]/50"
       style={{ borderColor: accent }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -83,7 +84,7 @@ function Stick({
       }}
     >
       <div
-        className="absolute h-14 w-14 rounded-full border bg-[#1A1D17]/90"
+        className="absolute h-14 w-14 rounded-full border bg-[#0D0F0C]/85"
         style={{
           borderColor: accent,
           left: `calc(50% - 28px + ${knob?.x ?? 0}px)`,
@@ -113,7 +114,7 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
         {radioSlot}
         <button
           data-testid="touch-formation-btn"
-          className="pointer-events-auto border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-2 font-mono text-[10px] tracking-wider text-[#E3E7DC]"
+          className={`pointer-events-auto px-2.5 py-2 text-[10px] ${PANEL_BTN} text-[#E3E7DC]!`}
           onClick={() => {
             const order: Formation[] = ["wedge", "line", "column", "spread"];
             eng()?.setFormation(order[(order.indexOf(formation) + 1) % order.length]);
@@ -123,7 +124,7 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
         </button>
         <button
           data-testid="touch-cover-btn"
-          className="pointer-events-auto border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-2 font-mono text-[10px] tracking-wider text-[#E3E7DC]"
+          className={`pointer-events-auto px-2.5 py-2 text-[10px] ${PANEL_BTN} text-[#E3E7DC]!`}
           onClick={() => eng()?.takeCover()}
         >
           COVER
@@ -137,11 +138,7 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
             key={o.id}
             data-testid={`touch-order-${o.id}`}
             onClick={() => eng()?.setSquadOrder(o.id)}
-            className={`pointer-events-auto border px-3 py-2.5 font-mono text-[11px] tracking-wider ${
-              squadOrder === o.id
-                ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]"
-                : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83]"
-            }`}
+            className={`pointer-events-auto px-3 py-2.5 text-[11px] ${PANEL_BTN} ${squadOrder === o.id ? PANEL_BTN_ACTIVE : ""}`}
           >
             {o.label}
           </button>
