@@ -47,6 +47,12 @@ class SoldierOut(BaseModel):
     backstory: str = ""
     portrait_seed: int = 0
     medals: List[str] = []
+    # Barracks update (Josh, 2026-11-13): spendable upgrade
+    # points the man earned himself, his upgrade levels by
+    # track, and the stores gear he carries (max 2, no dupes).
+    points: int = 0
+    upgrades: Dict[str, int] = {}
+    equipment: List[str] = []
     hired_at: str = Field(
         default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
@@ -75,6 +81,9 @@ class GameStateOut(BaseModel):
     hire_discount: float  # 0..1
     combat_bonus: float  # 0..1, aim + reaction bonus for every deployed man
     hire_costs: Dict[str, int]
+    # Squad stores: item id -> count owned (equipped gear is
+    # on the men, not counted here).
+    inventory: Dict[str, int] = {}
 
 
 class CommanderIn(BaseModel):
@@ -114,6 +123,9 @@ class BattleCompleteIn(BaseModel):
     deserted: List[FallenIn] = []
     survivors: List[SurvivorIn] = []
     loot_rp: int = 0  # RP looted from supply crates this battle.
+    # The stores item a supply crate held alongside its RP, if
+    # any (engine rolls it; one crate per battle at most).
+    loot_item: str | None = None
     # Idempotency key, one per deployment (frontend generates it when a
     # battle is deployed). The same battle filed twice — retry after a
     # failed request, a pagehide retreat beacon racing the hud effect,
@@ -163,6 +175,11 @@ class DecorOut(BaseModel):
     entry_id: Optional[str] = None
 
 
+class ItemGainOut(BaseModel):
+    item: str
+    source: str  # "loot" (a battlefield crate) or "mission" (a victory award)
+
+
 class BattleResultOut(BaseModel):
     requisition: int
     mission_index: int
@@ -172,6 +189,13 @@ class BattleResultOut(BaseModel):
     medals_awarded: List[str] = []  # "Name — Silver Star"
     commander_promoted: bool = False
     commander_rank: str = ""
+    # Barracks update: upgrade points each survivor banked
+    # (soldier_id -> points), stores items the battle brought
+    # in, and the gear that died with the fallen and the
+    # deserted (death takes everything — nothing returns).
+    points_gained: Dict[str, int] = {}
+    items_gained: List[ItemGainOut] = []
+    gear_lost: List[str] = []
 
 
 ReinforcementKind = Literal["rifle", "heavy"]
@@ -197,6 +221,20 @@ class RadioSupportOut(BaseModel):
     kind: str
     cost: int
     requisition: int
+
+
+class UpgradeIn(BaseModel):
+    soldier_id: str
+    track: str
+
+
+class EquipIn(BaseModel):
+    soldier_id: str
+    item: str
+
+
+class BuyItemIn(BaseModel):
+    item: str
 
 
 class LastBattleOut(BaseModel):

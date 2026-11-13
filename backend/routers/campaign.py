@@ -27,6 +27,8 @@ from lib.medals import NAMES, award
 from lib.missions import RADIO_SUPPORT_COST, battle_reward, mission_by_index, mission_list, radio_cost
 from lib.state import DEFAULT_STATE, STATE_ID, career_wins, get_state, seed_squad, state_out
 from lib.graves import assign_graves
+from lib.items import ITEMS, points_for_battle, roll_item
+import random as _random
 
 router = APIRouter()
 
@@ -178,6 +180,7 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
                 (f.soldier_id, f.cause or "", f.kills) for f in input.deserted
             ),
             "loot_rp": input.loot_rp,
+            "loot_item": input.loot_item,
             "survivors": sorted((s.soldier_id, s.kills) for s in input.survivors),
         }
         filing_key = "fp:" + hashlib.sha256(
@@ -206,6 +209,12 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
     promotions: list[str] = []
     medals_awarded: list[str] = []
     sole_survivor = len(input.survivors) == 1
+    # Barracks update: the squad's stores, worked on in memory
+    # and written back with the rest of the filing.
+    inventory: dict = dict(state.get("inventory") or {})
+    items_gained: list = []
+    gear_lost: list[str] = []
+    points_gained: dict[str, int] = {}
 
     # Permadeath: every fallen soldier is deleted from the roster and etched onto the wall.
     # His grave is laid by the game as the report files (Josh, 2026-11-12): keep a
@@ -224,6 +233,12 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         # Guard against a duplicate memorial entry for the same soldier:
         # a re-filed report (or a double-seeded roster) must never put
         # Chester Pruitt on the wall twice.
+        # Death takes everything (Josh, 2026-11-13): his
+        # upgrades, his unspent points and every item he
+        # carries are lost with him. The gear is only counted
+        # here so the debrief can name what the squad lost.
+        for item in doc.get("equipment") or []:
+            gear_lost.append(item)
         existing = await S.memorial.find_one({"id": doc["id"]})
         if not existing:
             new_entry = {
@@ -258,6 +273,9 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         doc = await S.soldiers.find_one({"id": gone.soldier_id})
         if not doc:
             continue
+        # A deserter takes his gear with him: lost, like the fallen's.
+        for item in doc.get("equipment") or []:
+            gear_lost.append(item)
         await S.soldiers.delete_one({"id": gone.soldier_id})
 
     # Survivors bank kills and XP; a victory survived is a promotion. Only men who were
@@ -270,8 +288,10 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         add_mission = 1 if input.victory else 0
         after = rank_for(doc.get("missions", 0) + add_mission)
         xp = survivor.kills * XP_PER_KILL + (XP_PER_MISSION if input.victory else 0)
+        gained = points_for_battle(survivor.kills)
+        points_gained[survivor.soldier_id] = gained
         new_medals = award(survivor, doc["type"], True, input.victory, sole_survivor, doc.get("medals", []))
-        update: dict = {"$inc": {"kills": survivor.kills, "xp": xp, "missions": add_mission}}
+        update: dict = {"$inc": {"kills": survivor.kills, "xp": xp, "missions": add_mission, "points": gained}}
         if new_medals:
             update["$push"] = {"medals": {"$each": new_medals}}
         await S.soldiers.update_one({"id": survivor.soldier_id}, update)
@@ -279,6 +299,16 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             medals_awarded.append(f"{doc['name']} — {NAMES[m]}")
         if after != before:
             promotions.append(f"{doc['name']}: {before} → {after}")
+
+    # Stores the battle brought in: a crate's item rides the
+    # report in; a victory awards one item from stores stock.
+    if input.loot_item and input.loot_item in ITEMS:
+        inventory[input.loot_item] = inventory.get(input.loot_item, 0) + 1
+        items_gained.append({"item": input.loot_item, "source": "loot"})
+    if input.victory:
+        awarded = roll_item(_random.Random())
+        inventory[awarded] = inventory.get(awarded, 0) + 1
+        items_gained.append({"item": awarded, "source": "mission"})
 
     old_level = commander_level(career_wins(state))
     new_level = commander_level(career_wins(state) + (1 if input.victory else 0))
@@ -306,6 +336,7 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
             # resets for the next mission / next attempt (bug #13).
             "reinforcements_used": 0,
             "reinforcements_mission": None,
+            "inventory": inventory,
             "last_battle": {
                 "mission_code": mission.code,
                 "victory": input.victory,
@@ -335,6 +366,9 @@ async def _battle_complete_locked(input: BattleCompleteIn) -> BattleResultOut:
         medals_awarded=medals_awarded,
         commander_promoted=new_level > old_level,
         commander_rank=COMMANDER_RANKS[new_level - 1],
+        points_gained=points_gained,
+        items_gained=items_gained,
+        gear_lost=gear_lost,
     )
 
 

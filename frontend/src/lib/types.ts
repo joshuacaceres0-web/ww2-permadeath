@@ -56,7 +56,17 @@ export interface Soldier {
   backstory: string;
   portrait_seed: number;
   medals: string[];
+  /** Barracks update: his own spendable upgrade points, his
+   * upgrade levels by track, and the stores gear he carries. */
+  points: number;
+  upgrades: Record<string, number>;
+  equipment: string[];
   hired_at: string;
+}
+
+export interface ItemGain {
+  item: string;
+  source: string; // "loot" | "mission"
 }
 
 export interface GameState {
@@ -74,6 +84,9 @@ export interface GameState {
   hire_discount: number;
   combat_bonus: number;
   hire_costs: Record<UnitTypeId, number>;
+  /** Squad stores: item id -> count owned (gear on the men
+   * is not counted here). */
+  inventory: Record<string, number>;
 }
 
 export interface MemorialEntry {
@@ -114,6 +127,11 @@ export interface BattleResult {
   medals_awarded: string[];
   commander_promoted: boolean;
   commander_rank: string;
+  /** Barracks update: points each survivor banked, stores
+   * items the battle brought in, gear that died with its men. */
+  points_gained: Record<string, number>;
+  items_gained: ItemGain[];
+  gear_lost: string[];
 }
 
 export type ReinforcementKind = "rifle" | "heavy";

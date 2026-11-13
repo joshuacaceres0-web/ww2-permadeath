@@ -473,3 +473,72 @@ export function levelBonus(level: number, commanderBonus: number) {
     reaction: Math.max(0.12, (0.7 - 0.08 * level) * (1 - commanderBonus)),
   };
 }
+
+// ----------------------------------------------------------------
+// Barracks update (Josh, 2026-11-13): per-man upgrades and the
+// squad stores. Mirrors backend/lib/items.py — the backend owns
+// prices, restrictions and the points rule; this table owns the
+// words and the engine's crate roll. Earned in game only: no
+// real money anywhere near any of it.
+// ----------------------------------------------------------------
+
+export interface UpgradeTrackDef {
+  id: string;
+  label: string;
+  per: string;
+}
+
+export const UPGRADE_TRACKS: UpgradeTrackDef[] = [
+  { id: "toughness", label: "Toughness", per: "+12 health per level" },
+  { id: "marksmanship", label: "Marksmanship", per: "+8% damage per level" },
+  { id: "steady", label: "Steady Hands", per: "Reloads 12% faster per level" },
+  { id: "legs", label: "Legs", per: "+6% speed per level" },
+  { id: "nerve", label: "Nerve", per: "Morale losses 15% smaller per level" },
+  { id: "eyes", label: "Eyes", per: "+25 vision per level" },
+];
+export const UPGRADE_COST = 2;
+export const UPGRADE_CAP = 3;
+export const EQUIP_SLOTS = 2;
+
+export interface ItemDef {
+  id: string;
+  label: string;
+  blurb: string;
+  price: number;
+  restrict?: UnitTypeId[];
+  weight: number;
+  kind: "gear" | "headgear" | "gun";
+}
+
+export const ITEM_DEFS: ItemDef[] = [
+  { id: "entrench", label: "Entrenching Tool", blurb: "He digs in properly: cover protects him 15% better.", price: 40, weight: 3, kind: "gear" },
+  { id: "ammo", label: "Extra Ammo Pouches", blurb: "Over his issue bandolier: his magazine holds half again as much.", price: 40, weight: 3, kind: "gear" },
+  { id: "canteen", label: "Canteen", blurb: "A full canteen and the nerve it buys: morale returns 60% faster.", price: 40, weight: 3, kind: "gear" },
+  { id: "dressing", label: "Field Dressing", blurb: "Wounds bind themselves: after 5 quiet seconds he slowly heals, up to 60% health.", price: 40, weight: 3, kind: "gear" },
+  { id: "jeepcap", label: "M1941 Jeep Cap", blurb: "Wool knit comfort under the helmet liner: morale returns 30% faster.", price: 40, weight: 3, kind: "headgear" },
+  { id: "binoculars", label: "Binoculars", blurb: "+60 vision.", price: 75, restrict: ["recon", "sniper"], weight: 1, kind: "gear" },
+  { id: "charm", label: "Lucky Charm", blurb: "Once a battle, a killing hit has a 15% chance to leave him standing on 1 health.", price: 75, weight: 1, kind: "gear" },
+  { id: "batteries", label: "Fresh Batteries", blurb: "The radio answers faster: support cooldowns 20% shorter.", price: 75, restrict: ["radioman"], weight: 1, kind: "gear" },
+  { id: "aidbag", label: "Aid Bag", blurb: "Proper kit: his healing is 30% stronger.", price: 75, restrict: ["medic"], weight: 1, kind: "gear" },
+  { id: "nethelmet", label: "Netted Veteran Helmet", blurb: "Scrim and netting break his outline: the enemy picks him up at 15% shorter range.", price: 75, weight: 1, kind: "headgear" },
+  { id: "parahelmet", label: "Paratrooper Helmet", blurb: "An M1C with a chin cup, worn tight: +12 health.", price: 75, weight: 1, kind: "headgear" },
+  { id: "pilecap", label: "M1943 Pile Cap", blurb: "Ear flaps down against the din: suppression builds 15% slower.", price: 75, weight: 1, kind: "headgear" },
+  { id: "hbtcap", label: "HBT Fatigue Cap", blurb: "Working wear: the cover he digs is half again as strong.", price: 75, restrict: ["engineer"], weight: 1, kind: "headgear" },
+  { id: "garrisoncap", label: "Garrison Cap", blurb: "Off duty only: he wears it in the Barracks and takes his M1 into battle. No combat effect.", price: 25, weight: 2, kind: "headgear" },
+  { id: "thompson", label: "M1A1 Thompson", blurb: "A chopper for close work: fires 45% faster, +2 damage, a shorter reach.", price: 100, restrict: ["rifleman", "medic", "radioman", "recon", "engineer"], weight: 1, kind: "gun" },
+  { id: "springfield", label: "Scoped Springfield", blurb: "+60 range, +5 damage through the glass.", price: 100, restrict: ["sniper", "recon"], weight: 1, kind: "gun" },
+  { id: "mp40", label: "Captured MP40", blurb: "Their iron, turned around: +3 damage, tighter spread.", price: 100, restrict: ["rifleman", "medic", "radioman", "recon", "engineer", "sniper"], weight: 1, kind: "gun" },
+];
+export const ITEM_BY_ID: Record<string, ItemDef> = Object.fromEntries(ITEM_DEFS.map((d) => [d.id, d]));
+
+/** The weighted stores roll for a battlefield crate, mirroring
+ * the backend's victory-award roll (commons 3, the rest 1-2). */
+export function rollCrateItem(rng: () => number): string {
+  const total = ITEM_DEFS.reduce((t, d) => t + d.weight, 0);
+  let roll = rng() * total;
+  for (const d of ITEM_DEFS) {
+    roll -= d.weight;
+    if (roll <= 0) return d.id;
+  }
+  return ITEM_DEFS[0].id;
+}

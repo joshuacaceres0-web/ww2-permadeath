@@ -1,7 +1,7 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
 // fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
 
-import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus } from "./data";
+import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, ITEM_BY_ID, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus, rollCrateItem } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
 import { loadSettings, SHAKE_FACTOR } from "@/lib/settings";
 import { setSfxMuted, setSfxVolume, sfx, whistleSfx } from "./sfx";
@@ -90,10 +90,27 @@ interface Corpse {
 }
 
 // Sprite look for each unit: palette, headgear, weapon.
-function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean }): { pal: string; head: Head; weapon: Weapon } {
+function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: EnemyTypeId | null; npc: boolean; equipment?: string[] }): { pal: string; head: Head; weapon: Weapon } {
   if (u.side === "allies") {
-    const weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", recon: "smg", engineer: "rifle", tank: "none" } as const)[u.type];
-    return { pal: u.npc ? "usNpc" : "us", head: u.type === "medic" ? "us-medic" : "us", weapon };
+    let weapon: Weapon = ({ rifleman: "rifle", medic: "none", mg: "mg", sniper: "sniper", at: "bazooka", radioman: "rifle", recon: "smg", engineer: "rifle", tank: "none" } as const)[u.type];
+    let head: Head = u.type === "medic" ? "us-medic" : "us";
+    // Barracks update: what a man carries is drawn on him. His
+    // earned headgear replaces the issue helmet (the garrison
+    // cap is off-duty wear and never shows in battle), and a
+    // carried gun replaces his class weapon's shape. NPCs and
+    // the enemy carry no stores gear.
+    if (!u.npc && u.equipment && u.equipment.length) {
+      const gear = u.equipment;
+      if (gear.includes("nethelmet")) head = "us-net";
+      else if (gear.includes("parahelmet")) head = "us-para";
+      else if (gear.includes("jeepcap")) head = "us-jeep";
+      else if (gear.includes("pilecap")) head = "us-pile";
+      else if (gear.includes("hbtcap")) head = "us-hbt";
+      if (gear.includes("thompson")) weapon = "thompson";
+      else if (gear.includes("springfield")) weapon = "springfield";
+      else if (gear.includes("mp40")) weapon = "mp40";
+    }
+    return { pal: u.npc ? "usNpc" : "us", head, weapon };
   }
   switch (u.enemyType) {
     case "volks": return { pal: "volks", head: "cap", weapon: "rifle" };
@@ -196,6 +213,10 @@ export const MUZZLE_LEN: Record<string, number> = {
  * the 60s stalemate breaker. NPC squads only: the player's own
  * hold behaviour is untouched and the shared breaker stays. */
 export const NPC_SQUAD_IDLE_PUSH = 25;
+/** Barracks update (Josh, 2026-11-13): a looted supply crate
+ * also holds a stores item this often, alongside its 25 RP —
+ * the same rare crate, the same looting rule. */
+export const CRATE_ITEM_CHANCE = 0.35;
 /** A tank with enemy footmen this close backs away at
  * reverse speed while its turret keeps working. */
 export const TANK_REVERSE_RANGE = 70;
@@ -414,6 +435,18 @@ interface Unit {
   altReloadT: number;
   altReloadTime: number;
   altReloadTotal: number;
+  /** Barracks update: the stores gear this man carries (the
+   * player's own men only) and the derived multipliers his
+   * upgrades and gear give him, computed once at spawn. The
+   * charm flag is spent the first time it saves him. */
+  equipment: string[];
+  charmUsed: boolean;
+  moraleMul: number;
+  moraleRegenMul: number;
+  coverMul: number;
+  suppressMul: number;
+  spotMul: number;
+  hasDressing: boolean;
   /** Turret facing for a tank or a halftrack's MG, in
    * radians: it traverses on its own clock, independent of
    * the hull, and the gun only fires when it is lined up. */
@@ -690,6 +723,8 @@ export interface BattleReport {
   survivors: SurvivorReport[];
   /** RP looted from supply crates this battle. */
   lootRp: number;
+  /** The stores item a supply crate held, if it held one. */
+  lootItem: string | null;
 }
 
 export interface ReplayUnit {
@@ -801,6 +836,10 @@ export interface SquadInput {
   medals: string[];
   /** The man's quirk ("Skittish", "Jumpy", ...). A cowardly quirk makes him a coward. */
   quirk?: string;
+  /** Barracks update: his upgrade levels by track and the
+   * stores gear he carries into this battle. */
+  upgrades?: Record<string, number>;
+  equipment?: string[];
 }
 
 // ---------------- pathfinding (A* on the CELL grid, 8-way, LOS-smoothed) ----------------
@@ -1122,6 +1161,7 @@ export class GameEngine {
    * are public so the replay recorder and tests can read them. */
   crates: SupplyCrate[] = [];
   private lootRp = 0;
+  private lootItem: string | null = null;
   /** Crate chance: the roll for whether this battle has a supply
    * crate at all. A field, like fleeChance, so tests can force it. */
   private crateChance = CRATE_CHANCE;
@@ -1255,6 +1295,7 @@ export class GameEngine {
     this.deserted = [];
     this.crates = [];
     this.lootRp = 0;
+    this.lootItem = null;
     this.corpses = [];
     this.wrecks = [];
     this.retreating = false;
@@ -1657,6 +1698,7 @@ export class GameEngine {
       fallen: this.fallen,
       deserted: this.deserted,
       lootRp: this.lootRp,
+      lootItem: this.lootItem,
       survivors: this.units
         // Extracted men (a retreat's west-edge escapees) are alive
         // on the roster by design, but extract() marks them
@@ -2415,7 +2457,7 @@ export class GameEngine {
         kind: "grenade", sourceType: "mortar", killerId: radio.id, smokeT: 0,
       });
     }
-    this.artyCd = ARTILLERY_CD;
+    this.artyCd = this.radioCd(ARTILLERY_CD);
     this.pushLog("Artillery on the way — danger close!", "wave");
     this.dirty = true;
     return true;
@@ -2447,7 +2489,7 @@ export class GameEngine {
     best.hp = Math.min(best.maxHp, best.hp + SUPPLY_HEAL);
     radio.healed += best.hp - before;
     this.healFx(best.x, best.y);
-    this.supplyCd = SUPPLY_CD;
+    this.supplyCd = this.radioCd(SUPPLY_CD);
     this.pushLog(`${radio.name} calls in a supply drop for ${best.name}.`, "info");
     this.dirty = true;
     return true;
@@ -2472,7 +2514,7 @@ export class GameEngine {
         if (dx * dx + dy * dy <= RECON_RADIUS * RECON_RADIUS) this.explored[gy * COLS + gx] = 1;
       }
     }
-    this.reconCd = RECON_CD;
+    this.reconCd = this.radioCd(RECON_CD);
     this.pushLog("Recon flight reports the enemy position.", "info");
     this.dirty = true;
     return true;
@@ -2495,7 +2537,7 @@ export class GameEngine {
       t: 0, dur: 2.4, side: "allies", dmg: MORTAR_DMG, aoe: MORTAR_AOE,
       kind: "grenade", sourceType: "mortar", killerId: radio.id, smokeT: 0,
     });
-    this.mortarCd = MORTAR_CD;
+    this.mortarCd = this.radioCd(MORTAR_CD);
     this.pushLog("Mortar strike on the way!", "wave");
     this.dirty = true;
     return true;
@@ -2534,7 +2576,7 @@ export class GameEngine {
     const center = this.squadCenter();
     if (!center) return false;
     this.smokeZones.push({ x: center.x, y: center.y, r: SMOKE_RADIUS, t: SMOKE_DURATION });
-    this.smokeCd = SMOKE_CD;
+    this.smokeCd = this.radioCd(SMOKE_CD);
     this.pushLog("Smoke screen up — move!", "info");
     this.dirty = true;
     return true;
@@ -2545,6 +2587,16 @@ export class GameEngine {
    * fights like a 2nd Platoon man with a 75mm gun, and it is not a
    * soldier — if it is destroyed it leaves no casualty and no
    * Memorial entry. */
+  /** Fresh batteries (Barracks gear): a radioman carrying a
+   * fresh set works the net faster, and every support answer
+   * comes 20% sooner. Read at cast time from the man himself. */
+  private radioCd(base: number): number {
+    const rm = this.units.find(
+      (x) => x.alive && x.side === "allies" && !x.npc && this.isRadioman(x) && x.equipment.includes("batteries"),
+    );
+    return rm ? Math.round(base * 0.8) : base;
+  }
+
   callTank(): boolean {
     if (this.phase !== "battle" || this.battleState !== "active") return false;
     if (!this.radioLive() || this.tankCalled || this.commanderLevel < RADIO_CALL_LEVEL.tank) return false;
@@ -2600,7 +2652,7 @@ export class GameEngine {
         dmg: spec.dmg * (weak ? 0.75 : 1), fireInterval: spec.fireInterval * (weak ? 1.3 : 1.1), spread: spec.spread * 1.15, bulletSpeed: spec.bulletSpeed,
         isStatic: false, vehicle: spec.vehicle ?? false, counterAttack: false, aggressive: false, orders: [], attackId: null, targetId: null, cooldown: r, suppression: 0, pinned: false,
         morale: 100, broken: false, lastHitT: 0, coward: false, fled: false, fleeT: 0, willFlee: false,
-        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, altMagSize: spec.sidearm?.magSize ?? 0, altMag: spec.sidearm?.magSize ?? 0, altReloadT: 0, altReloadTime: spec.sidearm?.reloadTime ?? 0, altReloadTotal: 0, turret: 0, kills: 0, alive: true, walk: 0,
+        abilityCd: 0, burst: 0, burstTimer: 0, burstTarget: null, magSize: spec.magSize, mag: spec.magSize, reloadT: 0, reloadTime: spec.reloadTime, reloadTotal: 0, altMagSize: spec.sidearm?.magSize ?? 0, altMag: spec.sidearm?.magSize ?? 0, altReloadT: 0, altReloadTime: spec.sidearm?.reloadTime ?? 0, altReloadTotal: 0, equipment: [], charmUsed: false, moraleMul: 1, moraleRegenMul: 1, coverMul: 1, suppressMul: 1, spotMul: 1, hasDressing: false, turret: 0, kills: 0, alive: true, walk: 0,
         damageTaken: 0, healed: 0, heavyKills: 0, officerKills: 0, dmgMult: 1, healMult: 1,
         chase: [], repathT: r, npc: true, cover: null, coverT: 0,
         stuckT: 0, lastX: cx * CELL + CELL / 2, lastY: cy * CELL + CELL / 2, stuckFails: 0, coverSeekT: Math.random() * 2, coverBanT: 0, coverBanX: 0, coverBanY: 0, coverIdleT: 0, stuckDestX: 0, stuckDestY: 0, stuckDestD: 0, chaseBanT: 0,
@@ -3100,7 +3152,8 @@ export class GameEngine {
       // Cover-only, exactly like the terrain's own sandbags: the
       // shelter lives in the cover roll, and the position draws
       // and wears down like any other sandbag.
-      this.covers.push({ x: px, y: py, r: 15, q: 0.65, q0: 0.65, kind: "sandbag", hp: 110, maxHp: 110, type: "light" });
+      const bagHp = u.equipment.includes("hbtcap") ? 165 : 110;
+      this.covers.push({ x: px, y: py, r: 15, q: 0.65, q0: 0.65, kind: "sandbag", hp: bagHp, maxHp: bagHp, type: "light" });
       u.abilityCd = spec.cd;
       this.pushLog(`${u.name} throws up a sandbag position.`, "info");
     }
@@ -3528,6 +3581,27 @@ export class GameEngine {
       const [ocx, ocy] = nearestOpen(this.blocked, Math.floor(sx / CELL), Math.floor(y / CELL));
       sx = ocx * CELL + CELL / 2;
       y = ocy * CELL + CELL / 2;
+      // Barracks update: the man's own upgrades and the stores
+      // gear he carries fold into his build, beside the level
+      // and medal bonuses. Effects mirror data.ts ITEM_DEFS:
+      // toughness +12 HP a level, marksmanship +8% damage,
+      // steady hands reload x0.88 a level, legs +6% speed,
+      // eyes +25 vision; the paratrooper helmet +12 HP, the
+      // binoculars +60 vision, extra ammo pouches half again
+      // the magazine (never on a one-shot tube like the
+      // bazooka), the aid bag +30% healing; and a carried gun
+      // reshapes his weapon: Thompson faster and harder up
+      // close for a shorter reach, Springfield longer and
+      // heavier, the captured MP40 harder and tighter.
+      const upg = s.upgrades ?? {};
+      const gear = s.equipment ?? [];
+      const has = (id: string) => gear.includes(id);
+      const gunDmg = has("thompson") ? 2 : has("springfield") ? 5 : has("mp40") ? 3 : 0;
+      const gunRange = has("thompson") ? -Math.round(spec.range * 0.2) : has("springfield") ? 60 : 0;
+      const gunFireMult = has("thompson") ? 0.55 : 1;
+      const gunSpreadMult = has("mp40") ? 0.8 : 1;
+      const magSize = spec.magSize >= 5 && has("ammo") ? Math.ceil(spec.magSize * 1.5) : spec.magSize;
+      const buildHp = spec.hp + mb.hp + 12 * (upg.toughness ?? 0) + (has("parahelmet") ? 12 : 0);
       this.units.push({
         id: this.nextId++,
         side: "allies",
@@ -3546,16 +3620,16 @@ export class GameEngine {
         y,
         facing: 0,
         homeX: sx, homeY: y, patrolX: sx, patrolY: y,
-        hp: spec.hp + mb.hp,
-        maxHp: spec.hp + mb.hp,
-        speed: spec.speed,
-        range: spec.range,
-        vision: spec.vision + mb.vision,
-        dmg: spec.dmg,
-        fireInterval: spec.fireInterval * bonus.fireMult * mb.fireMult,
-        spread: spec.spread * bonus.spreadMult * mb.spreadMult,
-        dmgMult: mb.dmgMult,
-        healMult: mb.healMult,
+        hp: buildHp,
+        maxHp: buildHp,
+        speed: spec.speed * (1 + 0.06 * (upg.legs ?? 0)),
+        range: spec.range + gunRange,
+        vision: spec.vision + mb.vision + 25 * (upg.eyes ?? 0) + (has("binoculars") ? 60 : 0),
+        dmg: spec.dmg + gunDmg,
+        fireInterval: spec.fireInterval * bonus.fireMult * mb.fireMult * gunFireMult,
+        spread: spec.spread * bonus.spreadMult * mb.spreadMult * gunSpreadMult,
+        dmgMult: mb.dmgMult * (1 + 0.08 * (upg.marksmanship ?? 0)),
+        healMult: mb.healMult * (has("aidbag") ? 1.3 : 1),
         bulletSpeed: spec.bulletSpeed,
         isStatic: false,
         vehicle: false, counterAttack: false, aggressive: false,
@@ -3570,16 +3644,24 @@ export class GameEngine {
         burst: 0,
         burstTimer: 0,
         burstTarget: null,
-        magSize: spec.magSize,
-        mag: spec.magSize,
+        magSize,
+        mag: magSize,
         reloadT: 0,
-        reloadTime: spec.reloadTime,
+        reloadTime: spec.reloadTime * Math.pow(0.88, upg.steady ?? 0),
         reloadTotal: 0,
         altMagSize: spec.sidearm?.magSize ?? 0,
         altMag: spec.sidearm?.magSize ?? 0,
         altReloadT: 0,
         altReloadTime: spec.sidearm?.reloadTime ?? 0,
         altReloadTotal: 0,
+        equipment: [...gear],
+        charmUsed: false,
+        moraleMul: Math.pow(0.85, upg.nerve ?? 0),
+        moraleRegenMul: (has("canteen") ? 1.6 : 1) * (has("jeepcap") ? 1.3 : 1),
+        coverMul: has("entrench") ? 1.15 : 1,
+        suppressMul: has("pilecap") ? 0.85 : 1,
+        spotMul: has("nethelmet") ? 0.85 : 1,
+        hasDressing: has("dressing"),
         turret: 0,
         kills: 0,
         alive: true,
@@ -3670,6 +3752,7 @@ export class GameEngine {
           altReloadT: 0,
           altReloadTime: 0,
           altReloadTotal: 0,
+          equipment: [], charmUsed: false, moraleMul: 1, moraleRegenMul: 1, coverMul: 1, suppressMul: 1, spotMul: 1, hasDressing: false,
           turret: Math.PI,
           kills: 0,
           alive: true,
@@ -4445,6 +4528,11 @@ export class GameEngine {
         u.altReloadT = Math.max(0, u.altReloadT - dt);
         if (u.altReloadT <= 0) u.altMag = u.altMagSize;
       }
+      // Field dressing (Barracks gear): out of fire for 5s, a
+      // dressed man's wounds close slowly, up to 60% health.
+      if (u.hasDressing && u.hp < u.maxHp * 0.6 && this.elapsed - u.lastHitT > 5) {
+        u.hp = Math.min(u.maxHp * 0.6, u.hp + 0.4 * dt);
+      }
 
       // Morale: pinned men lose nerve fast, heavy suppression wears
       // it down. Out of fire for 5s it comes back, faster beside a
@@ -4458,7 +4546,9 @@ export class GameEngine {
         let rec = u.willFlee && u.broken ? 0 : 4;
         if (this.nearMedic(u)) rec += 4;
         if (this.nearLeader(u)) rec += 3;
-        u.morale += rec * dt;
+        // A canteen (x1.6) or a jeep cap (x1.3) brings his
+        // nerve back faster (Barracks gear).
+        u.morale += rec * u.moraleRegenMul * dt;
       }
       u.morale = Math.max(0, Math.min(100, u.morale));
       if (!u.broken && u.morale <= (u.coward ? 50 : 20)) {
@@ -4714,7 +4804,7 @@ export class GameEngine {
               : this.concealedTarget(prey)
                 ? CONCEAL_SPOT_FACTOR
                 : 1;
-          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision * spotFactor && this.los(u, prey));
+          const spotted = u.side !== "axis" || u.counterAttack || u.aggressive || !isEnemyPrey || (pd <= u.vision * spotFactor * prey.spotMul && this.los(u, prey));
           // Tank reversing (Josh, 2026-11-13): enemy footmen
           // crowding a tank or halftrack inside 70 make it
           // back away at reverse speed while its turret keeps
@@ -5215,7 +5305,8 @@ export class GameEngine {
               break;
             }
             const c = this.coverBetween(b.ox, b.oy, u.x, u.y);
-            if (c && Math.random() < c.q) {
+            const coverQ = c ? Math.min(0.97, c.q * u.coverMul) : 0;
+            if (c && Math.random() < coverQ) {
               this.puff(b.x, b.y);
               this.damageCover(c, b.dmg);
               // Heavy cover (a trench, a building, a pillbox:
@@ -5223,7 +5314,7 @@ export class GameEngine {
               // stopped round rattles him at half the usual rate,
               // so a dug-in man can recover nerve between bursts
               // instead of pinning forever. Light cover keeps 0.7x.
-              u.suppression = Math.min(100, u.suppression + b.suppress * (c.q >= 0.9 ? 0.35 : 0.7));
+              u.suppression = Math.min(100, u.suppression + b.suppress * (coverQ >= 0.9 ? 0.35 : 0.7) * u.suppressMul);
               dead = true;
               break;
             }
@@ -5337,6 +5428,13 @@ export class GameEngine {
         c.looted = true;
         this.lootRp += CRATE_RP;
         this.pushLog(`${looter.name} looted a supply crate (+${CRATE_RP} RP).`, "info");
+        // Sometimes the crate holds a stores piece alongside
+        // the RP (Barracks update): it rides the report home
+        // and lands in the squad's stores at filing.
+        if (!this.lootItem && Math.random() < CRATE_ITEM_CHANCE) {
+          this.lootItem = rollCrateItem(Math.random);
+          this.pushLog(`The crate also holds a ${ITEM_BY_ID[this.lootItem]?.label ?? "stores piece"}.`, "info");
+        }
       }
     }
 
@@ -5360,11 +5458,11 @@ export class GameEngine {
       // distance: the searcher's reach against him shrinks,
       // nobody else's. A hidden spotter (0.55x) is harder to
       // pick out than a merely prone or in-foliage man (0.7x).
-      const cap = this.reconHidden(e)
+      const cap = (this.reconHidden(e)
         ? range * RECON_SPOT_FACTOR
         : this.concealedTarget(e)
           ? range * CONCEAL_SPOT_FACTOR
-          : range * 1.05;
+          : range * 1.05) * e.spotMul;
       if (d < bestD && d <= cap && this.los(u, e)) {
         // AT men pick armor over infantry when both are in reach.
         if (u.type === "at" && best && best.vehicle && !e.vehicle) continue;
@@ -5794,7 +5892,8 @@ export class GameEngine {
   /** Morale loss, doubled for a coward: his nerve goes twice as fast. */
   private moraleLoss(u: Unit, amount: number) {
     if (u.vehicle) return; // a tank has no nerve to lose
-    u.morale = Math.max(0, u.morale - amount * (u.coward ? 2 : 1));
+    // Nerve (Barracks upgrades) shrinks every loss by 15% a level.
+    u.morale = Math.max(0, u.morale - amount * (u.coward ? 2 : 1) * u.moraleMul);
   }
 
   /** "tank" for a panzer or the Sherman, "halftrack" for the
@@ -5882,7 +5981,17 @@ export class GameEngine {
     this.moraleLoss(u, dmg * 0.3);
     u.lastHitT = this.elapsed;
     if (u.side === "allies") u.damageTaken += Math.min(dmg, u.hp + dmg);
-    if (u.hp <= 0) this.kill(u, sourceType, killerId);
+    if (u.hp <= 0) {
+      // The lucky charm (Barracks gear): once a battle, a
+      // killing hit might leave its man standing on 1 health.
+      if (!u.charmUsed && u.equipment.includes("charm") && Math.random() < 0.15) {
+        u.charmUsed = true;
+        u.hp = 1;
+        this.pushLog(`${u.name}'s lucky charm turns a killing hit aside.`, "info");
+      } else {
+        this.kill(u, sourceType, killerId);
+      }
+    }
   }
 
   private kill(u: Unit, sourceType: string, killerId: number | null) {
@@ -5993,7 +6102,7 @@ export class GameEngine {
       if (!u.alive || u.side === side) continue;
       const d = dist(x, y, u.x, u.y);
       if (d < 38) {
-        u.suppression = Math.min(100, u.suppression + amount * (1 - d / 48) * (u.cover ? 0.6 : 1));
+        u.suppression = Math.min(100, u.suppression + amount * (1 - d / 48) * (u.cover ? 0.6 : 1) * u.suppressMul);
       }
     }
   }
@@ -7382,12 +7491,77 @@ export class GameEngine {
       ctx.fillRect(backX - PX, top - 5 * PX, PX * 3, PX);
     }
 
+    // Barracks gear on the man (Josh, 2026-11-13): what he
+    // carries is drawn on him, in the same chunky pixels —
+    // pouches across the chest, the canteen and the digging
+    // tool at his back hip, the dressing and the aid bag with
+    // their red crosses, the binocular case at his chest, a
+    // fresh battery cell on the radioman's pack, and the lucky
+    // charm catching the light at his throat. Headgear and
+    // guns ride the sprite itself (see lookOf).
+    if (u.alive && !u.npc && u.side === "allies" && u.equipment.length) {
+      const gear = u.equipment;
+      const fdir = flip ? -1 : 1;
+      if (gear.includes("ammo")) {
+        ctx.fillStyle = "#3A3428";
+        ctx.fillRect(fx + fdir * 2 * PX - PX, top + 6 * PX, PX * 2, PX);
+        ctx.fillRect(fx - PX, top + 7 * PX, PX * 2, PX);
+        ctx.fillRect(fx - fdir * 2 * PX - PX, top + 8 * PX, PX * 2, PX);
+        ctx.fillStyle = "#6B5A34";
+        ctx.fillRect(fx + fdir * 2 * PX - PX, top + 6 * PX, PX, PX);
+        ctx.fillRect(fx - fdir * 2 * PX - PX, top + 8 * PX, PX, PX);
+      }
+      if (gear.includes("binoculars")) {
+        ctx.fillStyle = "#1E1E14";
+        ctx.fillRect(fx + fdir * 3 * PX - PX, top + 6 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#5E6B5A";
+        ctx.fillRect(fx + fdir * 3 * PX - PX, top + 6 * PX, PX, PX);
+      }
+      if (gear.includes("canteen")) {
+        ctx.fillStyle = "#7A6C48";
+        ctx.fillRect(fx - fdir * 4 * PX, top + 9 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#4A4130";
+        ctx.fillRect(fx - fdir * 4 * PX, top + 9 * PX, PX, PX);
+      }
+      if (gear.includes("entrench")) {
+        ctx.fillStyle = "#5E4630";
+        ctx.fillRect(fx - fdir * 5 * PX, top + 7 * PX, PX, PX * 3);
+        ctx.fillStyle = "#3E3E38";
+        ctx.fillRect(fx - fdir * 5 * PX - (fdir < 0 ? PX : 0), top + 10 * PX, PX * 2, PX);
+      }
+      if (gear.includes("dressing")) {
+        ctx.fillStyle = "#D8D6C8";
+        ctx.fillRect(fx + fdir * 3 * PX, top + 9 * PX, PX * 2, PX * 2);
+        ctx.fillStyle = "#A0302A";
+        ctx.fillRect(fx + fdir * 3 * PX, top + 9 * PX, PX, PX);
+      }
+      if (gear.includes("aidbag")) {
+        ctx.fillStyle = "#D8D6C8";
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 8 * PX, PX * 3, PX * 3);
+        ctx.fillStyle = "#A0302A";
+        ctx.fillRect(fx - fdir * 4 * PX, top + 9 * PX, PX, PX);
+        ctx.fillRect(fx - fdir * 4 * PX - PX, top + 10 * PX, PX * 3, PX);
+      }
+      if (gear.includes("charm")) {
+        ctx.fillStyle = "#E5C558";
+        ctx.fillRect(fx + fdir * PX, top + 6 * PX, PX, PX);
+        if ((Math.floor(this.elapsed * 2) + u.id) % 4 === 0) {
+          ctx.fillStyle = "#FFF2B0";
+          ctx.fillRect(fx + fdir * PX, top + 5 * PX, PX, PX);
+        }
+      }
+      if (gear.includes("batteries") && this.isRadioman(u)) {
+        ctx.fillStyle = "#B8BFA8";
+        ctx.fillRect(fx + (flip ? 4 : -4) * PX - PX, top + 6 * PX, PX * 2, PX);
+      }
+    }
+
     if (!u.alive) return;
 
     // Muzzle flash on the first frames of a shot.
     if ((u.shootT ?? 0) > 0.08 && look.weapon !== "mortar" && look.weapon !== "none") {
       const crouch = pose === "crouch" || pose === "prone";
-      const reach = look.weapon === "sniper" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
+      const reach = look.weapon === "sniper" || look.weapon === "springfield" ? 15 : look.weapon === "mg" ? 14 : look.weapon === "flak" ? 16 : look.weapon === "bazooka" ? 13 : 13;
       const wy = look.weapon === "bazooka" ? 4 + (crouch ? 0 : 1) : look.weapon === "flak" ? 6 : 6 + (crouch ? 3 : 0);
       const mx = fx + (flip ? -1 : 1) * (reach - FEET_X + (flip ? 1 : 0)) * PX - (flip ? PX : 0);
       const my = top + wy * PX;

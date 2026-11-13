@@ -15,7 +15,7 @@ import Portrait from "@/components/Portrait";
 import { ApiError, apiGet, apiPost, saveId } from "@/lib/api";
 import type { BattleResult, GameState, Mission, ReinforceOut, ReinforcementKind, Soldier } from "@/lib/types";
 import { GameEngine, type BattleReplay, type BattleReport, type HudSnapshot, type RadioSupportKind, type Variant } from "@/game/engine";
-import { UNIT_TYPES, KILL_RP, battleReward, isCowardQuirk } from "@/game/data";
+import { ITEM_BY_ID, UNIT_TYPES, KILL_RP, battleReward, isCowardQuirk } from "@/game/data";
 import { useMusic } from "@/game/music";
 
 const mmss = (t: number) =>
@@ -810,6 +810,34 @@ export default function Battlefield() {
                 </p>
               </div>
 
+              {fileReport.data && (
+                <div className="mt-3 space-y-1" data-testid="debrief-earned">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">
+                    Earned — the Barracks ledger
+                  </p>
+                  {report.survivors
+                    .filter((s) => (fileReport.data!.points_gained[s.soldierId] ?? 0) > 0)
+                    .map((s) => {
+                      const a = (deployed?.squad ?? []).find((x) => x.id === s.soldierId);
+                      return (
+                        <p key={s.soldierId} className="font-mono text-xs text-[#E5A93C]" data-testid={`debrief-points-${s.soldierId}`}>
+                          {a?.name ?? "?"} +{fileReport.data!.points_gained[s.soldierId]} upgrade pts
+                        </p>
+                      );
+                    })}
+                  {fileReport.data.items_gained.map((g, i) => (
+                    <p key={i} className="font-mono text-xs text-[#5EB872]" data-testid={`debrief-item-${i}`}>
+                      Stores +1: {ITEM_BY_ID[g.item]?.label ?? g.item} ({g.source === "loot" ? "from a battlefield crate" : "victory award"})
+                    </p>
+                  ))}
+                  {fileReport.data.gear_lost.length > 0 && (
+                    <p className="font-mono text-xs text-[#E24A4A]" data-testid="debrief-gear-lost">
+                      Lost with the fallen: {fileReport.data.gear_lost.map((item) => ITEM_BY_ID[item]?.label ?? item).join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
               <Button
                 data-testid="debrief-replay-btn"
                 variant="outline"
@@ -932,6 +960,7 @@ function reportBody(r: BattleReport, battleId: string | null) {
     fallen: r.fallen.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
     deserted: r.deserted.map((f) => ({ soldier_id: f.soldierId, cause: f.cause, kills: f.kills, ...stats(f) })),
     loot_rp: r.lootRp,
+    loot_item: r.lootItem ?? undefined,
     survivors: r.survivors.map((v) => ({ soldier_id: v.soldierId, kills: v.kills, ...stats(v) })),
   };
 }

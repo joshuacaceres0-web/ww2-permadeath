@@ -36,6 +36,8 @@ DEFAULT_STATE = {
     # files (see _battle_complete_locked) or the mission changes.
     "reinforcements_used": 0,
     "reinforcements_mission": None,
+    # Squad stores (Barracks update): item id -> count.
+    "inventory": {},
 }
 
 # The founding squad — named, storied, and immediately deployable.
@@ -89,6 +91,7 @@ def state_out(state: dict) -> GameStateOut:
         battles_won=state["battles_won"],
         battles_lost=state["battles_lost"],
         campaign_complete=state["campaign_complete"],
+        inventory=state.get("inventory") or {},
         **commander_info(state),
     )
 

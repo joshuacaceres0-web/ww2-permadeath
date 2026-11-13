@@ -9,8 +9,8 @@ export const SPR_H = 14;
 export const FEET_X = 5;
 
 export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "prone" | "proneA" | "proneB";
-export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none";
-export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer";
+export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none" | "thompson" | "springfield" | "mp40";
+export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer" | "us-net" | "us-para" | "us-jeep" | "us-pile" | "us-hbt";
 
 export interface Palette {
   helmet: string;
@@ -108,6 +108,16 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
       px(12, 6, "#D8D6C8");
       px(12, 7, "#A0302A");
     }
+    // Earned headgear, prone (Barracks update): wool and HBT
+    // caps ride in cap tones, the pile cap keeps its flaps, the
+    // netted helmet keeps its scrim ticks.
+    if (head === "us-jeep" || head === "us-pile" || head === "us-hbt") {
+      const capTone = head === "us-hbt" ? "#6A7050" : head === "us-pile" ? "#6B6C52" : "#565840";
+      for (let x = 11; x <= 13; x++) { px(x, 6, capTone); px(x, 7, capTone); px(x, 8, capTone); }
+      if (head === "us-pile") { px(10, 8, "#4C4E38"); px(10, 9, "#4C4E38"); }
+    }
+    if (head === "us-net") { px(11, 6, pal.uniDark); px(13, 7, pal.uniDark); px(10, 8, "#4A5232"); }
+    if (head === "us-para") { px(10, 8, "#2E2A20"); px(10, 9, "#2E2A20"); }
     // The weapon, aimed forward along the ground.
     if (weapon === "rifle") {
       for (let x = 11; x <= 15; x++) px(x, 9, x <= 12 ? WOOD : METAL);
@@ -118,6 +128,15 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
     } else if (weapon === "sniper") {
       for (let x = 11; x <= 15; x++) px(x, 9, METAL);
       px(13, 8, METAL); // scope
+    } else if (weapon === "thompson") {
+      for (let x = 11; x <= 14; x++) px(x, 9, METAL);
+      px(12, 10, METAL); // the drum, flat against the ground
+    } else if (weapon === "springfield") {
+      for (let x = 11; x <= 15; x++) px(x, 9, METAL);
+      px(13, 8, METAL); // scope
+    } else if (weapon === "mp40") {
+      for (let x = 11; x <= 14; x++) px(x, 9, "#2A2A26");
+      px(12, 10, "#2A2A26"); // stick magazine
     } else if (weapon === "bazooka") {
       for (let x = 10; x <= 14; x++) {
         px(x, 8, "#4A5234");
@@ -199,7 +218,22 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
   H(6, 4, SKIN);
   H(6, 4, "#2A1E16"); // eye
   H(7, 4, SKIN);
-  if (head === "cap" || head === "officer") {
+  if (head === "us-jeep" || head === "us-pile" || head === "us-hbt") {
+    // Earned caps (Barracks update): the wool jeep cap, the
+    // pile cap with its ear flaps, the herringbone fatigue cap.
+    // No steel dome — the man chose comfort or work over cover.
+    const dome = head === "us-hbt" ? "#6A7050" : head === "us-pile" ? "#6B6C52" : "#565840";
+    const cuff = head === "us-hbt" ? "#59603F" : "#484A36";
+    for (let x = 3; x <= 7; x++) H(x, 1, dome);
+    for (let x = 3; x <= 7; x++) H(x, 2, dome);
+    for (let x = 2; x <= 8; x++) H(x, 3, cuff);
+    if (head === "us-hbt") { H(7, 3, "#121110"); H(8, 3, "#121110"); } // short brim
+    if (head === "us-pile") {
+      H(2, 4, "#4C4E38"); H(2, 5, "#4C4E38"); // ear flap, near side
+      H(8, 4, "#4C4E38"); H(8, 5, "#4C4E38"); // ear flap, far side
+    }
+    if (head === "us-jeep") H(5, 1, "#6A6B4E"); // knit fold catching light
+  } else if (head === "cap" || head === "officer") {
     for (let x = 3; x <= 6; x++) H(x, 2, pal.helmet);
     for (let x = 3; x <= 6; x++) H(x, 1, x === 5 ? pal.helmetHi : pal.helmet);
     H(4, 0, pal.helmet);
@@ -224,6 +258,26 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
       H(4, 2, "#D8D6C8");
       H(5, 2, "#A0302A");
       H(6, 2, "#D8D6C8");
+    }
+    if (head === "us-net") {
+      // Netting over the dome and scrim strips at the brim:
+      // the veteran's broken outline.
+      H(4, 1, pal.uniDark);
+      H(6, 1, pal.uniDark);
+      H(5, 2, pal.uniDark);
+      H(3, 4, "#4A5232");
+      H(7, 4, "#6B5A34");
+      H(4, 4, "#55603A");
+    }
+    if (head === "us-para") {
+      // The M1C worn tight: chin straps down both sides and a
+      // darker band where the cup grips.
+      H(2, 4, "#2E2A20");
+      H(8, 4, "#2E2A20");
+      H(2, 5, "#2E2A20");
+      H(8, 5, "#2E2A20");
+      H(4, 1, pal.uniDark);
+      H(6, 1, pal.uniDark);
     }
   }
 
@@ -267,6 +321,35 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
       W(4, wy + 1, WOOD);
       W(5, wy + 1, WOOD);
       W(6, wy + 1, WOOD);
+      arm();
+      break;
+    case "thompson":
+      for (let x = 7; x <= 11; x++) W(x, wy, METAL);
+      W(11, wy, METAL_HI);
+      W(9, wy + 1, "#24231E"); // the drum
+      W(10, wy + 1, "#24231E");
+      W(9, wy + 2, "#24231E");
+      W(10, wy + 2, "#24231E");
+      W(5, wy + 1, WOOD); // pistol grip and stock
+      W(6, wy + 1, WOOD);
+      arm();
+      break;
+    case "springfield":
+      for (let x = 7; x <= 15; x++) W(x, wy, METAL);
+      W(8, wy - 1, METAL_HI); // the scope
+      W(9, wy - 1, "#D8E4E0");
+      W(10, wy - 1, METAL_HI);
+      W(4, wy + 1, WOOD);
+      W(5, wy + 1, WOOD);
+      W(6, wy + 1, WOOD);
+      arm();
+      break;
+    case "mp40":
+      for (let x = 7; x <= 11; x++) W(x, wy, "#2A2A26");
+      W(8, wy + 1, "#2A2A26"); // stick magazine
+      W(8, wy + 2, "#2A2A26");
+      W(5, wy, METAL); // folded stock
+      W(6, wy + 1, "#2A2A26");
       arm();
       break;
     case "bazooka": {

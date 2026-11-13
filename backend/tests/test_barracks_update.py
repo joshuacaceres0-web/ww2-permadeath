@@ -1,0 +1,211 @@
+"""Barracks update (Josh, 2026-11-13): upgrade points earned in
+battle and spent per man, squad stores with equip rules and RP
+prices, and the death rule — a fallen man loses EVERYTHING:
+his upgrades, his points and every item he carries. Nothing
+returns to stores.
+
+Runs on the module's throwaway save (see conftest) — never main.
+"""
+
+import os
+
+import httpx
+import pytest
+
+API_URL = f"{os.environ.get('BACKEND_URL', 'http://localhost:8001')}/api"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _fresh_save():
+    """The module save persists across runs, and filed battle_ids
+    dedupe — so start from a wiped save or a re-run files nothing
+    and the points math below reads stale balances. The save id
+    conftest derives carries the package prefix under this
+    config (tscheck-tests.test_barracks_update); wipe both
+    spellings so the right one is always the clean one."""
+    for save_id in ("tscheck-tests.test_barracks_update", "tscheck-test_barracks_update"):
+        with httpx.Client(base_url=API_URL, timeout=30.0, headers={"X-Save-Id": save_id}) as c:
+            c.post("/campaign/wipe", json={"confirm": "RESET"})
+    yield
+
+
+def _squad(client: httpx.Client):
+    return client.get("/squad").json()
+
+
+def _state(client: httpx.Client):
+    return client.get("/state").json()
+
+
+def _man(client: httpx.Client, name: str):
+    return next(s for s in _squad(client) if s["name"] == name)
+
+
+def _current_mission_id(client: httpx.Client) -> str:
+    missions = client.get("/missions").json()
+    return missions[_state(client)["mission_index"]]["id"]
+
+
+def _file_battle(client: httpx.Client, battle_id: str, victory: bool, fallen=None, survivors=None, **extra):
+    resp = client.post(
+        "/battle/complete",
+        json={
+            "mission_id": _current_mission_id(client),
+            "victory": victory,
+            "duration_sec": 120,
+            "battle_id": battle_id,
+            "fallen": fallen or [],
+            "survivors": survivors or [],
+            **extra,
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def test_points_earned_and_spent(client: httpx.Client):
+    client.get("/state")  # seed the founding squad
+    frank = _man(client, "Frank Hayes")
+    assert frank["points"] == 0
+    assert frank["upgrades"] == {}
+    assert frank["equipment"] == []
+
+    # Surviving a lost battle with 5 kills: 2 for survival + 2
+    # for kills (1 per 2 kills, capped at +2) = 4 points.
+    result = _file_battle(
+        client, "barracks-points-1", victory=False,
+        survivors=[{"soldier_id": frank["id"], "kills": 5}],
+    )
+    assert result["points_gained"][frank["id"]] == 4
+    frank = _man(client, "Frank Hayes")
+    assert frank["points"] == 4
+
+    # A quiet survival is worth the base 2.
+    result = _file_battle(
+        client, "barracks-points-2", victory=False,
+        survivors=[{"soldier_id": frank["id"], "kills": 0}],
+    )
+    assert result["points_gained"][frank["id"]] == 2
+    assert _man(client, "Frank Hayes")["points"] == 6
+
+    # Spend: 2 points a level.
+    resp = client.post("/squad/upgrade", json={"soldier_id": frank["id"], "track": "toughness"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["upgrades"]["toughness"] == 1
+    assert body["points"] == 4
+
+    # Unknown track is refused; a broke man is refused.
+    resp = client.post("/squad/upgrade", json={"soldier_id": frank["id"], "track": "wings"})
+    assert resp.status_code == 400
+    walter = _man(client, "Walter Kowalski")
+    resp = client.post("/squad/upgrade", json={"soldier_id": walter["id"], "track": "legs"})
+    assert resp.status_code == 402
+
+
+def test_upgrade_cap(client: httpx.Client):
+    frank = _man(client, "Frank Hayes")
+    # Frank has toughness 1 and 4 points (previous test). Two
+    # more levels cap the track at 3; the fourth buy is refused.
+    for _ in range(2):
+        resp = client.post("/squad/upgrade", json={"soldier_id": frank["id"], "track": "toughness"})
+        assert resp.status_code == 200, resp.text
+    frank = _man(client, "Frank Hayes")
+    assert frank["upgrades"]["toughness"] == 3
+    assert frank["points"] == 0
+    # Earn fresh points, then try to pass the cap.
+    _file_battle(
+        client, "barracks-cap-1", victory=False,
+        survivors=[{"soldier_id": frank["id"], "kills": 4}],
+    )
+    resp = client.post("/squad/upgrade", json={"soldier_id": frank["id"], "track": "toughness"})
+    assert resp.status_code == 400
+
+
+def test_buy_equip_rules(client: httpx.Client):
+    state = _state(client)
+    assert state["inventory"] == {}
+    rp0 = state["requisition"]
+
+    # Buy binoculars (75): stores gain one, RP drops.
+    resp = client.post("/inventory/buy", json={"item": "binoculars"})
+    assert resp.status_code == 200, resp.text
+    state = resp.json()
+    assert state["inventory"]["binoculars"] == 1
+    assert state["requisition"] == rp0 - 75
+
+    # A rifleman cannot carry binoculars (recon / sniper only).
+    frank = _man(client, "Frank Hayes")
+    resp = client.post("/squad/equip", json={"soldier_id": frank["id"], "item": "binoculars"})
+    assert resp.status_code == 400
+
+    # The sniper can. Stores empty out; a second pair is refused
+    # both for stores and for duplication.
+    earl = _man(client, "Earl Whitaker")
+    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "binoculars"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["equipment"] == ["binoculars"]
+    assert _state(client)["inventory"]["binoculars"] == 0
+    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "binoculars"})
+    assert resp.status_code == 400
+
+    # Two slots total: ammo fills the second, a third is refused.
+    client.post("/inventory/buy", json={"item": "ammo"})
+    client.post("/inventory/buy", json={"item": "canteen"})
+    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "ammo"})
+    assert resp.status_code == 200
+    resp = client.post("/squad/equip", json={"soldier_id": earl["id"], "item": "canteen"})
+    assert resp.status_code == 400
+
+    # Unequip returns the piece to stores.
+    resp = client.post("/squad/unequip", json={"soldier_id": earl["id"], "item": "ammo"})
+    assert resp.status_code == 200
+    assert resp.json()["equipment"] == ["binoculars"]
+    assert _state(client)["inventory"]["ammo"] == 1
+
+
+def test_death_takes_everything(client: httpx.Client):
+    # Kit Walter with two pieces and one upgrade level.
+    walter = _man(client, "Walter Kowalski")
+    _file_battle(
+        client, "barracks-death-1", victory=False,
+        survivors=[{"soldier_id": walter["id"], "kills": 4}],
+    )
+    resp = client.post("/squad/upgrade", json={"soldier_id": walter["id"], "track": "nerve"})
+    assert resp.status_code == 200
+    client.post("/inventory/buy", json={"item": "entrench"})
+    client.post("/inventory/buy", json={"item": "dressing"})
+    for item in ("entrench", "dressing"):
+        resp = client.post("/squad/equip", json={"soldier_id": walter["id"], "item": item})
+        assert resp.status_code == 200, resp.text
+    inv_before = dict(_state(client)["inventory"])
+
+    result = _file_battle(
+        client, "barracks-death-2", victory=False,
+        fallen=[{"soldier_id": walter["id"], "cause": "MG42 fire", "kills": 1}],
+        survivors=[{"soldier_id": _man(client, "Frank Hayes")["id"], "kills": 0}],
+    )
+    # The debrief names what died with him...
+    assert sorted(result["gear_lost"]) == ["dressing", "entrench"]
+    # ...and stores did NOT get any of it back.
+    inv_after = _state(client)["inventory"]
+    assert inv_after.get("entrench", 0) == inv_before.get("entrench", 0)
+    assert inv_after.get("dressing", 0) == inv_before.get("dressing", 0)
+    # He is gone from the roster, upgrades and all.
+    assert all(s["id"] != walter["id"] for s in _squad(client))
+
+
+def test_loot_and_victory_award(client: httpx.Client):
+    frank = _man(client, "Frank Hayes")
+    result = _file_battle(
+        client, "barracks-loot-1", victory=True,
+        survivors=[{"soldier_id": frank["id"], "kills": 3}],
+        loot_item="canteen",
+    )
+    gained = {(g["item"], g["source"]) for g in result["items_gained"]}
+    assert ("canteen", "loot") in gained
+    mission_items = [g for g in result["items_gained"] if g["source"] == "mission"]
+    assert len(mission_items) == 1, "a victory awards exactly one stores item"
+    inv = _state(client)["inventory"]
+    assert inv.get("canteen", 0) >= 1
+    assert inv.get(mission_items[0]["item"], 0) >= 1

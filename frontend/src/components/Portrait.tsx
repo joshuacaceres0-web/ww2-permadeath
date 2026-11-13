@@ -29,7 +29,7 @@ function paint(grid: Grid, rows: number[], c0: number, c1: number, color: string
   for (const r of rows) for (let c = c0; c <= c1; c++) grid[r][c] = color;
 }
 
-function buildGrid(seed: number, type: UnitTypeId, level: number): Grid {
+function buildGrid(seed: number, type: UnitTypeId, level: number, gearHead: string | null = null): Grid {
   const rnd = rngFrom(seed);
   const pick = <T,>(arr: T[]) => arr[Math.floor(rnd() * arr.length)];
   const g: Grid = Array.from({ length: 16 }, () => Array<string | null>(16).fill(null));
@@ -94,7 +94,52 @@ function buildGrid(seed: number, type: UnitTypeId, level: number): Grid {
     g[8][9] = "#9DB0B0";
   } // glasses
 
-  if (headgear === "helmet") {
+  if (gearHead) {
+    // Earned headgear (Barracks update): what he carries shows
+    // on his portrait too. The garrison cap lives here — it is
+    // off-duty wear and never appears on the battlefield.
+    if (gearHead === "nethelmet" || gearHead === "parahelmet") {
+      paint(g, [2], 5, 10, helmetColor);
+      paint(g, [3], 4, 11, helmetColor);
+      paint(g, [4], 3, 12, helmetColor);
+      paint(g, [5], 2, 13, "#3B472C"); // rim
+      g[6][4] = hair;
+      g[6][11] = hair;
+      if (gearHead === "nethelmet") {
+        for (const [r, c] of [[2, 5], [2, 8], [3, 6], [3, 9], [2, 10], [3, 4], [4, 7]]) g[r][c] = "#64704A";
+        g[5][3] = "#4A5232";
+        g[6][3] = "#4A5232"; // scrim strip
+        g[5][12] = "#6B5A34";
+        g[6][12] = "#6B5A34";
+      } else {
+        g[9][4] = "#3A2E1E";
+        g[10][4] = "#3A2E1E";
+        g[9][11] = "#3A2E1E";
+        g[10][11] = "#3A2E1E"; // chin straps, worn
+        g[11][7] = "#3A2E1E";
+        g[11][8] = "#3A2E1E"; // the chin cup
+      }
+    } else if (gearHead === "garrisoncap") {
+      // The overseas cap: a fore-and-aft envelope with a ridge.
+      paint(g, [3], 5, 10, "#4E5D3C");
+      paint(g, [4], 4, 11, "#46543A");
+      paint(g, [2], 6, 9, "#55603F");
+      g[5][4] = hair;
+      g[5][11] = hair;
+    } else {
+      // The soft caps: jeep, pile, HBT.
+      const dome = gearHead === "hbtcap" ? "#6A7050" : gearHead === "pilecap" ? "#6B6C52" : "#565840";
+      paint(g, [3, 4], 4, 11, dome);
+      paint(g, [5], 3, 12, gearHead === "hbtcap" ? "#59603F" : "#484A36");
+      g[6][4] = hair;
+      g[6][11] = hair;
+      if (gearHead === "pilecap") {
+        paint(g, [5, 6, 7], 3, 3, "#4C4E38");
+        paint(g, [5, 6, 7], 12, 12, "#4C4E38");
+      }
+      if (gearHead === "jeepcap") g[3][7] = "#6A6B4E";
+    }
+  } else if (headgear === "helmet") {
     paint(g, [2], 5, 10, helmetColor);
     paint(g, [3], 4, 11, helmetColor);
     paint(g, [4], 3, 12, helmetColor);
@@ -152,10 +197,16 @@ interface Props {
   fallen?: boolean;
   className?: string;
   testid?: string;
+  /** Barracks update: his carried gear — earned headgear is
+   * drawn on the portrait. */
+  equipment?: string[];
 }
 
-export default function Portrait({ seed, type, level = 0, size = 56, fallen = false, className = "", testid }: Props) {
-  const grid = useMemo(() => buildGrid(seed, type, level), [seed, type, level]);
+const HEADGEAR_ITEMS = ["nethelmet", "parahelmet", "jeepcap", "pilecap", "hbtcap", "garrisoncap"];
+
+export default function Portrait({ seed, type, level = 0, size = 56, fallen = false, className = "", testid, equipment }: Props) {
+  const gearHead = equipment?.find((i) => HEADGEAR_ITEMS.includes(i)) ?? null;
+  const grid = useMemo(() => buildGrid(seed, type, level, gearHead), [seed, type, level, gearHead]);
   return (
     <svg
       data-testid={testid}

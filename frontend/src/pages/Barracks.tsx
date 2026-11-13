@@ -2,14 +2,14 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { ArrowDownToLine, ArrowUpToLine, Shield, Siren, Snowflake } from "lucide-react";
+import { ArrowDownToLine, ArrowUpToLine, Package, Shield, Siren, Snowflake } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type { GameState, Soldier, UnitTypeId } from "@/lib/types";
-import { RANKS, UNIT_TYPES, isCowardQuirk, levelBonus } from "@/game/data";
+import { EQUIP_SLOTS, ITEM_BY_ID, ITEM_DEFS, RANKS, UNIT_TYPES, UPGRADE_CAP, UPGRADE_COST, UPGRADE_TRACKS, isCowardQuirk, levelBonus } from "@/game/data";
 import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
 import { useMusic } from "@/game/music";
@@ -53,6 +53,47 @@ export default function Barracks() {
       toast(`${s.rank} ${s.name} reports for duty — "${s.quirk}", ${s.hometown}`);
     },
     onError: (e) => toast.error(errDetail(e, "Requisition refused")),
+  });
+
+  const upgrade = useMutation({
+    mutationFn: ({ id, track }: { id: string; track: string }) =>
+      apiPost<Soldier>("/squad/upgrade", { soldier_id: id, track }),
+    onSuccess: (s) => {
+      qc.invalidateQueries({ queryKey: ["squad"] });
+      toast(`${s.name} trains up — the upgrade is his for life.`);
+    },
+    onError: (e) => toast.error(errDetail(e, "Training refused")),
+  });
+
+  const equip = useMutation({
+    mutationFn: ({ id, item }: { id: string; item: string }) =>
+      apiPost<Soldier>("/squad/equip", { soldier_id: id, item }),
+    onSuccess: (_s, v) => {
+      qc.invalidateQueries({ queryKey: ["squad"] });
+      qc.invalidateQueries({ queryKey: ["state"] });
+      toast(`${ITEM_BY_ID[v.item]?.label ?? v.item} issued.`);
+    },
+    onError: (e) => toast.error(errDetail(e, "Issue refused")),
+  });
+
+  const unequip = useMutation({
+    mutationFn: ({ id, item }: { id: string; item: string }) =>
+      apiPost<Soldier>("/squad/unequip", { soldier_id: id, item }),
+    onSuccess: (_s, v) => {
+      qc.invalidateQueries({ queryKey: ["squad"] });
+      qc.invalidateQueries({ queryKey: ["state"] });
+      toast(`${ITEM_BY_ID[v.item]?.label ?? v.item} back in stores.`);
+    },
+    onError: (e) => toast.error(errDetail(e, "Return refused")),
+  });
+
+  const buyItem = useMutation({
+    mutationFn: (item: string) => apiPost<GameState>("/inventory/buy", { item }),
+    onSuccess: (_s, item) => {
+      qc.invalidateQueries({ queryKey: ["state"] });
+      toast(`${ITEM_BY_ID[item]?.label ?? item} added to stores.`);
+    },
+    onError: (e) => toast.error(errDetail(e, "Purchase refused")),
   });
 
   const setStatus = useMutation({
@@ -196,16 +237,98 @@ export default function Barracks() {
         </Card>
       </div>
 
+      {/* Squad stores (Barracks update) */}
+      <Card className="border-[#2E3628] bg-[#1A1D17]" data-testid="stores-panel">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 font-heading text-lg tracking-wider text-[#F0F5EB]">
+            <Package size={16} className="text-[#E5A93C]" /> SQUAD STORES
+            <span className="ml-auto font-mono text-xs text-[#8D9A83]" data-testid="stores-total">
+              {Object.values(state?.inventory ?? {}).reduce((n, c) => n + c, 0)} pieces
+            </span>
+          </CardTitle>
+          <p className="font-mono text-[10px] leading-relaxed text-[#8D9A83]">
+            Gear, earned headgear and guns. Found in battlefield crates and awarded for victories, or bought with requisition.
+            Open a man's dossier to issue him up to {EQUIP_SLOTS} pieces. Stores belong to the squad: what sits here survives.
+            What a man carries into battle is lost with him if he falls — his gear, his upgrades, all of it.
+          </p>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {ITEM_DEFS.map((d) => {
+              const count = state?.inventory?.[d.id] ?? 0;
+              const affordable = state ? state.requisition >= d.price : false;
+              return (
+                <div key={d.id} className="flex flex-col border border-[#2E3628] bg-[#22271E] p-2.5" data-testid={`store-item-${d.id}`}>
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-mono text-xs font-semibold text-[#EDEDE2]">{d.label}</p>
+                    <Badge variant="outline" className="shrink-0 border-[#5C4A1E] font-mono text-[9px] text-[#E5A93C]">
+                      {d.kind === "gun" ? "GUN" : d.kind === "headgear" ? "HEADGEAR" : "GEAR"}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 flex-1 font-mono text-[10px] leading-relaxed text-[#A2B29A]">{d.blurb}</p>
+                  {d.restrict && (
+                    <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.15em] text-[#75826F]">
+                      {d.restrict.map((t) => UNIT_TYPES[t].label).join(" / ")} only
+                    </p>
+                  )}
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="font-mono text-[10px] text-[#8D9A83]" data-testid={`store-count-${d.id}`}>
+                      IN STORES: <span className={count > 0 ? "text-[#5EB872]" : "text-[#75826F]"}>{count}</span>
+                    </span>
+                    <Button
+                      data-testid={`buy-btn-${d.id}`}
+                      variant={affordable ? "default" : "outline"}
+                      size="xs"
+                      className="font-mono text-[10px]"
+                      disabled={!affordable || buyItem.isPending}
+                      onClick={() => buyItem.mutate(d.id)}
+                    >
+                      BUY — {d.price} RP
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
       <Dialog open={dossier !== null} onOpenChange={(o) => !o && setDossier(null)}>
         <DialogContent className="max-w-lg border-[#2E3628] bg-[#1A1D17]" data-testid="soldier-dossier">
-          {dossier && <Dossier s={dossier} commanderBonus={state?.combat_bonus ?? 0} />}
+          {dossier && (
+            <Dossier
+              s={soldiers.find((x) => x.id === dossier.id) ?? dossier}
+              commanderBonus={state?.combat_bonus ?? 0}
+              inventory={state?.inventory ?? {}}
+              busy={upgrade.isPending || equip.isPending || unequip.isPending}
+              onUpgrade={(track) => upgrade.mutate({ id: dossier.id, track })}
+              onEquip={(item) => equip.mutate({ id: dossier.id, item })}
+              onUnequip={(item) => unequip.mutate({ id: dossier.id, item })}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>
   );
 }
 
-function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) {
+function Dossier({
+  s,
+  commanderBonus,
+  inventory,
+  busy,
+  onUpgrade,
+  onEquip,
+  onUnequip,
+}: {
+  s: Soldier;
+  commanderBonus: number;
+  inventory: Record<string, number>;
+  busy: boolean;
+  onUpgrade: (track: string) => void;
+  onEquip: (item: string) => void;
+  onUnequip: (item: string) => void;
+}) {
   const spec = UNIT_TYPES[s.type];
   const now = levelBonus(s.level, commanderBonus);
   const base = levelBonus(0, 0);
@@ -215,7 +338,7 @@ function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) 
     <>
       <DialogHeader>
         <div className="flex gap-4">
-          <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={88} testid="dossier-portrait" />
+          <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={88} testid="dossier-portrait" equipment={s.equipment} />
           <div className="min-w-0">
             <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">
               Service record · {s.status === "reserve" ? "Reserve (frozen)" : "Deployed"}
@@ -271,6 +394,106 @@ function Dossier({ s, commanderBonus }: { s: Soldier; commanderBonus: number }) 
           <p className="mb-1.5 text-[9px] font-mono uppercase tracking-[0.2em] text-[#8D9A83]">Decorations</p>
           <MedalList medals={s.medals ?? []} testid="dossier-medals" />
         </div>
+
+        <div className="border border-[#2E3628] p-2" data-testid="dossier-upgrades">
+          <div className="mb-1.5 flex items-baseline justify-between">
+            <p className="text-[9px] font-mono uppercase tracking-[0.2em] text-[#8D9A83]">Field upgrades — his own, earned in battle</p>
+            <p className="font-mono text-[11px] text-[#E5A93C]" data-testid="dossier-points">
+              {s.points} pts
+            </p>
+          </div>
+          <div className="space-y-1">
+            {UPGRADE_TRACKS.map((t) => {
+              const lvl = s.upgrades?.[t.id] ?? 0;
+              const capped = lvl >= UPGRADE_CAP;
+              const canTrain = !capped && s.points >= UPGRADE_COST && !busy;
+              return (
+                <div key={t.id} className="flex items-center gap-2 font-mono text-[11px]" data-testid={`upgrade-row-${t.id}`}>
+                  <span className="w-24 shrink-0 text-[#E3E7DC]">{t.label}</span>
+                  <span className="flex gap-0.5">
+                    {[0, 1, 2].map((i) => (
+                      <span key={i} className={`inline-block h-2 w-3 ${i < lvl ? "bg-[#E5A93C]" : "bg-[#2E3628]"}`} />
+                    ))}
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-[10px] text-[#8D9A83]">{t.per}</span>
+                  <Button
+                    data-testid={`upgrade-btn-${t.id}`}
+                    variant="outline"
+                    size="xs"
+                    className="shrink-0 font-mono text-[9px]"
+                    disabled={!canTrain}
+                    onClick={() => onUpgrade(t.id)}
+                  >
+                    {capped ? "MAX" : `TRAIN — ${UPGRADE_COST}`}
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+          <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-[#75826F]">
+            2 points for surviving a battle, 1 more per 2 kills, up to 4 a battle. Upgrades die with the man.
+          </p>
+        </div>
+
+        <div className="border border-[#2E3628] p-2" data-testid="dossier-equipment">
+          <p className="mb-1.5 text-[9px] font-mono uppercase tracking-[0.2em] text-[#8D9A83]">
+            Carried — {s.equipment?.length ?? 0} of {EQUIP_SLOTS} slots
+          </p>
+          <div className="space-y-1">
+            {(s.equipment ?? []).map((item) => (
+              <div key={item} className="flex items-center justify-between gap-2 border border-[#5C4A1E] bg-[#2A2210] px-2 py-1 font-mono text-[11px]" data-testid={`carried-${item}`}>
+                <span className="text-[#FFD97D]">{ITEM_BY_ID[item]?.label ?? item}</span>
+                <Button
+                  data-testid={`unequip-btn-${item}`}
+                  variant="outline"
+                  size="xs"
+                  className="font-mono text-[9px]"
+                  disabled={busy}
+                  onClick={() => onUnequip(item)}
+                >
+                  RETURN
+                </Button>
+              </div>
+            ))}
+            {Array.from({ length: Math.max(0, EQUIP_SLOTS - (s.equipment?.length ?? 0)) }).map((_, i) => (
+              <div key={i} className="border border-dashed border-[#2E3628] px-2 py-1 font-mono text-[10px] text-[#5A664F]">
+                Empty slot
+              </div>
+            ))}
+          </div>
+          <p className="mb-1 mt-2 text-[9px] font-mono uppercase tracking-[0.2em] text-[#8D9A83]">From stores</p>
+          <div className="space-y-1">
+            {ITEM_DEFS.filter((d) => (inventory[d.id] ?? 0) > 0).map((d) => {
+              const carried = (s.equipment ?? []).includes(d.id);
+              const restricted = d.restrict ? !d.restrict.includes(s.type) : false;
+              const full = (s.equipment?.length ?? 0) >= EQUIP_SLOTS;
+              const reason = carried ? "Carried" : restricted ? `${d.restrict!.map((t) => UNIT_TYPES[t].label).join(" / ")} only` : full ? "Slots full" : null;
+              return (
+                <div key={d.id} className="flex items-center justify-between gap-2 font-mono text-[11px]">
+                  <span className="min-w-0 truncate text-[#E3E7DC]">
+                    {d.label} <span className="text-[#75826F]">× {inventory[d.id]}</span>
+                  </span>
+                  <Button
+                    data-testid={`equip-btn-${d.id}`}
+                    variant="outline"
+                    size="xs"
+                    className="shrink-0 font-mono text-[9px]"
+                    disabled={busy || reason !== null}
+                    onClick={() => onEquip(d.id)}
+                  >
+                    {reason ?? "ISSUE"}
+                  </Button>
+                </div>
+              );
+            })}
+            {ITEM_DEFS.every((d) => (inventory[d.id] ?? 0) === 0) && (
+              <p className="font-mono text-[10px] text-[#75826F]">Stores are empty. Crates, victories and the buy buttons below restock them.</p>
+            )}
+          </div>
+          <p className="mt-1.5 font-mono text-[9px] leading-relaxed text-[#75826F]">
+            What he carries shows on him in battle — and if he falls, it is lost with him.
+          </p>
+        </div>
         <p className="font-mono text-[12px] leading-relaxed text-[#B9C2B3]" data-testid="dossier-backstory">
           {s.backstory}
         </p>
@@ -307,6 +530,7 @@ function SoldierRow({
           type={s.type}
           level={s.level}
           size={40}
+          equipment={s.equipment}
           className={frozen ? "opacity-80 saturate-50" : ""}
         />
         <span className="min-w-0">
@@ -315,6 +539,8 @@ function SoldierRow({
           </span>
           <span className="block truncate font-mono text-[10px] text-[#8D9A83]">
             {UNIT_TYPES[s.type].label} · "{s.quirk}" · {s.kills} kills · {s.missions} ops
+            {s.points > 0 && <span className="text-[#E5A93C]"> · {s.points} pts</span>}
+            {(s.equipment?.length ?? 0) > 0 && <span className="text-[#C68B45]"> · {s.equipment.length} carried</span>}
             {frozen && <span className="text-[#4ECDC4]"> · FROZEN</span>}
           </span>
           <RibbonRack medals={s.medals ?? []} testid={`soldier-ribbons-${s.id}`} />
