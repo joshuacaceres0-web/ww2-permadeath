@@ -8,7 +8,7 @@ export const SPR_W = 16;
 export const SPR_H = 14;
 export const FEET_X = 5;
 
-export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "prone";
+export type Pose = "stand" | "walkA" | "walkB" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "prone" | "proneA" | "proneB";
 export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none";
 export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer";
 
@@ -45,17 +45,44 @@ export const PAL: Record<string, Palette> = {
 type Px = (x: number, y: number, c: string) => void;
 
 function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
-  if (pose === "prone") {
+  if (pose === "prone" || pose === "proneA" || pose === "proneB") {
     // Flat on his belly, head up on his elbows, weapon aimed
     // forward. Same horizontal layout as the dead pose, but
     // alive: helmet high, face up, arms under the gun.
-    for (let x = 0; x <= 1; x++) {
-      px(x, 10, pal.boots);
-      px(x, 11, pal.boots);
-    }
-    for (let x = 1; x <= 5; x++) {
-      px(x, 10, pal.pants);
-      px(x, 11, pal.pantsDark);
+    // proneA / proneB are the crawl cycle (Josh, 2026-11-12):
+    // the legs scissor and an arm reaches, alternating, so a
+    // crawling man visibly pulls himself along. "prone" is
+    // the still pose: holding, or firing from the ground.
+    const crawl = pose === "proneA" ? 1 : pose === "proneB" ? 2 : 0;
+    if (crawl === 1) {
+      // Rear leg bent up, toe dug in to push; front leg flat.
+      px(0, 9, pal.boots);
+      px(1, 9, pal.boots);
+      px(0, 10, pal.pantsDark);
+      px(1, 10, pal.pants);
+      for (let x = 2; x <= 5; x++) {
+        px(x, 10, pal.pants);
+        px(x, 11, pal.pantsDark);
+      }
+    } else if (crawl === 2) {
+      // Front leg bent under him; rear leg flat.
+      for (let x = 0; x <= 3; x++) {
+        px(x, 10, pal.pants);
+        px(x, 11, pal.pantsDark);
+      }
+      px(4, 9, pal.boots);
+      px(5, 9, pal.boots);
+      px(4, 10, pal.pants);
+      px(5, 10, pal.pantsDark);
+    } else {
+      for (let x = 0; x <= 1; x++) {
+        px(x, 10, pal.boots);
+        px(x, 11, pal.boots);
+      }
+      for (let x = 1; x <= 5; x++) {
+        px(x, 10, pal.pants);
+        px(x, 11, pal.pantsDark);
+      }
     }
     for (let x = 5; x <= 10; x++) {
       for (let y = 9; y <= 11; y++) {
@@ -67,6 +94,8 @@ function paint(px: Px, pal: Palette, pose: Pose, weapon: Weapon, head: Head) {
     px(7, 10, pal.gear); // pack strap across the back
     px(10, 10, pal.uni); // elbows on the ground
     px(11, 10, pal.uni);
+    if (crawl === 1) px(11, 11, SKIN_D); // hand reached out ahead, pulling
+    if (crawl === 2) px(9, 11, SKIN_D); // hand planted under the chest, pushing
     // Head raised at the front.
     for (let x = 11; x <= 13; x++) px(x, 6, pal.helmetHi);
     for (let x = 11; x <= 13; x++) px(x, 7, pal.helmet);

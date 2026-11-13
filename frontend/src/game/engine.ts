@@ -276,6 +276,11 @@ interface Unit {
    * Harder to hit at range, no protection up close, slower
    * movement and fire. Footmen only. */
   prone?: boolean;
+  /** The tick time at which the unit last actually moved
+   * (position changed in moveToward). The WASD drive moves the
+   * leader outside his own unit turn, so the prone fire gate
+   * checks this as well as the turn's own movement flag. */
+  movedT?: number;
   abilityCd: number;
   burst: number;
   burstTimer: number;
@@ -4046,7 +4051,7 @@ export class GameEngine {
           // whistle, played about a second before impact.
           this.pushLog("Incoming mortar!", "wave");
         }
-      } else if (u.cooldown <= 0 && focus && d <= u.range && (!u.pinned || u.cover) && !u.broken && this.los(u, focus)) {
+      } else if (u.cooldown <= 0 && focus && d <= u.range && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed)) && this.los(u, focus)) {
         // A pinned man in the open keeps his head down and cannot
         // fire. A pinned man IN COVER still shoots back, at a
         // slower rate: before this, rounds stopped by his cover
@@ -4055,12 +4060,15 @@ export class GameEngine {
         // at 55 and never fired again, while 95% of frontal
         // rounds stopped at the wall — the trench locked both
         // ways and read as frozen (Josh's playtest, 2026-11-12).
+        // A prone man fires only when he is still: crawling is
+        // both hands and belly on the ground, no shooting on
+        // the move (Josh, 2026-11-12).
         const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
       } else if (
         u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && this.manualShot &&
-        this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken
+        this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed))
       ) {
         // The player clicked open ground: the leader fires at
         // the point itself while the click is fresh. No target,
@@ -4524,8 +4532,12 @@ export class GameEngine {
     }
     u.facing = Math.atan2(y - u.y, x - u.x);
     u.walk += dt * 10;
-    // He actually moved: if it was through foliage, shake it.
-    if (!u.vehicle && (u.x !== sx || u.y !== sy)) this.rustle(u);
+    // He actually moved: stamp the tick, and if it was through
+    // foliage, shake it.
+    if (u.x !== sx || u.y !== sy) {
+      u.movedT = this.elapsed;
+      if (!u.vehicle) this.rustle(u);
+    }
   }
 
   private resolveCollisions() {
@@ -4706,11 +4718,17 @@ export class GameEngine {
     }
     // Casualty shock: men close by watch a friend die (-8 within
     // 250), the whole side feels it (-2). The shock also holds
-    // recovery back for 5s, like being under fire.
+    // recovery back for 5s, like being under fire — but only for
+    // the men who saw it (within 250). The side-wide clock reset
+    // meant that in a hot fight with a death every few seconds,
+    // NO man on the side ever got 5 quiet seconds, so morale
+    // never recovered at all: broken NPCs fell back and stayed
+    // broken at the rear for the whole battle (Josh, 2026-11-12).
     for (const a of this.units) {
       if (!a.alive || a.side !== u.side || a.id === u.id) continue;
-      this.moraleLoss(a, dist(u.x, u.y, a.x, a.y) <= 250 ? 8 : 2);
-      a.lastHitT = this.elapsed;
+      const witnessed = dist(u.x, u.y, a.x, a.y) <= 250;
+      this.moraleLoss(a, witnessed ? 8 : 2);
+      if (witnessed) a.lastHitT = this.elapsed;
     }
     if (u.side === "allies" && !u.npc && !u.vehicle) sfx("death");
     if (!u.vehicle) this.corpseFx(u);
@@ -5958,7 +5976,11 @@ export class GameEngine {
     if (!u.alive) {
       const t = u.deathT ?? 1;
       pose = t < 0.22 ? "hit" : t < 0.48 ? "kneel" : "dead";
-    } else if (u.prone) pose = "prone";
+    } else if (u.prone) {
+      // Crawling: the legs scissor on the walk cycle (proneA /
+      // proneB). Still — holding or firing — the flat pose.
+      pose = moving ? (Math.floor(u.walk / 2.2) % 2 === 0 ? "proneA" : "proneB") : "prone";
+    }
     else if ((u.shootT ?? 0) > 0) pose = u.cover || u.pinned || u.isStatic ? "crouch" : "shoot";
     else if (moving) {
       const f = Math.floor(u.walk / 1.6) % 4;

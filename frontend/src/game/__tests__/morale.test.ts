@@ -267,4 +267,44 @@ describe("morale", () => {
     expect(u.morale).toBeGreaterThanOrEqual(45);
     expect(u.broken).toBe(false);
   });
+
+  it("distant casualties do not hold back a broken npc's recovery (Josh, 2026-11-12)", async () => {
+    const e = await makeEngine();
+    park(e);
+    // The broken NPC sits quiet at the rear. Deaths keep happening
+    // far away (450+ units): the whole side feels each one (-2),
+    // but a man who did not see it must still recover his nerve.
+    // The old side-wide clock reset meant any death anywhere froze
+    // every man's recovery, so broken NPCs stayed broken at the
+    // back for whole battles.
+    const u = e.units.find((x) => x.side === "allies" && x.npc && x.type === "rifleman")!;
+    u.x = 200; u.y = 600;
+    u.morale = 10;
+    u.broken = true;
+    u.lastHitT = -100;
+    u.suppression = 0;
+    // A witness stands within 250 of the first victim: his clock
+    // IS held back by the shock, like being under fire.
+    const witness = e.units.find((x) => x.side === "allies" && x.npc && x.type === "medic")!;
+    witness.x = 200; witness.y = 320;
+    witness.lastHitT = -100;
+    const victims = e.units.filter((x) => x.side === "allies" && x.npc && x !== u && x !== witness);
+    for (const v of victims) { v.x = 200; v.y = 150; }
+    // Everyone else far north, out of the way.
+    for (const a of e.units) {
+      if (a.side === "allies" && a !== u && a !== witness && !victims.includes(a)) { a.x = 200; a.y = 60; }
+    }
+    e.damage(victims[0], 999, "rifle", null);
+    expect(victims[0].alive).toBe(false);
+    expect(witness.lastHitT).toBeGreaterThan(-1); // saw it: clock held
+    expect(u.lastHitT).toBe(-100); // did not see it: clock untouched
+    // More distant deaths every 3s while he recovers.
+    for (let i = 1; i <= 3; i++) {
+      step(e, 3);
+      e.damage(victims[i], 999, "rifle", null);
+    }
+    step(e, 3);
+    expect(u.morale).toBeGreaterThanOrEqual(45);
+    expect(u.broken).toBe(false);
+  });
 });

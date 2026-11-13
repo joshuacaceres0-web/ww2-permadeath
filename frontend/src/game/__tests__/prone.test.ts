@@ -85,12 +85,14 @@ type U = {
   id: number; side: string; npc: boolean; alive: boolean; x: number; y: number;
   hp: number; maxHp: number; attackId: number | null; suppression: number;
   morale: number; pinned: boolean; prone?: boolean; isStatic?: boolean;
+  orders: Array<{ x: number; y: number }>;
 };
 type Engine = {
   setup: (m: unknown, s: unknown, b: number, v: string) => void;
   begin: () => void;
   update: (dt: number) => void;
   units: U[];
+  covers: Array<{ x: number; y: number; r: number; q: number; kind?: string }>;
 };
 
 async function makeEngine() {
@@ -168,4 +170,62 @@ describe("prone under heavy fire", () => {
     // noise of the standing man (both just get hit).
     expect(proneClose).toBeGreaterThan(standingClose * 0.7);
   }, 90000);
+
+  it("a prone man fires only when he is still, never while crawling (Josh, 2026-11-12)", async () => {
+    const e = await makeEngine();
+    const shooter = e.units.filter((u) => u.side === "allies" && !u.npc)[0];
+    const foes = e.units.filter((u) => u.side === "axis");
+    const target = foes[0];
+    for (const f of foes.slice(1)) f.alive = false;
+    // Park everyone else far west: manual men hold, NPCs walk
+    // east but stay out of range for the whole window.
+    for (const a of e.units) {
+      if (a.side === "allies" && a !== shooter) { a.x = 80; a.y = 200; }
+    }
+    // Seat the shooter in the x=900 trench line, target 150 east.
+    const spot = e.covers
+      .filter((c) => c.kind === "trench")
+      .sort((a, b) => Math.abs(a.y - 675) - Math.abs(b.y - 675))[0];
+    expect(spot).toBeTruthy();
+    // West of the spot: the trench sits between him and the
+    // target, which is what makes it his cover. (The axis
+    // garrison seats at +8 because their threat is the west.)
+    shooter.x = spot.x - 8;
+    shooter.y = spot.y;
+    shooter.hp = 5000;
+    shooter.maxHp = 5000;
+    target.x = spot.x + 158;
+    target.y = spot.y;
+    target.hp = 100000;
+    target.maxHp = 100000;
+    shooter.attackId = target.id;
+    const hold = () => {
+      shooter.suppression = 80; // stays prone (and pinned)
+      shooter.morale = 100;
+      target.x = spot.x + 158;
+      target.y = spot.y;
+      target.morale = 100;
+      target.suppression = 0;
+    };
+    // Phase 1: crawl east under orders for 1.5s. He must move
+    // and the target must not lose a single hit point.
+    shooter.orders = [{ x: spot.x + 68, y: spot.y }];
+    const startX = shooter.x;
+    for (let s = 0; s < 90; s++) { hold(); e.update(1 / 60); }
+    expect(shooter.prone).toBe(true);
+    expect(shooter.x).toBeGreaterThan(startX + 8);
+    expect(target.hp).toBe(100000);
+    // Phase 2: back in the trench, orders cleared, still prone.
+    // Now he shoots: the target bleeds within a few seconds.
+    shooter.orders = [];
+    shooter.x = spot.x - 8;
+    shooter.y = spot.y;
+    let bled = false;
+    for (let s = 0; s < 60 * 6; s++) {
+      hold();
+      e.update(1 / 60);
+      if (target.hp < 100000) { bled = true; break; }
+    }
+    expect(bled).toBe(true);
+  }, 60000);
 });
