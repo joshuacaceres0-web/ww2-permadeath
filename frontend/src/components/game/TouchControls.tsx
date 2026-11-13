@@ -56,8 +56,13 @@ function Stick({
   return (
     <div
       ref={baseRef}
-      className="pointer-events-auto relative h-32 w-32 shrink-0 touch-none rounded-full border bg-[#0D0F0C]/50"
-      style={{ borderColor: accent }}
+      // Ghosted on the phone (Josh, 2026-11-13): the sticks
+      // sit over the battlefield, so at rest they are mostly
+      // see-through — a faint fill and a dimmed ring. The
+      // moment a thumb takes the stick it firms up, so you
+      // can always see what you are driving.
+      className="pointer-events-auto relative h-32 w-32 shrink-0 touch-none rounded-full border bg-[#0D0F0C]/20"
+      style={{ borderColor: knob ? accent : `${accent}99` }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         const v = vectorFrom(e.clientX, e.clientY);
@@ -84,14 +89,14 @@ function Stick({
       }}
     >
       <div
-        className="absolute h-14 w-14 rounded-full border bg-[#0D0F0C]/85"
+        className={`absolute h-14 w-14 rounded-full border ${knob ? "bg-[#0D0F0C]/70" : "bg-[#0D0F0C]/40"}`}
         style={{
-          borderColor: accent,
+          borderColor: knob ? accent : `${accent}99`,
           left: `calc(50% - 28px + ${knob?.x ?? 0}px)`,
           top: `calc(50% - 28px + ${knob?.y ?? 0}px)`,
         }}
       />
-      <span className="pointer-events-none absolute inset-x-0 -bottom-5 text-center font-mono text-[9px] tracking-[0.2em] text-[#8D9A83]">
+      <span className="pointer-events-none absolute inset-x-0 -bottom-5 text-center font-mono text-[9px] tracking-[0.2em] text-[#8D9A83]/70">
         {label}
       </span>
     </div>
@@ -151,10 +156,12 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
         ))}
       </div>
 
-      {/* Ability: the big thumb button above the shoot stick */}
+      {/* Ability: the big thumb button above the shoot stick.
+          Ghosted like the sticks (Josh, 2026-11-13) — it floats
+          over the field, so it stays see-through. */}
       <button
         data-testid="touch-ability-btn"
-        className="pointer-events-auto absolute bottom-44 right-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#E5A93C] bg-[#3A2B0E]/85 font-mono text-[10px] font-bold tracking-wider text-[#FFD97D]"
+        className="pointer-events-auto absolute bottom-44 right-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#E5A93C]/60 bg-[#3A2B0E]/40 font-mono text-[10px] font-bold tracking-wider text-[#FFD97D]"
         onClick={() => {
           const e = eng();
           const lead = e?.leaderUnit();

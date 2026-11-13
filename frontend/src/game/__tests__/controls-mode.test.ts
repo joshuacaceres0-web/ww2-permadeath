@@ -22,6 +22,7 @@ import { DEFAULT_SETTINGS, loadSettings, resolveTouchControls } from "../../lib/
 const settingsSrc = readFileSync(new URL("../../pages/Settings.tsx", import.meta.url), "utf8");
 const battleSrc = readFileSync(new URL("../../pages/Battlefield.tsx", import.meta.url), "utf8");
 const dockSrc = readFileSync(new URL("../../components/game/SquadDock.tsx", import.meta.url), "utf8");
+const touchSrc = readFileSync(new URL("../../components/game/TouchControls.tsx", import.meta.url), "utf8");
 
 describe("resolveTouchControls — the player's pick wins", () => {
   it("phone forces touch even on a wide fine-pointer screen", () => {
@@ -89,5 +90,20 @@ describe("the battle wiring", () => {
     // The chips keep the card testids and the tap-to-select.
     expect(dockSrc).toContain("unit-dock-card-");
     expect(dockSrc).toContain("unit-dock-morale-");
+  });
+});
+
+describe("phone ghost controls and scrollable overlays (Josh, 2026-11-13)", () => {
+  it("the sticks and the ability button are see-through at rest and firm up under a thumb", () => {
+    expect(touchSrc).toContain("bg-[#0D0F0C]/20");
+    expect(touchSrc).toContain('knob ? "bg-[#0D0F0C]/70" : "bg-[#0D0F0C]/40"');
+    expect(touchSrc).toContain("border-[#E5A93C]/60 bg-[#3A2B0E]/40");
+    // No solid stick base or knob may come back.
+    expect(touchSrc).not.toContain("bg-[#0D0F0C]/50");
+    expect(touchSrc).not.toContain("bg-[#0D0F0C]/85");
+  });
+  it("the debrief and battle-menu panels scroll inside their overlays", () => {
+    expect(battleSrc).toContain("max-h-full max-w-lg overflow-y-auto overscroll-contain");
+    expect(battleSrc).toContain("max-h-full w-full max-w-sm overflow-y-auto overscroll-contain");
   });
 });

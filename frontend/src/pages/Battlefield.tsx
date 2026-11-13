@@ -577,7 +577,7 @@ export default function Battlefield() {
         )}
         {escOpen && !hud?.briefing && (
           <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#0D0F0C]/80 p-4" data-testid="esc-menu">
-            <div className={`w-full max-w-sm p-4 ${PANEL_SOLID}`}>
+            <div className={`max-h-full w-full max-w-sm overflow-y-auto overscroll-contain p-4 ${PANEL_SOLID}`}>
               <p className={PANEL_LABEL}>Battle menu</p>
               <h3 className="mt-1 font-heading text-xl font-bold text-[#F0F5EB]">{mission.code} — PAUSED</h3>
               <div className="mt-4 flex flex-col gap-2">
@@ -765,11 +765,16 @@ export default function Battlefield() {
           </div>
         )}
 
-        {/* Debrief overlay */}
+        {/* Debrief overlay. The panel scrolls inside the
+            overlay (Josh, 2026-11-13: no way to scroll it on
+            the phone — the report is taller than a sideways
+            phone screen, so without this the RETURN button
+            sat off-screen for good). Same pattern as the
+            briefing panel. */}
         {hud && hud.state !== "active" && report && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#0D0F0C]/85 p-6">
             <div
-              className="max-w-lg border border-[#2E3628] bg-[#1A1D17] p-6"
+              className="max-h-full max-w-lg overflow-y-auto overscroll-contain border border-[#2E3628] bg-[#1A1D17] p-6"
               data-testid="debrief-panel"
             >
               <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#8D9A83]">
