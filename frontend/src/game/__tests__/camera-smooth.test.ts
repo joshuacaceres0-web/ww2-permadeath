@@ -180,3 +180,64 @@ describe("camera smooth follow", () => {
     }, 60000);
   }
 });
+
+describe("camera spring under real-world frame pacing (2026-11-13 rework)", () => {
+  it("holds a near-constant gap while frame times jitter between 120Hz, 60Hz and hitches", async () => {
+    const e = await makeEngine();
+    for (let tick = 0; tick < 10; tick++) e.update(1 / 60);
+    e.keys.add("d");
+    // Settle into the run at a clean 60Hz first.
+    for (let tick = 0; tick < 60; tick++) e.update(1 / 60);
+    // Then 3 seconds of ugly pacing: 120Hz frames, 30Hz
+    // frames and two 50ms hitches, round and round. The old
+    // exponential damp swung its closing rate with every dt,
+    // so the gap breathed by most of its own size; the spring
+    // carries velocity, so the gap should barely move.
+    const dts = [1 / 120, 1 / 120, 1 / 60, 1 / 30, 1 / 60, 0.05, 1 / 120, 1 / 60, 1 / 30, 1 / 60, 0.05, 1 / 60];
+    const gaps: number[] = [];
+    let t = 0;
+    let i = 0;
+    while (t < 3) {
+      const dt = dts[i++ % dts.length];
+      e.update(dt);
+      t += dt;
+      const c = center(e);
+      const L = leaderOf(e);
+      gaps.push(Math.hypot(c.x - L.x, c.y - L.y));
+    }
+    const lo = Math.min(...gaps);
+    const hi = Math.max(...gaps);
+    // The gap lives in the same few-units band as the clean
+    // run and its swing is a fraction of its size: no lurch
+    // (collapse toward 0) and no stall (ballooning away).
+    expect(lo).toBeGreaterThan(1);
+    expect(hi).toBeLessThan(9);
+    expect(hi - lo).toBeLessThan(4.5);
+  }, 60000);
+
+  it("glides to a stop when the leader halts dead: no overshoot past him, no ringing", async () => {
+    const e = await makeEngine();
+    for (let tick = 0; tick < 10; tick++) e.update(1 / 60);
+    e.keys.add("d");
+    for (let tick = 0; tick < 90; tick++) e.update(1 / 60);
+    e.keys.delete("d");
+    const stopX = leaderOf(e).x;
+    let maxPast = 0;
+    let prevGap = Number.POSITIVE_INFINITY;
+    let rings = 0;
+    for (let tick = 0; tick < 60; tick++) {
+      e.update(1 / 60);
+      const c = center(e);
+      maxPast = Math.max(maxPast, c.x - stopX);
+      const gap = Math.abs(c.x - stopX);
+      if (gap > prevGap + 0.05) rings++;
+      prevGap = gap;
+    }
+    // The spring's overshoot guard: the view may coast a
+    // hair past the stop point but never sails by him, and
+    // the approach is monotone — no visible ringing.
+    expect(maxPast).toBeLessThan(2);
+    expect(rings).toBe(0);
+    expect(prevGap).toBeLessThan(1);
+  }, 60000);
+});

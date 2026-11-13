@@ -9,6 +9,12 @@ interface Props {
   onSplit?: () => void;
   onSelectTeam?: (i: 0 | 1) => void;
   onMerge?: () => void;
+  /** "compact" is the phone strip (Josh, 2026-11-13): on a
+   * sideways phone the full cards stack into a right-hand
+   * column that crowds the fire thumb, so touch battles get
+   * one slim row of chips along the bottom instead — number,
+   * name, health and morale, tap still selects the man. */
+  variant?: "full" | "compact";
 }
 
 function UnitCard({
@@ -126,7 +132,50 @@ function UnitCard({
   );
 }
 
-export default function SquadDock({ hud, onSelect, onAbility }: Props) {
+export default function SquadDock({ hud, onSelect, onAbility, variant = "full" }: Props) {
+  if (variant === "compact") {
+    return (
+      <div className="flex gap-1.5 overflow-x-auto px-2 py-1.5" data-testid="squad-dock">
+        {hud.units.map((u, i) => {
+          const hpPct = Math.max(0, Math.round((u.hp / u.maxHp) * 100));
+          const selected = hud.selectedIds.includes(u.id);
+          return (
+            <button
+              key={u.id}
+              data-testid={`unit-dock-card-${i}`}
+              onClick={() => onSelect(u.id)}
+              className={`w-28 shrink-0 border px-2 py-1 text-left ${
+                u.alive ? "bg-[#0D0F0C]/85" : "bg-[#0D0F0C]/60 opacity-60"
+              } ${selected ? "border-[#E5A93C]" : "border-[#2E3628]"}`}
+            >
+              <span className="flex items-baseline justify-between gap-1">
+                <span className="truncate font-mono text-[11px] font-semibold text-[#EDEDE2]">
+                  {i + 1} · {u.name.split(" ").slice(-1)[0]}
+                  {hud.leaderId === u.id ? " ★" : ""}
+                </span>
+                <span className="font-mono text-[9px] text-[#8D9A83]">{u.alive ? `${Math.max(0, Math.round(u.hp))}` : "KIA"}</span>
+              </span>
+              <span className="mt-1 block h-1.5 w-full bg-[#121411]">
+                <span
+                  className={`block h-full ${hpPct > 50 ? "bg-[#5EB872]" : hpPct > 20 ? "bg-[#E5A93C]" : "bg-[#E24A4A]"}`}
+                  style={{ width: `${hpPct}%` }}
+                />
+              </span>
+              <span className="mt-0.5 block h-1 w-full bg-[#121411]" data-testid={`unit-dock-morale-${i}`}>
+                <span
+                  className={`block h-full ${u.broken ? "bg-[#3D348B]" : u.morale > 60 ? "bg-[#56B4E8]" : u.morale > 30 ? "bg-[#4A6FD4]" : "bg-[#9B59D0]"}`}
+                  style={{ width: `${Math.max(0, Math.min(100, u.morale))}%` }}
+                />
+              </span>
+            </button>
+          );
+        })}
+        {hud.units.length === 0 && (
+          <div className="px-2 py-1 font-mono text-[11px] text-[#8D9A83]">No men deployed — hire in the barracks.</div>
+        )}
+      </div>
+    );
+  }
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2 short:px-1.5 short:py-1.5">
     <div className="flex gap-2 overflow-x-auto short:h-full short:flex-col short:gap-1 short:overflow-y-auto" data-testid="squad-dock">

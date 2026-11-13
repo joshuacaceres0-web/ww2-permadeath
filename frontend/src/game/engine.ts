@@ -52,17 +52,43 @@ const NEAR_MISS_BAND = 45;
 // The airborne convoy's road speed: a slow, cautious roll west.
 const CONVOY_SPEED = 26;
 const PAN_SPEED = 900;
-/** Camera follow smoothing (Josh, 2026-11-13): the lock target
+/** Camera follow smoothing (Josh, 2026-11-13; spring rework
+ * same day after "still choppy" in play): the lock target
  * never changes — always the leader, no free camera — but the
- * view eases onto him over a few frames instead of snapping in
- * one. At a full run (60 units/s) the steady lag is speed ×
- * tau ≈ 3 units, under one screen pixel (PX = 3), so he still
- * reads as dead center. A jump farther than the snap distance
- * (a teleport, a succession across the field, coming back
- * from the full map) still snaps instantly: the lock never
- * pans across the map to reach him. */
-const CAM_SMOOTH_TAU = 0.045;
+ * view rides a critically damped spring (SmoothDamp) onto
+ * him. The camera carries a velocity of its own, so it eases
+ * out of stops and into runs instead of changing speed the
+ * tick the leader does, and it holds a near-constant gap
+ * while he runs, so uneven frame times stop printing through
+ * as lurches. At a full run (60 units/s) the steady lag is
+ * about 5 units at CAM_SMOOTH_TIME 0.09, under two screen
+ * pixels (PX = 3), so he still reads as dead center and the
+ * camera-lock suite's tolerance holds. A jump
+ * farther than the snap distance (a teleport, a succession
+ * across the field, coming back from the full map) still
+ * snaps instantly: the lock never pans across the map to
+ * reach him. */
+const CAM_SMOOTH_TIME = 0.09;
 const CAM_SNAP_DIST = 90;
+
+/** One axis of a critically damped spring (Unity-style
+ * SmoothDamp, no speed cap): returns [next position, next
+ * velocity]. The overshoot guard lands the axis exactly on
+ * the target instead of ringing around it. */
+function smoothDampAxis(current: number, target: number, vel: number, smoothTime: number, dt: number): [number, number] {
+  const omega = 2 / smoothTime;
+  const x = omega * dt;
+  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
+  const change = current - target;
+  const temp = (vel + omega * change) * dt;
+  let nextVel = (vel - omega * temp) * exp;
+  let next = target + (change + temp) * exp;
+  if ((target - current > 0) === (next > target)) {
+    next = target;
+    nextVel = 0;
+  }
+  return [next, nextVel];
+}
 const PX = 3; // world units per screen pixel — the whole battlefield renders as chunky pixel art
 const MIN_SCALE = 0.7; // zoomed in so the chunky sprites read clearly
 const PIXEL_FONT = "24px Silkscreen, monospace";
@@ -1113,6 +1139,7 @@ export class GameEngine {
   private coverLogT = 0;
   private holdPan = { x: 0, y: 0 };
   private cam = { x: 0, y: 0 };
+  private camVel = { x: 0, y: 0 };
   private viewW = VIEW_W;
   private viewH = VIEW_H;
   private keys = new Set<string>();
@@ -1594,6 +1621,8 @@ export class GameEngine {
       this.view = { s, ox: 0, oy: 0 };
       this.cam.x = 0;
       this.cam.y = 0;
+      this.camVel.x = 0;
+      this.camVel.y = 0;
       return;
     }
     const s = Math.max(MIN_SCALE, Math.min(rect.width / VIEW_W, rect.height / VIEW_H));
@@ -1644,20 +1673,25 @@ export class GameEngine {
    * off-center. Full map is the only exception, and update()
    * only lets it live while the battle is paused.
    * Follow feel (Josh, 2026-11-13): the one-frame exact snap
-   * read as clunk in play, worst on diagonals — the leader
-   * moves about a unit a tick while the view can only land on
-   * whole screen pixels (PX = 3), so the snap landed the view
-   * in uneven 3-unit steps, the two axes crossing their pixel
-   * thresholds on different ticks, and every discrete change
-   * in the leader's speed (foliage, the obstacle belt, a pin)
-   * hit the screen undamped. The lock now eases onto the
-   * target with a short exponential damp (CAM_SMOOTH_TAU):
-   * the leader stays effectively centered (a few units of
-   * lag at a full run, under one screen pixel) but the steps
-   * land evenly and speed changes glide. Jumps past
-   * CAM_SNAP_DIST still snap in one tick. */
+   * read as clunk in play, worst on diagonals, and the first
+   * ease (a plain exponential damp) still printed the leader's
+   * steps through, because a damp has no velocity: the camera
+   * changed speed the same tick he did, and uneven frame times
+   * swung its closing rate. The lock now rides a critically
+   * damped spring integrated in fixed 1/240 substeps, so the
+   * feel is the same at any frame rate: the camera accelerates
+   * and settles like it has a little weight, speed changes
+   * (foliage, the obstacle belt, a pin) glide, and while he
+   * runs the gap holds near-constant instead of breathing.
+   * Jumps past CAM_SNAP_DIST still snap in one tick, and the
+   * spring's velocity is zeroed wherever the view is hard-set
+   * so a re-entry never lurches. */
   private lockCamera(dt: number) {
-    if (this.phase !== "battle" || this.fitWholeMap) return;
+    if (this.phase !== "battle" || this.fitWholeMap) {
+      this.camVel.x = 0;
+      this.camVel.y = 0;
+      return;
+    }
     const t = this.cameraTarget();
     if (!t) return;
     const tx = t.x - this.viewW / 2;
@@ -1667,16 +1701,24 @@ export class GameEngine {
     if (dx * dx + dy * dy > CAM_SNAP_DIST * CAM_SNAP_DIST) {
       this.cam.x = tx;
       this.cam.y = ty;
+      this.camVel.x = 0;
+      this.camVel.y = 0;
       return;
     }
-    const k = dt > 0 ? 1 - Math.exp(-dt / CAM_SMOOTH_TAU) : 1;
-    this.cam.x += dx * k;
-    this.cam.y += dy * k;
+    if (dt <= 0) return;
+    const steps = Math.max(1, Math.min(16, Math.ceil(dt / (1 / 240))));
+    const h = dt / steps;
+    for (let i = 0; i < steps; i++) {
+      [this.cam.x, this.camVel.x] = smoothDampAxis(this.cam.x, tx, this.camVel.x, CAM_SMOOTH_TIME, h);
+      [this.cam.y, this.camVel.y] = smoothDampAxis(this.cam.y, ty, this.camVel.y, CAM_SMOOTH_TIME, h);
+    }
   }
 
   centerOn(x: number, y: number) {
     this.cam.x = x - this.viewW / 2;
     this.cam.y = y - this.viewH / 2;
+    this.camVel.x = 0;
+    this.camVel.y = 0;
     this.clampCam();
   }
 
@@ -6761,7 +6803,12 @@ export class GameEngine {
 
   private loop = (ts: number) => {
     if (!this.running) return;
-    const dt = Math.min(0.05, (ts - this.last) / 1000);
+    // Frame pacing (Josh, 2026-11-13, camera smoothness): a
+    // hitched frame used to advance the whole world in one
+    // 50ms lurch. The step is capped at 1/30s, so a hitch
+    // reads as a breath of slow motion instead of a jump —
+    // at 60Hz and 120Hz nothing changes at all.
+    const dt = Math.min(1 / 30, (ts - this.last) / 1000);
     this.last = ts;
     // No free camera in battle (Josh, 2026-11-12): hold pan and
     // key pan only work outside the battle phase, where there

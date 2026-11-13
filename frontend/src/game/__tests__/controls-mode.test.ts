@@ -21,6 +21,7 @@ import { DEFAULT_SETTINGS, loadSettings, resolveTouchControls } from "../../lib/
 
 const settingsSrc = readFileSync(new URL("../../pages/Settings.tsx", import.meta.url), "utf8");
 const battleSrc = readFileSync(new URL("../../pages/Battlefield.tsx", import.meta.url), "utf8");
+const dockSrc = readFileSync(new URL("../../components/game/SquadDock.tsx", import.meta.url), "utf8");
 
 describe("resolveTouchControls — the player's pick wins", () => {
   it("phone forces touch even on a wide fine-pointer screen", () => {
@@ -76,5 +77,13 @@ describe("the battle wiring", () => {
   it("the briefing teaches the controls the player actually has", () => {
     expect(battleSrc).toContain("the left stick moves him, the FIRE ring shoots");
     expect(battleSrc).toContain("WASD moves him, left click shoots");
+  });
+  it("on touch the squad dock is the compact chip strip, never the right column", () => {
+    expect(battleSrc).toContain('variant={touch ? "compact" : "full"}');
+    expect(dockSrc).toContain('variant?: "full" | "compact"');
+    expect(dockSrc).toContain('data-testid="squad-dock"');
+    // The chips keep the card testids and the tap-to-select.
+    expect(dockSrc).toContain("unit-dock-card-");
+    expect(dockSrc).toContain("unit-dock-morale-");
   });
 });

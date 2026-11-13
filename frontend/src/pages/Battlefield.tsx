@@ -930,9 +930,19 @@ export default function Battlefield() {
         {showReplay && replay && <ReplayViewer replay={replay} onClose={() => setShowReplay(false)} />}
       </div>
 
-      {/* Squad command dock */}
-      <div className="border-t border-[#2E3628] bg-[#0D0F0C] short:w-40 short:shrink-0 short:border-l short:border-t-0">
+      {/* Squad command dock. On touch it stays a slim chip
+          strip along the bottom (Josh, 2026-11-13: the
+          sideways-phone right column has got to go); desktop
+          keeps the full cards and the short-screen column. */}
+      <div
+        className={
+          touch
+            ? "border-t border-[#2E3628] bg-[#0D0F0C]"
+            : "border-t border-[#2E3628] bg-[#0D0F0C] short:w-40 short:shrink-0 short:border-l short:border-t-0"
+        }
+      >
         <SquadDock
+          variant={touch ? "compact" : "full"}
           hud={
             hud ?? {
               elapsed: 0,
