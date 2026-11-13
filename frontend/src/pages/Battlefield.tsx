@@ -50,6 +50,39 @@ export default function Battlefield() {
     engineRef.current?.setFitMap(next);
   };
   const [variant, setVariant] = useState<Variant>("");
+  // Esc battle menu (Josh, 2026-11-12): the old top bar is gone;
+  // the battlefield is the whole screen and Esc (or the phone
+  // MENU button) opens the pause menu that holds the rest.
+  const [escOpen, setEscOpen] = useState(false);
+  const [escConfirm, setEscConfirm] = useState<null | "settings" | "quit">(null);
+  // Briefing leader pick: the player names his team leader; the
+  // most experienced man is the default.
+  const [leaderPick, setLeaderPick] = useState<string | null>(null);
+  useEffect(() => {
+    if (leaderPick) engineRef.current?.setLeaderPick(leaderPick);
+  }, [leaderPick, hud?.briefing]);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      if (!hud || hud.briefing || hud.state !== "active") return;
+      setEscOpen((open) => {
+        if (open) engineRef.current?.setPaused(false);
+        else engineRef.current?.setPaused(true);
+        return !open;
+      });
+      setEscConfirm(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [hud]);
+  useEffect(() => {
+    if (hud && hud.state !== "active") setEscOpen(false);
+  }, [hud]);
+  const closeEsc = (resume: boolean) => {
+    setEscOpen(false);
+    setEscConfirm(null);
+    if (resume) engineRef.current?.setPaused(false);
+  };
   const [touch] = useState(
     () => typeof window !== "undefined" && (window.matchMedia("(pointer: coarse)").matches || window.innerWidth < 1024)
   );
@@ -96,6 +129,21 @@ export default function Battlefield() {
     }
   }, [deployed, liveMission, activeSquad, state?.campaign_complete]);
   const mission = deployed?.mission ?? liveMission;
+  // The briefing default: the most experienced man deployed,
+  // same order the engine uses (rank, then level, then kills).
+  const RANK_LADDER = ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."];
+  const defaultLeaderId = (() => {
+    let best: Soldier | null = null;
+    for (const sol of deployed?.squad ?? activeSquad) {
+      if (!best) { best = sol; continue; }
+      const ra = RANK_LADDER.indexOf(sol.rank), rb = RANK_LADDER.indexOf(best.rank);
+      if (ra !== rb) { if (ra > rb) best = sol; continue; }
+      if (sol.level !== best.level) { if (sol.level > best.level) best = sol; continue; }
+      if (sol.kills !== best.kills) { if (sol.kills > best.kills) best = sol; continue; }
+    }
+    return best?.id ?? null;
+  })();
+  const effectiveLeaderId = leaderPick ?? defaultLeaderId;
 
   // The old rotate prompt was a fixed full-screen overlay (z-50) that
   // covered every control the moment a battle started in portrait, and
@@ -351,145 +399,6 @@ export default function Battlefield() {
           </Button>
         </div>
       )}
-      {/* CRT status bar — two clear rows instead of one crowded wrap:
-          row 1 is the battle status, row 2 is the controls. */}
-      <div className="border-b border-[#2E3628] bg-[#0D0F0C] font-mono text-xs short:py-1">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5">
-        <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB] short:hidden">
-          {mission.code}
-        </span>
-        <span className="text-[#E5A93C]" data-testid="battle-rp">
-          {state?.requisition ?? "—"} RP
-        </span>
-        <span className="text-[#8D9A83]" data-testid="battle-timer">
-          T+{mmss(hud?.elapsed ?? 0)}
-        </span>
-        <span className="text-[#4ECDC4]" data-testid="battle-wave">
-          WAVE {hud?.wave ?? 1}/{hud?.waves ?? 1}
-        </span>
-        <span className="text-[#E24A4A]" data-testid="battle-hostiles">
-          HOSTILES {hud?.enemiesAlive ?? "—"}
-        </span>
-        <span
-          className={hud?.radioLive ? "text-[#5EB872]" : "text-[#E24A4A]"}
-          data-testid="radio-status"
-          title={hud?.radioLive ? "Radioman alive — radio support is up" : "No radioman — radio support is down"}
-        >
-          RADIO {hud?.radioLive ? "● LIVE" : "✕ DOWN"}
-        </span>
-        <span
-          className={hud?.enemyRadioLive ? "text-[#E24A4A]" : "text-[#5EB872]"}
-          data-testid="enemy-radio-status"
-          title={hud?.enemyRadioLive ? "An enemy Funker is alive — he can call in more men" : "Enemy radio is down — no more enemy call-ins"}
-        >
-          FOE RADIO {hud?.enemyRadioLive ? "● LIVE" : "✕ DOWN"}
-        </span>
-        {hud?.paused && !hud.briefing && (
-          <span
-            className="animate-amber-pulse border border-[#E5A93C] bg-[#3A2B0E] px-2 py-0.5 font-bold tracking-[0.2em] text-[#FFD97D]"
-            data-testid="paused-banner"
-          >
-            TACTICAL PAUSE ENGAGED
-          </span>
-        )}
-        {hud?.autoBattle && !hud.briefing && (
-          <span
-            className="border border-[#E5A93C] bg-[#3A2B0E] px-2 py-0.5 font-bold tracking-[0.2em] text-[#FFD97D]"
-            data-testid="auto-battle-banner"
-          >
-            AUTO BATTLE ON — SQUAD FIGHTING ON ITS OWN
-          </span>
-        )}
-        </div>
-        <div className="flex flex-wrap items-center gap-2 border-t border-[#2E3628] px-4 py-1.5">
-        <Button
-          data-testid="auto-battle-btn"
-          variant="outline"
-          size="xs"
-          onClick={() => engineRef.current?.toggleAutoBattle()}
-          disabled={hud?.briefing || hud?.state !== "active"}
-          className={hud?.autoBattle ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]" : ""}
-          title="Auto Battle: the squad fights on its own. Tap again, or give any order, to take command."
-        >
-          {hud?.autoBattle ? "AUTO ON" : "AUTO"}
-        </Button>
-        <Button
-          data-testid="full-map-btn"
-          variant="outline"
-          size="xs"
-          onClick={toggleFullMap}
-          disabled={hud?.briefing || hud?.state !== "active"}
-          className={fullMap ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
-          title="Full map: hide the controls on the map and zoom out to the whole battlefield"
-        >
-          {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
-        </Button>
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {!touch && (
-            <div className="flex items-center gap-0.5" data-testid="formation-picker" title="Formation (F)">
-              {FORMATIONS.map((f) => (
-                <button
-                  key={f.id}
-                  data-testid={`formation-${f.id}`}
-                  onClick={() => engineRef.current?.setFormation(f.id)}
-                  className={`border px-1.5 py-0.5 text-[10px] tracking-wider transition-colors duration-150 ${
-                    (hud?.formation ?? "wedge") === f.id
-                      ? "border-[#4ECDC4] text-[#4ECDC4]"
-                      : "border-[#2E3628] text-[#8D9A83] hover:text-[#E3E7DC]"
-                  }`}
-                >
-                  {f.glyph} {f.label}
-                </button>
-              ))}
-            </div>
-          )}
-          <ReinforceMenu
-            rp={state?.requisition ?? 0}
-            left={hud?.reinforcementsLeft ?? 3}
-            disabled={!!hud?.briefing || hud?.state !== "active"}
-            pending={reinforce.isPending}
-            radioLive={hud?.radioLive ?? false}
-            commanderLevel={state?.commander_level ?? 1}
-            supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 0, smoke: 0, tank: 0 }}
-            tankUsed={hud?.tankUsed ?? false}
-            supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 }}
-            reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
-            onCall={callIn}
-            onSupport={callSupport}
-          />
-          <Button
-            data-testid="tactical-pause-btn"
-            variant="outline"
-            size="xs"
-            onClick={() => engineRef.current?.togglePause()}
-            disabled={hud?.briefing || hud?.state !== "active"}
-          >
-            {hud?.paused ? <Play size={12} className="mr-1" /> : <Pause size={12} className="mr-1" />}
-            {hud?.paused ? "RESUME" : touch ? "PAUSE" : "PAUSE (SPACE)"}
-          </Button>
-          <Button
-            data-testid="take-cover-btn"
-            variant="outline"
-            size="xs"
-            className="hidden sm:inline-flex"
-            onClick={() => engineRef.current?.takeCover()}
-            disabled={hud?.briefing || hud?.state !== "active"}
-          >
-            <Shield size={12} className="mr-1" /> COVER (C)
-          </Button>
-          <Button
-            data-testid="retreat-btn"
-            variant="destructive"
-            size="xs"
-            onClick={() => engineRef.current?.retreat()}
-            disabled={hud?.briefing || hud?.state !== "active"}
-          >
-            <Flag size={12} className="mr-1" /> RETREAT
-          </Button>
-        </div>
-        </div>
-      </div>
-
       <div className="flex min-h-0 flex-1 flex-col short:flex-row">
       {/* Battlefield */}
       <div className="scanlines relative min-h-0 flex-1 overflow-hidden bg-[#080A08]">
@@ -504,42 +413,197 @@ export default function Battlefield() {
           engineRef={engineRef}
         />
 
-        {/* Order hints */}
-        {!fullMap && touch ? (
-          <div className="pointer-events-none absolute left-2 top-2 z-10 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px] text-[#A2B29A]" data-testid="touch-hint">
-            {hud?.touchBox
-              ? "DRAG A BOX AROUND YOUR MEN"
-              : "TAP SOLDIER: SELECT · TAP GROUND/ENEMY: ORDER · DRAG: SCROLL · HOLD+DRAG: BOX"}
+        {/* The battlefield owns the screen now. What stays on it:
+            a tiny status line, the live controls in the corner
+            (orders, formation, radio, cover, pause), and on touch
+            one MENU button. Everything else lives in the Esc
+            menu. The old in-battle hints and the terrain legend
+            moved to the briefing. */}
+        {!fullMap && !hud?.briefing && (
+          <div className="pointer-events-none absolute left-2 top-2 z-10 flex flex-wrap items-center gap-x-2.5 border border-[#2E3628] bg-[#0D0F0C]/80 px-2 py-1 font-mono text-[10px]" data-testid="battle-status">
+            <span className="font-bold tracking-wider text-[#F0F5EB]">{mission.code}</span>
+            <span className="text-[#E5A93C]" data-testid="battle-rp">{state?.requisition ?? "—"} RP</span>
+            <span className="text-[#8D9A83]" data-testid="battle-timer">T+{mmss(hud?.elapsed ?? 0)}</span>
+            <span className="text-[#4ECDC4]" data-testid="battle-wave">WAVE {hud?.wave ?? 1}/{hud?.waves ?? 1}</span>
+            <span className="text-[#E24A4A]" data-testid="battle-hostiles">HOSTILES {hud?.enemiesAlive ?? "—"}</span>
+            <span className={hud?.radioLive ? "text-[#5EB872]" : "text-[#E24A4A]"} data-testid="radio-status" title={hud?.radioLive ? "Radioman alive, radio support is up" : "No radioman, radio support is down"}>
+              RADIO {hud?.radioLive ? "● LIVE" : "✕ DOWN"}
+            </span>
+            <span className={hud?.enemyRadioLive ? "text-[#E24A4A]" : "text-[#5EB872]"} data-testid="enemy-radio-status">
+              FOE {hud?.enemyRadioLive ? "● LIVE" : "✕ DOWN"}
+            </span>
+            {hud?.paused && (
+              <span className="font-bold tracking-[0.2em] text-[#FFD97D]" data-testid="paused-banner">❚❚ PAUSED</span>
+            )}
           </div>
-        ) : !fullMap ? (
-          <div className="pointer-events-none absolute bottom-2 left-3 z-10 font-mono text-[10px] tracking-[0.12em] text-[#5A664F]">
-            LMB DRAG: SELECT · RMB: MOVE / ATTACK · SHIFT+RMB: QUEUE · WASD: SCROLL · 1-5: SOLDIER · 6: ALPHA · 7: BRAVO · Q: ABILITY · C: COVER · F: FORMATION · SPACE: PAUSE
+        )}
+        {touch && !fullMap && !hud?.briefing && hud?.state === "active" && (
+          <button
+            data-testid="esc-menu-btn"
+            onClick={() => { engineRef.current?.setPaused(true); setEscOpen(true); }}
+            className="absolute right-2 top-2 z-20 border border-[#2E3628] bg-[#0D0F0C]/85 px-3 py-2 font-mono text-[11px] tracking-wider text-[#E3E7DC]"
+          >
+            ☰ MENU
+          </button>
+        )}
+        {!fullMap && !hud?.briefing && hud?.state === "active" && (
+          <div className="absolute bottom-2 right-2 z-20 flex flex-col items-end gap-1.5" data-testid="battle-controls">
+            <div className="flex items-center gap-1" data-testid="order-controls" title="Squad orders: your men follow the leader under the order given">
+              {([
+                ["attack", "ATTACK", "1"],
+                ["defend", "DEFEND", "2"],
+                ["formup", "FORM UP", "3"],
+              ] as const).map(([id, label, key]) => (
+                <button
+                  key={id}
+                  data-testid={`order-${id}`}
+                  onClick={() => engineRef.current?.setSquadOrder(id)}
+                  className={`border px-2 py-1.5 font-mono text-[10px] tracking-wider transition-colors duration-150 ${
+                    (hud?.squadOrder ?? "formup") === id
+                      ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]"
+                      : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83] hover:text-[#E3E7DC]"
+                  }`}
+                >
+                  {label} <span className="opacity-60">{key}</span>
+                </button>
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              {!touch && (
+                <div className="flex items-center gap-0.5" data-testid="formation-picker" title="Formation (F)">
+                  {FORMATIONS.map((f) => (
+                    <button
+                      key={f.id}
+                      data-testid={`formation-${f.id}`}
+                      onClick={() => engineRef.current?.setFormation(f.id)}
+                      className={`border px-1.5 py-1 font-mono text-[10px] tracking-wider transition-colors duration-150 ${
+                        (hud?.formation ?? "wedge") === f.id
+                          ? "border-[#4ECDC4] text-[#4ECDC4]"
+                          : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83] hover:text-[#E3E7DC]"
+                      }`}
+                    >
+                      {f.glyph} {f.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <ReinforceMenu
+                rp={state?.requisition ?? 0}
+                left={hud?.reinforcementsLeft ?? 3}
+                disabled={hud?.state !== "active"}
+                pending={reinforce.isPending}
+                radioLive={hud?.radioLive ?? false}
+                commanderLevel={state?.commander_level ?? 1}
+                supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 20, smoke: 0, tank: 0 }}
+                tankUsed={hud?.tankUsed ?? false}
+                supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 }}
+                reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
+                onCall={callIn}
+                onSupport={callSupport}
+              />
+              <Button
+                data-testid="take-cover-btn"
+                variant="outline"
+                size="xs"
+                onClick={() => engineRef.current?.takeCover()}
+                title="Leader takes cover (C)"
+              >
+                <Shield size={12} className="mr-1" /> COVER
+              </Button>
+              <Button
+                data-testid="tactical-pause-btn"
+                variant="outline"
+                size="xs"
+                onClick={() => engineRef.current?.togglePause()}
+              >
+                {hud?.paused ? <Play size={12} className="mr-1" /> : <Pause size={12} className="mr-1" />}
+                {hud?.paused ? "RESUME" : "PAUSE"}
+              </Button>
+            </div>
           </div>
-        ) : null}
+        )}
+        {escOpen && !hud?.briefing && (
+          <div className="absolute inset-0 z-40 flex items-center justify-center bg-[#0D0F0C]/80 p-4" data-testid="esc-menu">
+            <div className="w-full max-w-sm border border-[#2E3628] bg-[#1A1D17] p-4">
+              <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#8D9A83]">Battle menu</p>
+              <h3 className="mt-1 font-heading text-xl font-bold text-[#F0F5EB]">{mission.code} — PAUSED</h3>
+              <div className="mt-4 flex flex-col gap-2">
+                <Button data-testid="esc-resume" onClick={() => closeEsc(true)}>RESUME</Button>
+                <Button data-testid="esc-fullmap" variant="outline" onClick={() => { toggleFullMap(); closeEsc(true); }}>
+                  {fullMap ? "SHOW CONTROLS" : "FULL MAP"}
+                </Button>
+                <div className="flex items-center justify-between border border-[#2E3628] px-2 py-1.5">
+                  <span className="font-mono text-[10px] tracking-wider text-[#8D9A83]">REINFORCE / RADIO</span>
+                  <ReinforceMenu
+                    rp={state?.requisition ?? 0}
+                    left={hud?.reinforcementsLeft ?? 3}
+                    disabled={hud?.state !== "active"}
+                    pending={reinforce.isPending}
+                    radioLive={hud?.radioLive ?? false}
+                    commanderLevel={state?.commander_level ?? 1}
+                    supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 20, smoke: 0, tank: 0 }}
+                    tankUsed={hud?.tankUsed ?? false}
+                    supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 }}
+                    reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
+                    onCall={callIn}
+                    onSupport={callSupport}
+                  />
+                </div>
+                <Button
+                  data-testid="esc-retreat"
+                  variant="destructive"
+                  onClick={() => { closeEsc(false); engineRef.current?.setPaused(false); engineRef.current?.retreat(); }}
+                >
+                  <Flag size={12} className="mr-1" /> RETREAT — FIGHTING WITHDRAWAL
+                </Button>
+                {escConfirm ? (
+                  <div className="border border-[#E5A93C] bg-[#3A2B0E] p-2.5" data-testid="esc-confirm">
+                    <p className="font-mono text-[11px] leading-relaxed text-[#FFD97D]">
+                      Leave this battle? It has not been filed, so the campaign will not count it.
+                    </p>
+                    <div className="mt-2 flex gap-2">
+                      <Button size="sm" variant="destructive" data-testid="esc-confirm-leave" onClick={() => navigate(escConfirm === "settings" ? "/settings" : "/war-room")}>
+                        LEAVE
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEscConfirm(null)}>STAY</Button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Button className="flex-1" variant="outline" data-testid="esc-settings" onClick={() => setEscConfirm("settings")}>SETTINGS</Button>
+                    <Button className="flex-1" variant="outline" data-testid="esc-quit" onClick={() => setEscConfirm("quit")}>QUIT TO WAR ROOM</Button>
+                  </div>
+                )}
+                <p className="mt-1 text-center font-mono text-[10px] text-[#8D9A83]">ESC closes this menu</p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {touch && !fullMap && (!hud || hud.state === "active") && (
           <TouchControls
             engineRef={engineRef}
             paused={hud?.paused ?? false}
             disabled={!!hud?.briefing || hud?.state !== "active"}
             formation={hud?.formation ?? "wedge"}
-            touchBox={hud?.touchBox ?? false}
+            squadOrder={hud?.squadOrder ?? "formup"}
+            radioSlot={(
+              <ReinforceMenu
+                rp={state?.requisition ?? 0}
+                left={hud?.reinforcementsLeft ?? 3}
+                disabled={!!hud?.briefing || hud?.state !== "active"}
+                pending={reinforce.isPending}
+                radioLive={hud?.radioLive ?? false}
+                commanderLevel={state?.commander_level ?? 1}
+                supportCd={hud?.supportCd ?? { artillery: 0, supply: 0, recon: 0, mortar: 20, smoke: 0, tank: 0 }}
+                tankUsed={hud?.tankUsed ?? false}
+                supportCost={hud?.supportCost ?? { artillery: 30, supply: 10, recon: 10, mortar: 20, smoke: 15, tank: 60 }}
+                reinforceCost={hud?.reinforceCost ?? { rifle: 15, heavy: 25 }}
+                onCall={callIn}
+                onSupport={callSupport}
+              />
+            )}
           />
-        )}
-        {!fullMap && (
-        <div
-          data-testid="terrain-legend"
-          className="pointer-events-none absolute bottom-7 left-3 z-10 hidden gap-3 lg:flex border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-1.5 font-mono text-[10px] text-[#A2B29A]"
-        >
-          <span><span className="mr-1 inline-block h-2.5 w-2.5 rounded-full border border-[#0C1607] bg-[#3F6A28] align-middle" />HEDGEROW — blocks men &amp; bullets</span>
-          <span><span className="mr-1 inline-block h-2.5 w-3 rounded-full bg-[#5C4A30] align-middle" />GAP — walk through</span>
-          <span><span className="mr-1 inline-block h-2.5 w-2.5 bg-[#5A3A2A] align-middle" />BUILDING</span>
-          <span>✕ HEDGEHOG</span>
-          <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — LIGHT cover, breaks under fire</span>
-          <span>RUINS / WRECKS / BUILDINGS — HEAVY cover</span>
-          <span><span className="mr-1 inline-block h-2.5 w-4 bg-[#2E2114] align-middle ring-1 ring-[#6B5232]" />TRENCH — BEST cover in the game, fight from inside</span>
-          <span><span className="text-[#4ECDC4]">◆</span> IN COVER — teal light, <span className="text-[#E5A93C]">gold heavy</span>, <span className="text-[#7A5A2E]">brown trench</span></span>
-          <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span>
-        </div>
         )}
 
         {fullMap && (
@@ -569,22 +633,47 @@ export default function Battlefield() {
               <p className="mt-3 font-mono text-[13px] leading-relaxed text-[#A2B29A] short:text-[11px]">
                 {mission.brief}
               </p>
-              <div className="mt-4 grid grid-cols-2 gap-1.5">
-                {(deployed?.squad ?? activeSquad).map((s, i) => (
-                  <div
-                    key={s.id}
-                    data-testid={`briefing-soldier-${i}`}
-                    className="flex items-center justify-between gap-2 border border-[#2E3628] bg-[#22271E] px-2 py-1.5 font-mono text-[11px]"
-                  >
-                    <span className="flex min-w-0 items-center gap-2 text-[#EDEDE2]">
-                      <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={24} />
-                      <span className="truncate">
-                        {i + 1} · {s.rank} {s.name}
+              <div className="mt-4 border border-[#E5A93C]/50 bg-[#3A2B0E]/40 px-3 py-2" data-testid="leader-pick">
+                <p className="font-mono text-[10px] uppercase tracking-[0.25em] text-[#E5A93C]">Team leader — pick who you drive</p>
+                <p className="mt-1 font-mono text-[11px] leading-relaxed text-[#A2B29A]">
+                  You control the leader: WASD moves him, left click shoots, right click (or Q) uses his
+                  ability. The rest of the squad follows him under your orders: 1 ATTACK, 2 DEFEND,
+                  3 FORM UP, with F for formation. If he falls, the next most experienced man takes over.
+                </p>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-1.5">
+                {(deployed?.squad ?? activeSquad).map((s, i) => {
+                  const picked = effectiveLeaderId === s.id;
+                  return (
+                    <button
+                      key={s.id}
+                      data-testid={`briefing-soldier-${i}`}
+                      onClick={() => setLeaderPick(s.id)}
+                      className={`flex items-center justify-between gap-2 border px-2 py-1.5 text-left font-mono text-[11px] transition-colors duration-150 ${
+                        picked ? "border-[#E5A93C] bg-[#3A2B0E]" : "border-[#2E3628] bg-[#22271E] hover:border-[#E5A93C]"
+                      }`}
+                    >
+                      <span className="flex min-w-0 items-center gap-2 text-[#EDEDE2]">
+                        <Portrait seed={s.portrait_seed} type={s.type} level={s.level} size={24} />
+                        <span className="truncate">
+                          {s.rank} {s.name}
+                          <span className="block text-[10px] text-[#8D9A83]">Lv {s.level} · {s.kills} kills</span>
+                        </span>
                       </span>
-                    </span>
-                    <span className="shrink-0 text-[#E5A93C]">{UNIT_TYPES[s.type].label}</span>
-                  </div>
-                ))}
+                      <span className="shrink-0 text-right">
+                        <span className="block text-[#E5A93C]">{UNIT_TYPES[s.type].label}</span>
+                        {picked && <span className="block text-[9px] tracking-wider text-[#FFD97D]">★ LEADER</span>}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-4 grid gap-1 font-mono text-[10px] leading-relaxed text-[#8D9A83]" data-testid="briefing-legend">
+                <span><span className="mr-1 inline-block h-2.5 w-2.5 rounded-full border border-[#0C1607] bg-[#3F6A28] align-middle" />HEDGEROW — blocks men &amp; bullets, gaps walk through</span>
+                <span><span className="mr-1 inline-block h-2 w-3 rounded-full bg-[#8A7A52] align-middle" />SANDBAGS / CRATES — LIGHT cover, breaks under fire · RUINS / WRECKS / BUILDINGS — HEAVY cover</span>
+                <span><span className="mr-1 inline-block h-2.5 w-4 bg-[#2E2114] align-middle ring-1 ring-[#6B5232]" />TRENCH — BEST cover in the game, fight from inside · ✕ HEDGEHOG — slows the landing force</span>
+                <span><span className="text-[#4ECDC4]">◆</span> IN COVER — teal light, <span className="text-[#E5A93C]">gold heavy</span>, <span className="text-[#7A5A2E]">brown trench</span> · <span className="text-[#A0B4D2]">○ 2ND PLATOON (AI)</span></span>
+                <span>ESC opens the battle menu: full map, reinforcements, retreat, settings, quit. Radio support stays on the RADIO button in the corner, no menu needed mid-fight.</span>
               </div>
               </div>
               <div className="shrink-0 border-t border-[#2E3628] bg-[#1A1D17] p-3">
@@ -792,15 +881,14 @@ export default function Battlefield() {
               reinforceCost: { rifle: 15, heavy: 25 },
               enemyRadioLive: false,
               autoBattle: false,
+              leaderId: null,
+              squadOrder: "formup" as const,
               teamA: [],
               teamB: [],
             }
           }
-          onSelect={(id) => engineRef.current?.selectUnit(id)}
+          onSelect={(id) => engineRef.current?.focusUnit(id)}
           onAbility={(id) => engineRef.current?.startAim(id)}
-          onSplit={() => engineRef.current?.splitSquad()}
-          onSelectTeam={(i) => engineRef.current?.selectTeam(i)}
-          onMerge={() => engineRef.current?.mergeSquads()}
         />
       </div>
       </div>

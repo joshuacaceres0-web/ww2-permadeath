@@ -102,6 +102,7 @@ function lookOf(u: { side: "allies" | "axis"; type: UnitTypeId; enemyType: Enemy
 
 export type Variant = "beach" | "airborne" | "";
 export type Formation = "wedge" | "line" | "column" | "spread";
+export type SquadOrder = "attack" | "defend" | "formup";
 export type Reinforcement = "rifle" | "heavy";
 export const MAX_REINFORCEMENTS = 3;
 
@@ -491,6 +492,8 @@ export interface HudSnapshot {
   /** True while an enemy Funker is alive: enemy call-ins are armed. */
   enemyRadioLive: boolean;
   autoBattle: boolean;
+  leaderId: number | null;
+  squadOrder: SquadOrder;
   // Fireteams: living player-squad ids in Alpha / Bravo, empty when
   // the squad has not been split. The UI shows SPLIT / ALPHA / BRAVO
   // / MERGE from these.
@@ -962,6 +965,18 @@ export class GameEngine {
   // the same chase / cover / fire logic as the NPC allies, and manual
   // orders are off. Any manual order takes command back instantly.
   private autoBattle = false;
+  // Team leader system (Josh, 2026-11-12): the player drives ONE
+  // leader directly; every other deployed squad man is an AI
+  // follower anchored to him. AUTO survives only as the internal
+  // test driver, never as a player mode.
+  private leaderId: number | null = null;
+  private squadOrder: SquadOrder = "formup";
+  private manualShot: { x: number; y: number; until: number } | null = null;
+  // Twin-stick touch (Josh, 2026-11-12): the left stick drives
+  // the leader like WASD, the right stick aims and fires him.
+  private touchMove: { x: number; y: number } | null = null;
+  private touchAimVec: { x: number; y: number } | null = null;
+  private touchAimTarget = false;
   private autoAbilityT = 0;
   // Battle replay: one snapshot every 0.5s, kept in memory only, so
   // the debrief screen can play the battle back after it ends.
@@ -1042,7 +1057,7 @@ export class GameEngine {
 
   // ---------------- lifecycle ----------------
 
-  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0, variant: Variant = "", commanderLevel = 1) {
+  setup(mission: Mission, squad: SquadInput[], commanderBonus = 0, variant: Variant = "", commanderLevel = 1, leaderSoldierId = "") {
     this.variant = variant;
     this.mission = mission;
     this.units = [];
@@ -1151,6 +1166,15 @@ export class GameEngine {
     this.autoBattle = false;
     this.convoyContact = false;
     this.spawnAllies(squad, rng, commanderBonus);
+    // Team leader: the briefing pick when given, else the most
+    // experienced man deployed. Selection locks onto him.
+    this.squadOrder = "formup";
+    this.manualShot = null;
+    const roster = this.units.filter((u) => u.side === "allies" && !u.npc && u.soldierId);
+    const picked = leaderSoldierId ? roster.find((u) => u.soldierId === leaderSoldierId) : undefined;
+    const lead = picked ?? this.mostExperienced(roster);
+    this.leaderId = lead ? lead.id : null;
+    this.selected = lead ? [lead.id] : [];
     // 2nd Platoon: weak allies, so they support the fight but can
     // never clear a wave on their own — in the Emergent play test
     // Wave 1 was cleared entirely by them while the player's squad stood
@@ -1408,6 +1432,159 @@ export class GameEngine {
 
   isAutoBattle() {
     return this.autoBattle;
+  }
+
+  /** Rank seniority on the backend ladder: higher is more senior. */
+  private rankSeniority(u: Unit): number {
+    const ladder = ["Pvt.", "Pfc.", "Cpl.", "Sgt.", "S/Sgt.", "T/Sgt.", "1st Sgt."];
+    const i = ladder.indexOf(u.rank);
+    return i >= 0 ? i : 0;
+  }
+
+  /** Experience order (Josh's succession rule): rank first, then
+   * level, then kills, roster order as the final tiebreak. */
+  mostExperienced(men: Unit[]): Unit | null {
+    let best: Unit | null = null;
+    for (const u of men) {
+      if (!best) { best = u; continue; }
+      const ra = this.rankSeniority(u), rb = this.rankSeniority(best);
+      if (ra !== rb) { if (ra > rb) best = u; continue; }
+      if (u.level !== best.level) { if (u.level > best.level) best = u; continue; }
+      if (u.kills !== best.kills) { if (u.kills > best.kills) best = u; continue; }
+    }
+    return best;
+  }
+
+  leaderUnit(): Unit | null {
+    if (this.leaderId === null) return null;
+    const u = this.unitById(this.leaderId);
+    return u && u.alive ? u : null;
+  }
+
+  /** A deployed squad man who follows the leader: roster man,
+   * alive, not the leader himself, not a vehicle. */
+  isFollower(u: Unit): boolean {
+    return u.side === "allies" && !u.npc && !u.vehicle && u.soldierId !== null && u.id !== this.leaderId;
+  }
+
+  /** Briefing pick: name the team leader before the assault.
+   * Battle-phase changes are not allowed; succession handles
+   * a leader falling. */
+  setLeaderPick(soldierId: string) {
+    if (this.phase !== "briefing") return;
+    const u = this.units.find((m) => m.side === "allies" && !m.npc && m.soldierId === soldierId);
+    if (!u) return;
+    this.leaderId = u.id;
+    this.selected = [u.id];
+    this.dirty = true;
+  }
+
+  /** Camera to a unit (SquadDock card click). */
+  focusUnit(id: number) {
+    const u = this.unitById(id);
+    if (u) this.centerOn(u.x, u.y);
+  }
+
+  setSquadOrder(o: SquadOrder) {
+    if (this.phase !== "battle" || this.squadOrder === o) return;
+    this.squadOrder = o;
+    for (const u of this.units) if (this.isFollower(u)) u.chase = [];
+    this.pushLog(o === "attack" ? "Squad order: ATTACK." : o === "defend" ? "Squad order: DEFEND." : "Squad order: FORM UP.", "info");
+    this.dirty = true;
+  }
+
+  getSquadOrder(): SquadOrder {
+    return this.squadOrder;
+  }
+
+  /** Left click in battle: the leader fires. On an enemy, that
+   * enemy becomes his target until it dies; on open ground he
+   * fires at the point for a short window. Range and LOS come
+   * from the normal fire rules: he never chases a click. */
+  leaderShootAt(x: number, y: number) {
+    if (this.phase !== "battle" || this.autoBattle) return;
+    const L = this.leaderUnit();
+    if (!L || L.broken) return;
+    let foe: Unit | null = null;
+    let bestD = 30;
+    for (const u of this.units) {
+      if (u.side !== "axis" || !u.alive) continue;
+      const d = dist(x, y, u.x, u.y);
+      if (d < bestD) { foe = u; bestD = d; }
+    }
+    if (foe) {
+      L.attackId = foe.id;
+      this.manualShot = null;
+    } else {
+      L.attackId = null;
+      this.manualShot = { x, y, until: this.elapsed + 1.5 };
+    }
+    this.dirty = true;
+  }
+
+  /** Right click in battle: the leader uses his class ability,
+   * aimed abilities landing at the clicked point, exactly like
+   * pressing Q and clicking there in one motion. */
+  leaderAbilityAt(x: number, y: number) {
+    if (this.phase !== "battle") return;
+    const L = this.leaderUnit();
+    if (!L) return;
+    this.startAim(L.id);
+    if (this.aimUnitId === L.id) {
+      this.aimUnitId = null;
+      this.castGround(L, x, y);
+      this.dirty = true;
+    }
+  }
+
+  /** Where a follower belongs: his formation slot around the
+   * leader, slots handed out in roster order. */
+  private followerSlot(u: Unit, leader: Unit): { x: number; y: number } {
+    const followers = this.units.filter((m) => this.isFollower(m) && m.alive);
+    const idx = Math.max(0, followers.findIndex((m) => m.id === u.id));
+    const off = this.formationSlot(idx, Math.max(1, followers.length), leader.facing);
+    return {
+      x: Math.max(12, Math.min(MAP_W - 12, leader.x + off.x)),
+      y: Math.max(12, Math.min(MAP_H - 12, leader.y + off.y)),
+    };
+  }
+
+  /** Follower anchoring inside the AI branch. Returns true or
+   * false when the anchor decides this tick (move to the slot,
+   * or hold at it), or null to run the normal prey logic. A
+   * medic chasing a wounded man of his own side is never
+   * anchored away from the healing. */
+  private followerMove(u: Unit, prey: Unit | null, dt: number): boolean | null {
+    // The stalemate hunt is a squad-wide advance by design: the
+    // anchor stands down while it runs, or it would recreate
+    // the soft-lock the breaker exists to break.
+    if (this.stalemateActive) return null;
+    const leader = this.leaderUnit();
+    if (!leader || leader.id === u.id) return null;
+    // A medic may leave his post for a wounded man of the
+    // squad — but only near the leader. Chasing wounded men
+    // across the map strands him from the men he covers.
+    if (this.isMedic(u) && prey && prey.side === u.side && dist(prey.x, prey.y, leader.x, leader.y) <= 160) return null;
+    const slot = this.followerSlot(u, leader);
+    const dSlot = dist(u.x, u.y, slot.x, slot.y);
+    const dLeader = dist(u.x, u.y, leader.x, leader.y);
+    if (this.squadOrder === "formup") {
+      if (dSlot > 30) return this.chaseTo(u, slot.x, slot.y, dt);
+      u.chase = [];
+      return false;
+    }
+    if (this.squadOrder === "defend") {
+      const preyClose = prey
+        ? prey.side === u.side || dist(prey.x, prey.y, leader.x, leader.y) <= 180
+        : false;
+      if (preyClose) return null;
+      if (dSlot > 40) return this.chaseTo(u, slot.x, slot.y, dt);
+      u.chase = [];
+      return false;
+    }
+    // attack: free to engage, but leashed to the leader
+    if (dLeader > 260) return this.chaseTo(u, slot.x, slot.y, dt);
+    return null;
   }
 
   /** Any manual order takes command back from Auto Battle instantly. */
@@ -1976,6 +2153,22 @@ export class GameEngine {
     });
   }
 
+  /** Twin-stick inputs from the touch overlay. A null vector
+   * means that thumb is off the stick. */
+  setTouchMove(v: { x: number; y: number } | null) {
+    this.touchMove = v && (Math.abs(v.x) > 0.22 || Math.abs(v.y) > 0.22) ? v : null;
+  }
+
+  setTouchAim(v: { x: number; y: number } | null) {
+    this.touchAimVec = v && (Math.abs(v.x) > 0.22 || Math.abs(v.y) > 0.22) ? v : null;
+    if (!this.touchAimVec && this.touchAimTarget) {
+      const L = this.leaderUnit();
+      if (L) L.attackId = null;
+      this.touchAimTarget = false;
+      this.manualShot = null;
+    }
+  }
+
   /** On-screen D-pad: hold to scroll (-1..1 per axis). */
   setHoldPan(x: number, y: number) {
     this.holdPan = { x, y };
@@ -2120,6 +2313,10 @@ export class GameEngine {
       this.selectAll();
       return;
     }
+    if (this.phase === "battle" && (k === "1" || k === "2" || k === "3")) {
+      this.setSquadOrder(k === "1" ? "attack" : k === "2" ? "defend" : "formup");
+      return;
+    }
     if (k >= "1" && k <= "8") {
       // With the squad split, 6 = Alpha and 7 = Bravo, so a team can
       // be picked without tapping the dock. Without a split, 6-8
@@ -2190,6 +2387,12 @@ export class GameEngine {
       return;
     }
     if (e.button === 2) {
+      // Battle: right click is the leader's ability at that
+      // point. Everywhere else it stays the classic move order.
+      if (this.phase === "battle" && !this.autoBattle) {
+        this.leaderAbilityAt(p.x, p.y);
+        return;
+      }
       this.issueOrder(p.x, p.y, e.shiftKey);
       return;
     }
@@ -2198,6 +2401,12 @@ export class GameEngine {
       this.aimUnitId = null;
       if (unit) this.castGround(unit, p.x, p.y);
       this.dirty = true;
+      return;
+    }
+    if (this.phase === "battle" && !this.autoBattle && e.pointerType !== "touch") {
+      // Battle: left click is the leader's trigger. No marquee,
+      // no per-man selection: the squad is the leader's now.
+      this.leaderShootAt(p.x, p.y);
       return;
     }
     this.dragging = true;
@@ -2244,6 +2453,12 @@ export class GameEngine {
       if (tp.moved) return;
       // Tap: on one of my men -> select him; anywhere else with men selected -> order.
       const p = this.toMap(e.clientX, e.clientY);
+      if (this.phase === "battle" && !this.autoBattle) {
+        // Tap to shoot stays as the sticks' backup.
+        this.leaderShootAt(p.x, p.y);
+        this.dirty = true;
+        return;
+      }
       const mine = this.units.find((u) => u.side === "allies" && u.alive && !u.npc && dist(p.x, p.y, u.x, u.y) < 26);
       if (mine) this.selected = this.selected.includes(mine.id) && this.selected.length === 1 ? [] : [mine.id];
       else if (this.selected.length && this.phase === "battle") this.issueOrder(p.x, p.y, false);
@@ -3207,6 +3422,86 @@ export class GameEngine {
       }
     }
 
+    // Team leader succession: the leader is dead and the battle
+    // is live, the next most experienced man has the squad.
+    if (this.phase === "battle" && !this.retreating && this.leaderId !== null && !this.leaderUnit()) {
+      const next = this.mostExperienced(this.units.filter((u) => u.side === "allies" && !u.npc && u.soldierId !== null && u.alive));
+      if (next) {
+        this.leaderId = next.id;
+        this.selected = [next.id];
+        this.manualShot = null;
+        this.pushLog(`${next.name} has the squad now.`, "info");
+        this.dirty = true;
+      }
+    }
+
+    // WASD drives the leader. He moves where the player walks
+    // him; his men follow on their own logic. A broken leader
+    // runs on morale's rules, not the player's keys.
+    if (this.phase === "battle" && !this.autoBattle && !this.paused) {
+      const L = this.leaderUnit();
+      if (L && !L.broken && !L.fled) {
+        const k = this.keys;
+        let dx = (k.has("d") ? 1 : 0) - (k.has("a") ? 1 : 0);
+        let dy = (k.has("s") ? 1 : 0) - (k.has("w") ? 1 : 0);
+        if (dx === 0 && dy === 0 && this.touchMove) {
+          dx = this.touchMove.x;
+          dy = this.touchMove.y;
+        }
+        if (dx !== 0 || dy !== 0) {
+          const len = Math.hypot(dx, dy) || 1;
+          L.orders = [];
+          L.chase = [];
+          this.moveToward(L, L.x + (dx / len) * 56, L.y + (dy / len) * 56, dt);
+          // Keep the fight on screen: when the leader walks out
+          // of the middle of the view, the camera follows him.
+          const sx = (L.x - this.cam.x) * this.view.s;
+          const sy = (L.y - this.cam.y) * this.view.s;
+          const vw = this.canvas.clientWidth || 960;
+          const vh = this.canvas.clientHeight || 540;
+          if (sx < vw * 0.18 || sx > vw * 0.82 || sy < vh * 0.18 || sy > vh * 0.82) this.centerOn(L.x, L.y);
+        }
+      }
+    }
+
+    // The shoot stick: pushed in a direction, the leader fires
+    // that way. An enemy near the aim line (within range and
+    // sight) snaps as his target; otherwise he fires toward the
+    // aim point. Release stops the fire (setTouchAim clears it).
+    if (this.phase === "battle" && !this.autoBattle && !this.paused && this.touchAimVec) {
+      const L = this.leaderUnit();
+      if (L && !L.broken && !L.fled) {
+        const ang = Math.atan2(this.touchAimVec.y, this.touchAimVec.x);
+        L.facing = ang;
+        let best: Unit | null = null;
+        let bestScore = Infinity;
+        for (const e of this.units) {
+          if (e.side !== "axis" || !e.alive) continue;
+          const d = dist(L.x, L.y, e.x, e.y);
+          if (d > L.range) continue;
+          let da = Math.atan2(e.y - L.y, e.x - L.x) - ang;
+          while (da > Math.PI) da -= Math.PI * 2;
+          while (da < -Math.PI) da += Math.PI * 2;
+          if (Math.abs(da) > 0.55) continue;
+          if (!this.los(L, e)) continue;
+          const score = Math.abs(da) * 300 + d;
+          if (score < bestScore) { bestScore = score; best = e; }
+        }
+        if (best) {
+          L.attackId = best.id;
+          this.touchAimTarget = true;
+          this.manualShot = null;
+        } else {
+          if (this.touchAimTarget) { L.attackId = null; this.touchAimTarget = false; }
+          this.manualShot = {
+            x: L.x + Math.cos(ang) * L.range * 0.85,
+            y: L.y + Math.sin(ang) * L.range * 0.85,
+            until: this.elapsed + 0.3,
+          };
+        }
+      }
+    }
+
     // Units.
     for (const u of this.units) {
       if (!u.alive) continue;
@@ -3270,7 +3565,7 @@ export class GameEngine {
       let target = this.unitById(u.targetId);
       if (target && !this.los(u, target)) target = null;
       if (!target || !target.alive) {
-        target = this.autoTarget(u);
+        target = u.id === this.leaderId && !this.autoBattle ? null : this.autoTarget(u);
         u.targetId = target ? target.id : null;
         // Response time: a fresh target costs a beat to acquire — veterans react faster.
         if (target) u.cooldown = Math.max(u.cooldown, u.reaction);
@@ -3398,7 +3693,7 @@ export class GameEngine {
           moving = true;
         }
         u.chase = [];
-      } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc)) && !u.isStatic && u.enemyType !== "mortar") {
+      } else if ((u.side === "axis" || u.npc || (this.autoBattle && u.side === "allies" && !u.npc) || this.isFollower(u)) && !u.isStatic && u.enemyType !== "mortar") {
         // Auto Battle core: a player squad man with AUTO on fights the
         // same way as an NPC ally — chase the nearest enemy when out of
         // range or without line of sight, else hold and fire, seeking
@@ -3411,7 +3706,17 @@ export class GameEngine {
         const prey = this.isMedic(u)
           ? (this.worstHurtAlly(u, 400) ?? this.nearestAlly(u))
           : this.nearestAlly(u);
-        if (prey) {
+        // Followers answer to the leader before the prey: the
+        // squad order and the anchor can overrule the chase.
+        let skipPrey = false;
+        if (!this.autoBattle && this.isFollower(u)) {
+          const fm = this.followerMove(u, prey, dt);
+          if (fm !== null) {
+            skipPrey = true;
+            moving = fm;
+          }
+        }
+        if (prey && !skipPrey) {
           const pd = dist(u.x, u.y, prey.x, prey.y);
           // Camp and defend: an axis unit holds its ground until it
           // spots a player unit — within vision and with line of
@@ -3472,7 +3777,7 @@ export class GameEngine {
             // covers so they never arrived. Cover-seeking now has
             // exactly one trigger, the pinned/idle branch below.
           }
-        } else {
+        } else if (!skipPrey) {
           // No prey: hold position, and drop any stale chase path.
           u.chase = [];
         }
@@ -3480,9 +3785,9 @@ export class GameEngine {
         // the next wave. The old push-east made 2nd Platoon meet Wave 1
         // in the middle and clear it alone while the player's squad
         // stood idle at the west edge.
-      } else if (u.side === "allies" && attackOrder && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
+      } else if (u.side === "allies" && attackOrder && u.id !== this.leaderId && (d > u.range * 0.92 || !this.los(u, attackOrder))) {
         moving = this.chaseTo(u, attackOrder.x, attackOrder.y, dt);
-      } else if (u.side === "allies" && attackOrder) {
+      } else if (u.side === "allies" && attackOrder && u.id !== this.leaderId) {
         // In range with line of sight: firing, not chasing — clear the
         // stale chase path (same bug as the axis branch above).
         u.chase = [];
@@ -3686,7 +3991,12 @@ export class GameEngine {
         const idle = u.orders.length === 0 && u.chase.length === 0 && !u.attackId && (!focus || d > u.range || !this.los(u, focus));
         const playerOrdered = u.side === "allies" && !u.npc && u.attackId !== null;
         if ((underFire && !playerOrdered) || (idle && u.side !== "axis") || (idle && u.side === "axis" && !this.nearestAlly(u))) {
-          if (this.seekCover(u, underFire ? 220 : 280)) u.coverSeekT = 5;
+          // A follower seeks cover at his post, not wherever the
+          // hops take him: his slot is usually open ground, so an
+          // unrestricted 280 seek every few seconds ratchets him
+          // away from the leader. Pinned, he dives like anyone.
+          const radius = this.isFollower(u) ? (underFire ? 220 : 90) : underFire ? 220 : 280;
+          if (this.seekCover(u, radius)) u.coverSeekT = 5;
           else u.coverSeekT = 2;
         }
       }
@@ -3748,6 +4058,20 @@ export class GameEngine {
         const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
         u.cooldown = interval;
         this.fireAt(u, focus, moving);
+      } else if (
+        u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && this.manualShot &&
+        this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken
+      ) {
+        // The player clicked open ground: the leader fires at
+        // the point itself while the click is fresh. No target,
+        // no auto-acquire; the rounds fly and hit what is there.
+        const ms = this.manualShot;
+        if (dist(u.x, u.y, ms.x, ms.y) <= u.range) {
+          const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
+          u.cooldown = interval;
+          u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
+          this.spawnBullet(u, ms.x, ms.y, u.spread * (u.pinned ? 1.5 : 1), u.dmg * u.dmgMult, u.type === "mg" ? 20 : 14);
+        }
       }
 
       // Medic passive aura — both sides. A medic mends his own
@@ -4893,6 +5217,8 @@ export class GameEngine {
       },
       enemyRadioLive: this.enemyRadioLive(),
       autoBattle: this.autoBattle,
+      leaderId: this.leaderId,
+      squadOrder: this.squadOrder,
     });
   }
 
@@ -4909,8 +5235,12 @@ export class GameEngine {
     }
     if (this.keys.size) {
       const k = this.keys;
-      const vx = (k.has("d") || k.has("arrowright") ? 1 : 0) - (k.has("a") || k.has("arrowleft") ? 1 : 0);
-      const vy = (k.has("s") || k.has("arrowdown") ? 1 : 0) - (k.has("w") || k.has("arrowup") ? 1 : 0);
+      // In a manual battle WASD drives the leader, so only the
+      // arrow keys pan the camera there. Everywhere else WASD
+      // pans as it always did.
+      const wasdPans = !(this.phase === "battle" && !this.autoBattle);
+      const vx = ((wasdPans && k.has("d")) || k.has("arrowright") ? 1 : 0) - ((wasdPans && k.has("a")) || k.has("arrowleft") ? 1 : 0);
+      const vy = ((wasdPans && k.has("s")) || k.has("arrowdown") ? 1 : 0) - ((wasdPans && k.has("w")) || k.has("arrowup") ? 1 : 0);
       this.cam.x += vx * PAN_SPEED * dt;
       this.cam.y += vy * PAN_SPEED * dt;
       this.clampCam();

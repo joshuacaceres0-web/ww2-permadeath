@@ -1,25 +1,13 @@
-// On-screen controls for touch devices: D-pad scroll (hold), selection box, formations,
-// and big buttons for pause / select all / ability / take cover.
-import {
-  BoxSelect,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  ChevronUp,
-  Pause,
-  Play,
-  Shield,
-  Users,
-  Zap,
-} from "lucide-react";
-import type { Formation, GameEngine } from "@/game/engine";
+import { useRef, useState, type ReactNode, type RefObject } from "react";
+import type { GameEngine, Formation, SquadOrder } from "@/game/engine";
 
 interface Props {
-  engineRef: { current: GameEngine | null };
+  engineRef: RefObject<GameEngine | null>;
   paused: boolean;
   disabled: boolean;
   formation: Formation;
-  touchBox: boolean;
+  squadOrder: SquadOrder;
+  radioSlot?: ReactNode;
 }
 
 export const FORMATIONS: Array<{ id: Formation; label: string; glyph: string }> = [
@@ -29,97 +17,156 @@ export const FORMATIONS: Array<{ id: Formation; label: string; glyph: string }> 
   { id: "spread", label: "SPREAD", glyph: "⁘" },
 ];
 
-function PadButton({ dir, x, y, children }: { dir: string; x: number; y: number; children: React.ReactNode }) {
+const ORDERS: Array<{ id: SquadOrder; label: string }> = [
+  { id: "attack", label: "ATTACK" },
+  { id: "defend", label: "DEFEND" },
+  { id: "formup", label: "FORM UP" },
+];
+
+/** One virtual stick: drag the knob, the vector (clamped to the
+ * base radius) streams to the engine; release zeroes it. */
+function Stick({
+  label,
+  accent,
+  onVector,
+}: {
+  label: string;
+  accent: string;
+  onVector: (v: { x: number; y: number } | null) => void;
+}) {
+  const baseRef = useRef<HTMLDivElement | null>(null);
+  const [knob, setKnob] = useState<{ x: number; y: number } | null>(null);
+  const R = 44;
+
+  const vectorFrom = (clientX: number, clientY: number) => {
+    const el = baseRef.current;
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    let dx = clientX - (r.left + r.width / 2);
+    let dy = clientY - (r.top + r.height / 2);
+    const d = Math.hypot(dx, dy);
+    if (d > R) {
+      dx = (dx / d) * R;
+      dy = (dy / d) * R;
+    }
+    return { x: dx, y: dy };
+  };
+
   return (
-    <button
-      data-testid={`touch-pan-${dir}`}
-      aria-label={`Scroll ${dir}`}
-      className="pad-btn flex h-11 w-11 items-center justify-center border border-[#2E3628] bg-[#1A1D17]/90 text-[#E3E7DC] active:bg-[#3A2B0E] short:h-10 short:w-10"
-      data-x={x}
-      data-y={y}
+    <div
+      ref={baseRef}
+      className="pointer-events-auto relative h-32 w-32 shrink-0 touch-none rounded-full border bg-[#0D0F0C]/60"
+      style={{ borderColor: accent }}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const v = vectorFrom(e.clientX, e.clientY);
+        if (v) {
+          setKnob(v);
+          onVector({ x: v.x / R, y: v.y / R });
+        }
+      }}
+      onPointerMove={(e) => {
+        if (!knob) return;
+        const v = vectorFrom(e.clientX, e.clientY);
+        if (v) {
+          setKnob(v);
+          onVector({ x: v.x / R, y: v.y / R });
+        }
+      }}
+      onPointerUp={() => {
+        setKnob(null);
+        onVector(null);
+      }}
+      onPointerCancel={() => {
+        setKnob(null);
+        onVector(null);
+      }}
     >
-      {children}
-    </button>
+      <div
+        className="absolute h-14 w-14 rounded-full border bg-[#1A1D17]/90"
+        style={{
+          borderColor: accent,
+          left: `calc(50% - 28px + ${knob?.x ?? 0}px)`,
+          top: `calc(50% - 28px + ${knob?.y ?? 0}px)`,
+        }}
+      />
+      <span className="pointer-events-none absolute inset-x-0 -bottom-5 text-center font-mono text-[9px] tracking-[0.2em] text-[#8D9A83]">
+        {label}
+      </span>
+    </div>
   );
 }
 
-export default function TouchControls({ engineRef, paused, disabled, formation, touchBox }: Props) {
-  const hold = (e: React.PointerEvent) => {
-    const t = (e.target as HTMLElement).closest(".pad-btn") as HTMLElement | null;
-    if (!t) return;
-    e.preventDefault();
-    try {
-      (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    } catch {
-      /* pointer already gone — holding still works via pointerleave/up */
-    }
-    engineRef.current?.setHoldPan(Number(t.dataset.x), Number(t.dataset.y));
-  };
-  const release = () => engineRef.current?.setHoldPan(0, 0);
-
-  const big =
-    "flex h-12 min-w-12 flex-col items-center justify-center gap-0.5 border px-2 font-mono text-[9px] tracking-wider transition-colors duration-150 disabled:opacity-40 short:h-11";
-
+/** Twin-stick phone controls for the leader system (Josh,
+ * 2026-11-12): left stick moves the leader, right stick aims
+ * and fires. Ability, orders, formation, cover and the radio
+ * sit at the edges; the middle of the screen stays clear. The
+ * MENU button lives in Battlefield (top right). No AUTO: the
+ * mode is gone. */
+export default function TouchControls({ engineRef, disabled, formation, squadOrder, radioSlot }: Props) {
+  if (disabled) return null;
+  const eng = () => engineRef.current;
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex items-end justify-between p-2" data-testid="touch-controls">
-      <div
-        className="pointer-events-auto grid grid-cols-3 gap-1 touch-none"
-        onPointerDown={hold}
-        onPointerUp={release}
-        onPointerCancel={release}
-        onPointerLeave={release}
-      >
-        <span />
-        <PadButton dir="up" x={0} y={-1}><ChevronUp size={18} /></PadButton>
-        <span />
-        <PadButton dir="left" x={-1} y={0}><ChevronLeft size={18} /></PadButton>
-        <span className="flex items-center justify-center font-mono text-[8px] text-[#5A664F]">MAP</span>
-        <PadButton dir="right" x={1} y={0}><ChevronRight size={18} /></PadButton>
-        <span />
-        <PadButton dir="down" x={0} y={1}><ChevronDown size={18} /></PadButton>
-        <span />
+    <div className="pointer-events-none absolute inset-0 z-20" data-testid="touch-controls">
+      {/* Top-left working row: radio entry, formation cycle, cover */}
+      <div className="absolute left-2 top-10 flex items-center gap-1.5">
+        {radioSlot}
+        <button
+          data-testid="touch-formation-btn"
+          className="pointer-events-auto border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-2 font-mono text-[10px] tracking-wider text-[#E3E7DC]"
+          onClick={() => {
+            const order: Formation[] = ["wedge", "line", "column", "spread"];
+            eng()?.setFormation(order[(order.indexOf(formation) + 1) % order.length]);
+          }}
+        >
+          {FORMATIONS.find((f) => f.id === formation)?.glyph} {formation.toUpperCase()}
+        </button>
+        <button
+          data-testid="touch-cover-btn"
+          className="pointer-events-auto border border-[#2E3628] bg-[#0D0F0C]/85 px-2.5 py-2 font-mono text-[10px] tracking-wider text-[#E3E7DC]"
+          onClick={() => eng()?.takeCover()}
+        >
+          COVER
+        </button>
       </div>
-      <div className="pointer-events-auto flex flex-col items-end gap-1.5">
-        <div className="flex gap-1" data-testid="touch-formations">
-          {FORMATIONS.map((f) => (
-            <button
-              key={f.id}
-              data-testid={`touch-formation-${f.id}`}
-              disabled={disabled}
-              onClick={() => engineRef.current?.setFormation(f.id)}
-              className={`flex h-9 min-w-11 flex-col items-center justify-center border px-1.5 font-mono text-[8px] tracking-wider transition-colors duration-150 disabled:opacity-40 ${
-                formation === f.id
-                  ? "border-[#4ECDC4] bg-[#12302E]/95 text-[#4ECDC4]"
-                  : "border-[#2E3628] bg-[#1A1D17]/90 text-[#A2B29A]"
-              }`}
-            >
-              <span className="text-[11px] leading-none">{f.glyph}</span>
-              {f.label}
-            </button>
-          ))}
-        </div>
-        <div className="flex gap-1.5">
+
+      {/* Orders along the bottom middle, between the sticks */}
+      <div className="absolute inset-x-0 bottom-3 flex items-end justify-center gap-1.5 pb-6" data-testid="touch-orders">
+        {ORDERS.map((o) => (
           <button
-            data-testid="touch-box-select"
-            disabled={disabled}
-            onClick={() => engineRef.current?.setTouchBox(!touchBox)}
-            className={`${big} ${touchBox ? "border-[#4ECDC4] bg-[#12302E]/95 text-[#4ECDC4]" : "border-[#2E3628] bg-[#1A1D17]/90 text-[#E3E7DC]"}`}
+            key={o.id}
+            data-testid={`touch-order-${o.id}`}
+            onClick={() => eng()?.setSquadOrder(o.id)}
+            className={`pointer-events-auto border px-3 py-2.5 font-mono text-[11px] tracking-wider ${
+              squadOrder === o.id
+                ? "border-[#E5A93C] bg-[#3A2B0E] text-[#FFD97D]"
+                : "border-[#2E3628] bg-[#0D0F0C]/85 text-[#8D9A83]"
+            }`}
           >
-            <BoxSelect size={16} /> {touchBox ? "DRAG…" : "BOX"}
+            {o.label}
           </button>
-          <button data-testid="touch-select-all" disabled={disabled} onClick={() => engineRef.current?.selectAll()} className={`${big} border-[#2E3628] bg-[#1A1D17]/90 text-[#4ECDC4]`}>
-            <Users size={16} /> ALL
-          </button>
-          <button data-testid="touch-cover" disabled={disabled} onClick={() => engineRef.current?.takeCover()} className={`${big} border-[#2E3628] bg-[#1A1D17]/90 text-[#E3E7DC]`}>
-            <Shield size={16} /> COVER
-          </button>
-          <button data-testid="touch-ability" disabled={disabled} onClick={() => engineRef.current?.abilitySelected()} className={`${big} border-[#5C4A1E] bg-[#1A1D17]/90 text-[#E5A93C]`}>
-            <Zap size={16} /> ABILITY
-          </button>
-          <button data-testid="touch-pause" disabled={disabled} onClick={() => engineRef.current?.togglePause()} className={`${big} border-[#E5A93C] bg-[#3A2B0E]/90 text-[#FFD97D]`}>
-            {paused ? <Play size={16} /> : <Pause size={16} />} {paused ? "GO" : "PAUSE"}
-          </button>
-        </div>
+        ))}
+      </div>
+
+      {/* Ability: the big thumb button above the shoot stick */}
+      <button
+        data-testid="touch-ability-btn"
+        className="pointer-events-auto absolute bottom-44 right-5 flex h-16 w-16 items-center justify-center rounded-full border border-[#E5A93C] bg-[#3A2B0E]/85 font-mono text-[10px] font-bold tracking-wider text-[#FFD97D]"
+        onClick={() => {
+          const e = eng();
+          const lead = e?.leaderUnit();
+          if (e && lead) e.startAim(lead.id);
+        }}
+      >
+        ABILITY
+      </button>
+
+      {/* The sticks */}
+      <div className="absolute bottom-5 left-4">
+        <Stick label="MOVE" accent="#4ECDC4" onVector={(v) => eng()?.setTouchMove(v)} />
+      </div>
+      <div className="absolute bottom-5 right-4">
+        <Stick label="FIRE" accent="#E24A4A" onVector={(v) => eng()?.setTouchAim(v)} />
       </div>
     </div>
   );

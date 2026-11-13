@@ -6,9 +6,9 @@ interface Props {
   hud: HudSnapshot;
   onSelect: (id: number) => void;
   onAbility: (id: number) => void;
-  onSplit: () => void;
-  onSelectTeam: (i: 0 | 1) => void;
-  onMerge: () => void;
+  onSplit?: () => void;
+  onSelectTeam?: (i: 0 | 1) => void;
+  onMerge?: () => void;
 }
 
 function UnitCard({
@@ -16,6 +16,7 @@ function UnitCard({
   index,
   selected,
   briefing,
+  isLeader,
   onSelect,
   onAbility,
 }: {
@@ -23,6 +24,7 @@ function UnitCard({
   index: number;
   selected: boolean;
   briefing: boolean;
+  isLeader: boolean;
   onSelect: (id: number) => void;
   onAbility: (id: number) => void;
 }) {
@@ -44,6 +46,11 @@ function UnitCard({
       <div className="flex items-baseline justify-between gap-2">
         <span className="truncate font-mono text-[13px] font-semibold text-[#EDEDE2]">
           {index + 1} · {unit.name.split(" ").slice(-1)[0].toUpperCase()}
+          {isLeader && (
+            <span className="ml-1.5 border border-[#E5A93C] px-1 align-middle text-[9px] tracking-wider text-[#E5A93C]" title="Team leader: you drive this man. If he falls, the next most experienced man takes over.">
+              ★ LEADER
+            </span>
+          )}
         </span>
         <span className="flex shrink-0 items-center gap-1 whitespace-nowrap font-mono text-[10px] tracking-[0.1em] text-[#E5A93C]">
           {unit.type === "radioman" && (
@@ -80,28 +87,37 @@ function UnitCard({
         </span>
       </div>
       <div className="mt-1 flex items-center gap-2">
-        <Button
-          data-testid={`ability-btn-${index}`}
-          variant="outline"
-          size="xs"
-          disabled={!unit.alive || !abilityReady}
-          title={briefing ? "Abilities open once the assault begins" : undefined}
-          onClick={(e) => {
-            e.stopPropagation();
-            onAbility(unit.id);
-          }}
-          className={`h-5 flex-1 font-mono text-[10px] ${
-            abilityReady ? "border-[#E5A93C] text-[#E5A93C]" : ""
-          }`}
-        >
-          {unit.alive
-            ? briefing
-              ? `${spec.ability.name} — AFTER BEGIN`
-              : unit.abilityCd > 0
-                ? `${spec.ability.name} ${Math.ceil(unit.abilityCd)}s`
-                : spec.ability.name
-            : "OUT OF ACTION"}
-        </Button>
+        {isLeader ? (
+          <Button
+            data-testid={`ability-btn-${index}`}
+            variant="outline"
+            size="xs"
+            disabled={!unit.alive || !abilityReady}
+            title={briefing ? "Abilities open once the assault begins" : "Leader ability: Q, or right click where it should land"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onAbility(unit.id);
+            }}
+            className={`h-5 flex-1 font-mono text-[10px] ${
+              abilityReady ? "border-[#E5A93C] text-[#E5A93C]" : ""
+            }`}
+          >
+            {unit.alive
+              ? briefing
+                ? `${spec.ability.name} — AFTER BEGIN`
+                : unit.abilityCd > 0
+                  ? `${spec.ability.name} ${Math.ceil(unit.abilityCd)}s`
+                  : spec.ability.name
+              : "OUT OF ACTION"}
+          </Button>
+        ) : (
+          <span
+            className="flex h-5 flex-1 items-center justify-center border border-[#2E3628] px-1 font-mono text-[10px] text-[#8D9A83]"
+            title="He follows the leader and uses his ability on his own judgment"
+          >
+            {unit.alive ? `${spec.ability.name} — ON HIS OWN` : "OUT OF ACTION"}
+          </span>
+        )}
         {unit.orders > 0 && (
           <span className="font-mono text-[10px] text-[#4ECDC4]">{unit.orders}▸</span>
         )}
@@ -110,50 +126,9 @@ function UnitCard({
   );
 }
 
-export default function SquadDock({ hud, onSelect, onAbility, onSplit, onSelectTeam, onMerge }: Props) {
-  const split = hud.teamA.length > 0 || hud.teamB.length > 0;
-  const teamSelected = (ids: number[]) => ids.length > 0 && ids.every((id) => hud.selectedIds.includes(id)) && hud.selectedIds.length === ids.length;
+export default function SquadDock({ hud, onSelect, onAbility }: Props) {
   return (
     <div className="flex flex-col gap-1.5 px-3 py-2 short:px-1.5 short:py-1.5">
-      <div className="flex flex-wrap items-center gap-1.5" data-testid="fireteam-bar">
-        {!split ? (
-          <Button
-            data-testid="split-squad-btn"
-            variant="outline"
-            size="xs"
-            onClick={onSplit}
-            disabled={hud.briefing || hud.units.filter((u) => u.alive).length < 2}
-            title="Split the squad into Alpha and Bravo so each team can be ordered on its own and flank"
-          >
-            ✂ SPLIT SQUAD — FLANK
-          </Button>
-        ) : (
-          <>
-            <Button
-              data-testid="select-team-a-btn"
-              variant="outline"
-              size="xs"
-              onClick={() => onSelectTeam(0)}
-              className={teamSelected(hud.teamA) ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
-            >
-              ALPHA ({hud.teamA.length})
-            </Button>
-            <Button
-              data-testid="select-team-b-btn"
-              variant="outline"
-              size="xs"
-              onClick={() => onSelectTeam(1)}
-              className={teamSelected(hud.teamB) ? "border-[#4ECDC4] text-[#4ECDC4]" : ""}
-            >
-              BRAVO ({hud.teamB.length})
-            </Button>
-            <Button data-testid="merge-squads-btn" variant="outline" size="xs" onClick={onMerge} title="Merge Alpha and Bravo back into one squad">
-              MERGE
-            </Button>
-            <span className="font-mono text-[10px] text-[#8D9A83]">6: ALPHA · 7: BRAVO · 0: ALL</span>
-          </>
-        )}
-      </div>
     <div className="flex gap-2 overflow-x-auto short:h-full short:flex-col short:gap-1 short:overflow-y-auto" data-testid="squad-dock">
       {hud.units.map((u, i) => (
         <UnitCard
@@ -162,6 +137,7 @@ export default function SquadDock({ hud, onSelect, onAbility, onSplit, onSelectT
           index={i}
           selected={hud.selectedIds.includes(u.id)}
           briefing={hud.briefing}
+          isLeader={hud.leaderId === u.id}
           onSelect={onSelect}
           onAbility={onAbility}
         />

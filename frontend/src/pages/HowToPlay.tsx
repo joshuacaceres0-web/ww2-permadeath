@@ -34,7 +34,7 @@ export default function HowToPlay() {
           ))}
         </ol>
         <p className="mt-6 font-mono text-xs text-[#5A664F]">
-          Desktop: drag to select, right-click to move or attack, Space to pause. Phone: tap to select and order, on-screen buttons for everything else.
+          Desktop: you drive your team leader — WASD to move, left click to shoot, right click or Q for his ability, 1 / 2 / 3 for squad orders (Attack, Defend, Form up), F for formation, Esc for the battle menu. Phone: left stick moves the leader, right stick aims and fires, buttons for ability, orders and radio.
         </p>
       </div>
     </div>
