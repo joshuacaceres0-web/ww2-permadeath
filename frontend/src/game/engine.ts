@@ -157,6 +157,27 @@ export const RECON_PAIR_DIST = 90;
  * much further out (Josh, 2026-11-13): the glasses are the
  * pair's reach. Without them the leash is RECON_PAIR_DIST. */
 export const BINOCULAR_PAIR_DIST = 220;
+/** Elite hunting (Josh, 2026-11-13): picking an elite out of
+ * the line at distance is the spotter's work. A sniper paired
+ * with his Recon (or a Scharfschutze with his Beobachter)
+ * identifies elites at his full range and takes them first.
+ * Alone, he only reads an elite inside this distance — past
+ * it the man is just another uniform — unless the elite has
+ * fired inside the reveal window and given himself away. */
+export const ELITE_RECOGNITION_DIST = 200;
+export const ELITE_REVEAL_SECONDS = 4;
+/** The enemy specialists a sniper hunts first when his
+ * spotter picks them out: MG42 nests, mortar crews, Funkers,
+ * Beobachter spotters, Scharfschutze snipers, panzerfaust
+ * men, officers and flak crews. Line infantry, paratroopers
+ * and medics are not elites, and vehicles are the AT men's
+ * work, already prioritised there. */
+export const ELITE_TYPES: ReadonlySet<string> = new Set([
+  "mg42", "mortar", "funk", "spotter", "scharfschutze", "panzerfaust", "officer", "flak",
+]);
+/** The mirror set for the Scharfschutze: the allied
+ * specialists whose loss hurts most. */
+export const ALLIED_ELITE_TYPES: ReadonlySet<string> = new Set(["mg", "at", "sniper", "radioman"]);
 export const SNIPER_SOLO_RANGE = 260;
 export const RECON_SPOT_FACTOR = 0.55;
 export const RECON_REVEAL_SECONDS = 3;
@@ -402,6 +423,10 @@ interface Unit {
   /** Marked by a Recon (until this time): the squad sees him
    * through fog and his wounds run heavier under their fire. */
   markedUntil?: number;
+  /** While this reads ahead of the clock, a sniper is
+   * engaging this man as an identified elite: drawUnit hangs
+   * the small open amber diamond over him. */
+  eliteTagT?: number;
   /** The mark came from a hidden Recon: the first allied hit
    * springs the ambush and hits hardest, once. */
   markedAmbush?: boolean;
@@ -5505,8 +5530,25 @@ export class GameEngine {
     this.lockCamera(dt);
   }
 
+  /** An elite of the other side, by the shooter's lights:
+   * the axis specialists for our snipers, the allied
+   * specialists for theirs. */
+  private isEliteTarget(e: Unit): boolean {
+    return e.side === "axis"
+      ? e.enemyType != null && ELITE_TYPES.has(e.enemyType)
+      : ALLIED_ELITE_TYPES.has(e.type);
+  }
+
+  /** An elite who fired inside the reveal window has given
+   * himself away — flash and report carry further than a
+   * uniform can be read. */
+  private eliteRevealed(e: Unit): boolean {
+    return e.lastShotT !== undefined && this.elapsed - e.lastShotT <= ELITE_REVEAL_SECONDS;
+  }
+
   private autoTarget(u: Unit): Unit | null {
     const range = this.effRange(u);
+    const sniperClass = u.type === "sniper" || u.enemyType === "scharfschutze";
     // Pair work (Josh, 2026-11-13): a marked man is the
     // sniper's priority while the mark lasts — the Recon
     // paints him, the sniper takes him, ahead of a nearer
@@ -5525,6 +5567,35 @@ export class GameEngine {
         }
       }
       if (marked) return marked;
+    }
+    // Elite hunting (Josh, 2026-11-13): a sniper takes an
+    // identified elite ahead of a nearer regular. Paired with
+    // his spotter he identifies them at full range; alone,
+    // only inside recognition distance or once they have
+    // fired and given themselves away. The range cap stands
+    // underneath all of it, and a concealed elite still has
+    // to be spotted through the usual shrink.
+    if (sniperClass) {
+      const paired = this.reconPaired(u);
+      let elite: Unit | null = null;
+      let eliteD = range;
+      for (const e of this.units) {
+        if (e.side === u.side || !e.alive || !this.isEliteTarget(e)) continue;
+        const d = dist(u.x, u.y, e.x, e.y);
+        if (d > range || !this.los(u, e)) continue;
+        if (!paired && d > ELITE_RECOGNITION_DIST && !this.eliteRevealed(e)) continue;
+        const cap = (this.reconHidden(e)
+          ? range * this.hideFactor(e)
+          : this.concealedTarget(e)
+            ? range * CONCEAL_SPOT_FACTOR
+            : range * 1.05) * e.spotMul;
+        if (d > cap) continue;
+        if (d < eliteD) {
+          elite = e;
+          eliteD = d;
+        }
+      }
+      if (elite) return elite;
     }
     let best: Unit | null = null;
     let bestD = range * 1.05;
@@ -5927,6 +5998,12 @@ export class GameEngine {
     // hits 35% harder — the steel makes a man bold up close.
     const close = u.equipment.includes("bayonet") && dist(u.x, u.y, target.x, target.y) <= 70 ? 1.35 : 1;
     this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod, u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14);
+    // The pair at work, made visible: while a sniper engages
+    // an elite his spotter picked out, the man carries the
+    // open amber tag (drawUnit).
+    if ((u.type === "sniper" || u.enemyType === "scharfschutze") && this.isEliteTarget(target)) {
+      target.eliteTagT = this.elapsed + 1.5;
+    }
   }
 
   private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number, alt = false, bulletSpeed?: number, source?: string) {
@@ -7876,6 +7953,20 @@ export class GameEngine {
       ctx.lineTo(fx - PX * 2, headY - PX * 7);
       ctx.closePath();
       ctx.fill();
+    }
+    // An identified elite under a sniper's fire: the same
+    // amber language as the mark, drawn open and higher, on
+    // either side — your MG gunner tagged is a warning too.
+    if (u.eliteTagT !== undefined && u.eliteTagT > this.elapsed) {
+      ctx.strokeStyle = "#E5A93C";
+      ctx.lineWidth = PX;
+      ctx.beginPath();
+      ctx.moveTo(fx, headY - PX * 13);
+      ctx.lineTo(fx + PX * 2, headY - PX * 11);
+      ctx.lineTo(fx, headY - PX * 9);
+      ctx.lineTo(fx - PX * 2, headY - PX * 11);
+      ctx.closePath();
+      ctx.stroke();
     }
   }
 }

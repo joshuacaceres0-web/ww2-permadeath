@@ -148,7 +148,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     spread: 0.02,
     bulletSpeed: 900,
     ability: { key: "Q", name: "Deadeye Shot", desc: "Instant 120 dmg to the highest-value target in range", cd: 16, aim: "auto" },
-    blurb: "Sees far, hits once, never misses twice. Fragile up close.",
+    blurb: "Sees far, hits once, never misses twice. Fragile up close. With a Recon spotting for him he hunts elites first at full range — MG nests, mortar crews, officers and their kind. Alone he cannot pick them out past 200.",
   },
   radioman: {
     type: "radioman",
@@ -211,7 +211,7 @@ export const UNIT_TYPES: Record<UnitTypeId, UnitTypeSpec> = {
     spread: 0.06,
     bulletSpeed: 600,
     ability: { key: "Q", name: "Mark Target", desc: "Mark one enemy for the squad: he takes heavier fire, and a hidden Recon's mark sets an ambush", cd: 18, aim: "auto" },
-    blurb: "The squad's eyes. Spots far, hides in the treeline, and a sniper beside him shoots at full range.",
+    blurb: "The squad's eyes. Spots far, hides in the treeline, and a sniper beside him shoots at full range. He spots elites for the sniper, so the dangerous men die early while they are paired.",
   },
   engineer: {
     type: "engineer",

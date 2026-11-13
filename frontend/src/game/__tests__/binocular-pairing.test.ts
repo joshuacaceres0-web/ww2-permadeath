@@ -14,7 +14,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { UNIT_TYPES } from "../data";
-import { BINOCULAR_PAIR_DIST, RECON_PAIR_DIST } from "../engine";
+import { BINOCULAR_PAIR_DIST, ELITE_RECOGNITION_DIST, RECON_PAIR_DIST } from "../engine";
 
 function stubBrowser() {
   const grad = { addColorStop: () => {} };
@@ -62,6 +62,13 @@ async function build(squad: Any[]) {
   return e;
 }
 const unitOf = (e: Any, id: string) => (e.units as Any[]).find((u) => u.soldierId === id);
+// NPC squads field recons, MGs and snipers of their own; left
+// in, one could pair a sniper under test or draw a
+// Scharfschutze's eye, and the assertions would measure them
+// instead. Tests that need a clean field clear them out.
+const clearNpcs = (e: Any) => {
+  for (const u of e.units as Any[]) if (u.npc) u.alive = false;
+};
 
 describe("binocular pairing", () => {
   it("the leash: 90 bare, 220 with the glasses, the cap beyond both", async () => {
@@ -76,6 +83,7 @@ describe("binocular pairing", () => {
     const snip = unitOf(e, "snip");
     const eyes = unitOf(e, "eyes");
     const bare = unitOf(e, "bare");
+    clearNpcs(e);
     snip.x = 200; snip.y = 600;
     // Bare recon at 200: outside the old leash, cap applies.
     bare.x = 400; bare.y = 600;
@@ -113,6 +121,7 @@ describe("binocular pairing", () => {
     ]);
     const snip = unitOf(e, "snip");
     const eyes = unitOf(e, "eyes");
+    clearNpcs(e);
     snip.x = 200; snip.y = 300;
     eyes.x = 260; eyes.y = 300;
     const near = e.spawnEnemyUnit("volks", 350, 300, () => 0.5, true);
@@ -122,5 +131,91 @@ describe("binocular pairing", () => {
     expect(e.autoTarget(snip)).toBe(far);
     far.markedUntil = e.elapsed - 1;
     expect(e.autoTarget(snip)).toBe(near);
+  });
+});
+
+describe("elite hunting", () => {
+
+  it("paired: the sniper takes the elite at long range over a nearer regular", async () => {
+    expect(ELITE_RECOGNITION_DIST).toBe(200);
+    const e = await build([
+      man("snip", "sniper"),
+      man("eyes", "recon"),
+    ]);
+    const snip = unitOf(e, "snip");
+    const eyes = unitOf(e, "eyes");
+    clearNpcs(e);
+    snip.x = 200; snip.y = 300;
+    eyes.x = 260; eyes.y = 300;
+    const regular = e.spawnEnemyUnit("volks", 350, 300, () => 0.5, true);
+    const nest = e.spawnEnemyUnit("mg42", 620, 300, () => 0.5, true);
+    expect(e.autoTarget(snip)).toBe(nest);
+    expect(regular).toBeDefined();
+  });
+
+  it("solo: blind past recognition, reads him close, firing gives him away", async () => {
+    const e = await build([man("snip", "sniper")]);
+    const snip = unitOf(e, "snip");
+    clearNpcs(e);
+    snip.x = 200; snip.y = 300;
+    const regular = e.spawnEnemyUnit("volks", 350, 300, () => 0.5, true);
+    const nest = e.spawnEnemyUnit("mg42", 440, 300, () => 0.5, true);
+    // 240 away: inside the solo cap, past recognition, unfired.
+    expect(e.autoTarget(snip)).toBe(regular);
+    // He fires: flash and report identify him for a window.
+    nest.lastShotT = e.elapsed;
+    expect(e.autoTarget(snip)).toBe(nest);
+    nest.lastShotT = e.elapsed - 10;
+    expect(e.autoTarget(snip)).toBe(regular);
+    // Inside recognition distance his own eyes read the nest.
+    nest.x = 380;
+    expect(e.autoTarget(snip)).toBe(nest);
+  });
+
+  it("binoculars widen where the hunting works, bare eyes do not", async () => {
+    const e = await build([
+      man("snip", "sniper"),
+      man("eyes", "recon", { equipment: ["binoculars"] }),
+      man("bare", "recon"),
+    ]);
+    const snip = unitOf(e, "snip");
+    const eyes = unitOf(e, "eyes");
+    const bare = unitOf(e, "bare");
+    clearNpcs(e);
+    snip.x = 200; snip.y = 300;
+    const regular = e.spawnEnemyUnit("volks", 350, 300, () => 0.5, true);
+    const nest = e.spawnEnemyUnit("mg42", 620, 300, () => 0.5, true);
+    // Glasses at 200: paired, the elite is his.
+    eyes.x = 400; eyes.y = 300;
+    bare.x = 3000; bare.y = 100;
+    expect(e.autoTarget(snip)).toBe(nest);
+    // A bare recon standing in the same spot pairs with nobody.
+    eyes.x = 3000; eyes.y = 100;
+    bare.x = 400; bare.y = 300;
+    expect(e.autoTarget(snip)).toBe(regular);
+  });
+
+  it("the mirror: the Scharfschutze hunts the same way with his Beobachter", async () => {
+    const e = await build([
+      man("decoy", "sniper"),
+      man("gunner", "mg"),
+      man("rifle", "rifleman"),
+    ]);
+    const decoy = unitOf(e, "decoy");
+    const gunner = unitOf(e, "gunner");
+    const rifle = unitOf(e, "rifle");
+    decoy.x = 3900; decoy.y = 100; // parked out of his reach
+    gunner.x = 620; gunner.y = 300;
+    rifle.x = 350; rifle.y = 300;
+    clearNpcs(e);
+    const scharf = e.spawnEnemyUnit("scharfschutze", 200, 300, () => 0.5, true);
+    const spotter = e.spawnEnemyUnit("spotter", 3000, 100, () => 0.5, true);
+    // Alone and capped, the MG is out of reach entirely:
+    // he takes the rifleman in normal order.
+    expect(e.autoTarget(scharf)).toBe(rifle);
+    // His spotter beside him: the allied MG is identified
+    // at full range and dies first.
+    spotter.x = 260; spotter.y = 300;
+    expect(e.autoTarget(scharf)).toBe(gunner);
   });
 });
