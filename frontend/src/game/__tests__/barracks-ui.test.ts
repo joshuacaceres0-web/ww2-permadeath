@@ -80,6 +80,18 @@ describe("barracks update UI", () => {
     expect([...perClass.keys()].sort()).toEqual(["at", "engineer", "medic", "mg", "radioman", "recon", "rifleman", "sniper"]);
   });
 
+  it("item models ride the stores grid, the dossier, the debrief and the bust", () => {
+    const barracks = read("../../pages/Barracks.tsx");
+    expect(barracks).toContain("<ItemIcon id={d.id}");
+    expect(barracks).toContain("<ItemIcon id={item}");
+    const field = read("../../pages/Battlefield.tsx");
+    expect(field).toContain("<ItemIcon id={g.item}");
+    const portrait = read("../../components/Portrait.tsx");
+    for (const id of ["antenna", "satchel", "toolroll", "barrel", "grenades", "matchammo"]) {
+      expect(portrait, id).toContain(`gear.includes("${id}")`);
+    }
+  });
+
   it("the portrait draws earned headgear, garrison cap included", () => {
     const src = read("../../components/Portrait.tsx");
     expect(src).toContain("gearHead");

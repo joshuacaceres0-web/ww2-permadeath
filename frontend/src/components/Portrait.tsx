@@ -197,6 +197,46 @@ function buildGrid(seed: number, type: UnitTypeId, level: number, gearHead: stri
   if (gear.includes("charm")) {
     g[12][8] = "#E5C558"; // the charm at his throat
   }
+  if (gear.includes("antenna")) {
+    // The radioman's mast rises behind his shoulder.
+    g[13][13] = "#2E3324";
+    g[12][13] = "#1F2419";
+    g[11][13] = "#1F2419";
+    g[10][13] = "#1F2419";
+    g[9][13] = "#E5C558";
+  }
+  if (gear.includes("barrel")) {
+    // The spare barrel's end over his shoulder.
+    g[12][13] = "#4A4A44";
+    g[13][12] = "#4A4A44";
+    g[13][13] = "#24231E";
+  }
+  if (gear.includes("toolroll")) {
+    // The roll's end over the other shoulder.
+    g[13][2] = "#8A7A4E";
+    g[13][3] = "#8A7A4E";
+    g[14][2] = "#6B5A34";
+  }
+  if (gear.includes("satchel")) {
+    // The satchel's strap runs the other diagonal, its block
+    // at the far hip of the bust.
+    g[13][11] = "#6B5A34";
+    g[14][9] = "#6B5A34";
+    g[15][7] = "#6B5A34";
+    g[15][5] = "#8A7A4E";
+    g[15][6] = "#8A7A4E";
+  }
+  if (gear.includes("grenades")) {
+    // One grenade rides the chest strap.
+    g[13][4] = "#24231E";
+    g[14][4] = "#4B5138";
+    g[14][5] = "#4B5138";
+  }
+  if (gear.includes("matchammo")) {
+    // Brass tips along the chest.
+    g[13][6] = "#E5C558";
+    g[14][8] = "#E5C558";
+  }
 
   // Rank stripes on the shoulder — one per two promotions, gold.
   const stripes = Math.min(3, Math.ceil(level / 2));

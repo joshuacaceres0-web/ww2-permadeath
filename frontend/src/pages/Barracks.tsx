@@ -15,6 +15,7 @@ const gunLine = (id: string) => {
   const g = GUN_DEFS[id];
   return g ? `DMG ${g.dmg} · RNG ${g.range} · MAG ${g.magSize} · RLD ${g.reloadTime}s` : null;
 };
+import ItemIcon from "@/components/ItemIcon";
 import Portrait from "@/components/Portrait";
 import { MedalList, RibbonRack } from "@/components/Medals";
 import { useMusic } from "@/game/music";
@@ -265,7 +266,10 @@ export default function Barracks() {
               return (
                 <div key={d.id} className="flex flex-col border border-[#2E3628] bg-[#22271E] p-2.5" data-testid={`store-item-${d.id}`}>
                   <div className="flex items-start justify-between gap-2">
-                    <p className="font-mono text-xs font-semibold text-[#EDEDE2]">{d.label}</p>
+                    <div className="flex items-start gap-2">
+                      <ItemIcon id={d.id} size={38} />
+                      <p className="font-mono text-xs font-semibold text-[#EDEDE2]">{d.label}</p>
+                    </div>
                     <Badge
                       variant="outline"
                       className={`shrink-0 font-mono text-[9px] ${CLASS_ITEM_IDS.has(d.id) ? "border-[#3E5A74] text-[#7FB2D9]" : "border-[#5C4A1E] text-[#E5A93C]"}`}
@@ -460,9 +464,12 @@ function Dossier({
           <div className="space-y-1">
             {(s.equipment ?? []).map((item) => (
               <div key={item} className="flex items-center justify-between gap-2 border border-[#5C4A1E] bg-[#2A2210] px-2 py-1 font-mono text-[11px]" data-testid={`carried-${item}`}>
-                <span className="text-[#FFD97D]">
+                <span className="flex min-w-0 items-center gap-2">
+                  <ItemIcon id={item} size={26} plate={false} />
+                  <span className="text-[#FFD97D]">
                   {ITEM_BY_ID[item]?.label ?? item}
                   {GUN_DEFS[item] ? <span className="text-[#F0EBD8]"> · {gunLine(item)}</span> : null}
+                  </span>
                 </span>
                 <Button
                   data-testid={`unequip-btn-${item}`}
@@ -493,9 +500,12 @@ function Dossier({
               const reason = carried ? "Carried" : restricted ? `${d.restrict!.map((t) => UNIT_TYPES[t].label).join(" / ")} only` : gunClash ? "Carries a gun" : headClash ? "Wears headgear" : full ? "Slots full" : null;
               return (
                 <div key={d.id} className="flex items-center justify-between gap-2 font-mono text-[11px]">
-                  <span className="min-w-0 truncate text-[#E3E7DC]">
+                  <span className="flex min-w-0 items-center gap-2 truncate text-[#E3E7DC]">
+                    <ItemIcon id={d.id} size={26} plate={false} />
+                    <span className="min-w-0 truncate">
                     {d.label} <span className="text-[#75826F]">× {inventory[d.id]}</span>
                     {gunLine(d.id) && <span className="block text-[9px] text-[#8D9A83]">{gunLine(d.id)}</span>}
+                    </span>
                   </span>
                   <Button
                     data-testid={`equip-btn-${d.id}`}

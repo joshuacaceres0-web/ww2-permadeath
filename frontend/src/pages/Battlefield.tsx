@@ -7,6 +7,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import BattleCanvas from "@/components/game/BattleCanvas";
 import ReplayViewer from "@/components/game/ReplayViewer";
 import SquadDock from "@/components/game/SquadDock";
+import ItemIcon from "@/components/ItemIcon";
 import TouchControls, { FORMATIONS } from "@/components/game/TouchControls";
 import ReinforceMenu, { REINFORCEMENTS } from "@/components/game/ReinforceMenu";
 import { PANEL, PANEL_BTN, PANEL_BTN_ACTIVE, PANEL_LABEL, PANEL_REST, PANEL_SOLID } from "@/components/game/panel";
@@ -841,8 +842,9 @@ export default function Battlefield() {
                       );
                     })}
                   {fileReport.data.items_gained.map((g, i) => (
-                    <p key={i} className="font-mono text-xs text-[#5EB872]" data-testid={`debrief-item-${i}`}>
-                      Stores +1: {ITEM_BY_ID[g.item]?.label ?? g.item} ({g.source === "loot" ? "from a battlefield crate" : "victory award"})
+                    <p key={i} className="flex items-center gap-2 font-mono text-xs text-[#5EB872]" data-testid={`debrief-item-${i}`}>
+                      <ItemIcon id={g.item} size={26} plate={false} />
+                      <span>Stores +1: {ITEM_BY_ID[g.item]?.label ?? g.item} ({g.source === "loot" ? "from a battlefield crate" : "victory award"})</span>
                     </p>
                   ))}
                   {fileReport.data.gear_lost.length > 0 && (
