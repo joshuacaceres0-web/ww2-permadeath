@@ -698,13 +698,15 @@ export default function Battlefield() {
                     <>
                       You control the leader: the left stick moves him, the FIRE ring shoots, ABILITY uses
                       his ability. The rest of the squad follows him under your orders: ATTACK, DEFEND,
-                      FORM UP, and the formation button. If he falls, the next most experienced man takes over.
+                      FORM UP, and the formation button. DEFEND scatters them to cover where they
+                      stand; FORM UP keeps them in formation on him. If he falls, the next most experienced man takes over.
                     </>
                   ) : (
                     <>
                       You control the leader: WASD moves him, left click shoots, right click (or Q) uses his
                       ability. The rest of the squad follows him under your orders: 1 ATTACK, 2 DEFEND,
-                      3 FORM UP, with F for formation. If he falls, the next most experienced man takes over.
+                      3 FORM UP, with F for formation. DEFEND scatters them to cover where they
+                      stand; FORM UP keeps them in formation on him. If he falls, the next most experienced man takes over.
                     </>
                   )}
                 </p>

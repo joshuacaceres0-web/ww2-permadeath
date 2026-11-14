@@ -1275,7 +1275,6 @@ export class GameEngine {
   // the leader like WASD, the right stick aims and fires him.
   private touchMove: { x: number; y: number } | null = null;
   private touchAimVec: { x: number; y: number } | null = null;
-  private touchAimTarget = false;
   private autoAbilityT = 0;
   // Battle replay: one snapshot every 0.5s, kept in memory only, so
   // the debrief screen can play the battle back after it ends.
@@ -1911,7 +1910,12 @@ export class GameEngine {
   setSquadOrder(o: SquadOrder) {
     if (this.phase !== "battle" || this.retreating || this.squadOrder === o) return;
     this.squadOrder = o;
-    for (const u of this.units) if (this.isFollower(u)) u.chase = [];
+    for (const u of this.units) {
+      if (!this.isFollower(u)) continue;
+      u.chase = [];
+      // DEFEND scatters NOW, not on the next cadence tick.
+      if (o === "defend") u.coverSeekT = 0;
+    }
     this.pushLog(o === "attack" ? "Squad order: ATTACK." : o === "defend" ? "Squad order: DEFEND." : "Squad order: FORM UP.", "info");
     this.dirty = true;
   }
@@ -1920,28 +1924,26 @@ export class GameEngine {
     return this.squadOrder;
   }
 
-  /** Left click in battle: the leader fires. On an enemy, that
-   * enemy becomes his target until it dies; on open ground he
-   * fires at the point for a short window. Range and LOS come
-   * from the normal fire rules: he never chases a click. */
+  /** Left click in battle: the leader fires at the click.
+   * The player shoots as he intends (Josh, 2026-11-13): a
+   * click on an enemy aims at where that enemy stands right
+   * now (a snapshot, not a lock) and a click on open ground
+   * aims at the point — either way it is the same short
+   * manualShot window, and fire input NEVER sets attackId,
+   * so the leader never chases or tracks a clicked target. */
   leaderShootAt(x: number, y: number) {
     if (this.phase !== "battle" || this.autoBattle || this.retreating) return;
     const L = this.leaderUnit();
     if (!L || L.broken) return;
-    let foe: Unit | null = null;
+    let tx = x;
+    let ty = y;
     let bestD = 30;
     for (const u of this.units) {
       if (u.side !== "axis" || !u.alive) continue;
       const d = dist(x, y, u.x, u.y);
-      if (d < bestD) { foe = u; bestD = d; }
+      if (d < bestD) { tx = u.x; ty = u.y; bestD = d; }
     }
-    if (foe) {
-      L.attackId = foe.id;
-      this.manualShot = null;
-    } else {
-      L.attackId = null;
-      this.manualShot = { x, y, until: this.elapsed + 1.5 };
-    }
+    this.manualShot = { x: tx, y: ty, until: this.elapsed + 1.5 };
     this.dirty = true;
   }
 
@@ -1997,11 +1999,24 @@ export class GameEngine {
       return false;
     }
     if (this.squadOrder === "defend") {
-      const preyClose = prey
-        ? prey.side === u.side || dist(prey.x, prey.y, leader.x, leader.y) <= 180
-        : false;
-      if (preyClose) return null;
-      if (dSlot > 40) return this.chaseTo(u, slot.x, slot.y, dt);
+      // DEFEND (Josh, 2026-11-13): scatter to cover. No slot,
+      // no trailing the leader — each man dives for cover near
+      // where HE stands and fights from it. An enemy already
+      // in his reach is fought from where he stands; a man in
+      // cover holds it; a man in the open seeks cover on the
+      // usual coverSeekT cadence and the seek's order walks
+      // him there through the orders branch.
+      const preyInReach = prey !== null && prey.side !== u.side
+        && dist(u.x, u.y, prey.x, prey.y) <= this.effRange(u) && this.los(u, prey);
+      if (preyInReach) return null;
+      if (u.cover) {
+        u.chase = [];
+        return false;
+      }
+      if (u.coverSeekT <= 0) {
+        if (this.seekCover(u, 200)) u.coverSeekT = 5;
+        else u.coverSeekT = 2;
+      }
       u.chase = [];
       return false;
     }
@@ -2122,7 +2137,6 @@ export class GameEngine {
     this.manualShot = null;
     this.touchMove = null;
     this.touchAimVec = null;
-    this.touchAimTarget = false;
     this.aimUnitId = null;
     for (const u of this.units) {
       if (u.side !== "allies" || u.npc || !u.alive) continue;
@@ -2851,12 +2865,8 @@ export class GameEngine {
   setTouchAim(v: { x: number; y: number } | null) {
     if (this.retreating) v = null;
     this.touchAimVec = v && (Math.abs(v.x) > 0.22 || Math.abs(v.y) > 0.22) ? v : null;
-    if (!this.touchAimVec && this.touchAimTarget) {
-      const L = this.leaderUnit();
-      if (L) L.attackId = null;
-      this.touchAimTarget = false;
-      this.manualShot = null;
-    }
+    // Thumb off the stick: the shot stops with it.
+    if (!this.touchAimVec) this.manualShot = null;
   }
 
   /** On-screen D-pad: hold to scroll (-1..1 per axis). */
@@ -4595,40 +4605,21 @@ export class GameEngine {
     }
 
     // The shoot stick: pushed in a direction, the leader fires
-    // that way. An enemy near the aim line (within range and
-    // sight) snaps as his target; otherwise he fires toward the
-    // aim point. Release stops the fire (setTouchAim clears it).
+    // that way — at the aim point along the stick, always
+    // (Josh, 2026-11-13). There is no aim-cone target snap:
+    // the gun goes where the player's thumb points, and if an
+    // enemy stands there the rounds find him. Release stops
+    // the fire (setTouchAim clears the shot).
     if (this.phase === "battle" && !this.autoBattle && !this.paused && !this.retreating && this.touchAimVec) {
       const L = this.leaderUnit();
       if (L && !L.broken && !L.fled) {
         const ang = Math.atan2(this.touchAimVec.y, this.touchAimVec.x);
         L.facing = ang;
-        let best: Unit | null = null;
-        let bestScore = Infinity;
-        for (const e of this.units) {
-          if (e.side !== "axis" || !e.alive) continue;
-          const d = dist(L.x, L.y, e.x, e.y);
-          if (d > L.range) continue;
-          let da = Math.atan2(e.y - L.y, e.x - L.x) - ang;
-          while (da > Math.PI) da -= Math.PI * 2;
-          while (da < -Math.PI) da += Math.PI * 2;
-          if (Math.abs(da) > 0.55) continue;
-          if (!this.los(L, e)) continue;
-          const score = Math.abs(da) * 300 + d;
-          if (score < bestScore) { bestScore = score; best = e; }
-        }
-        if (best) {
-          L.attackId = best.id;
-          this.touchAimTarget = true;
-          this.manualShot = null;
-        } else {
-          if (this.touchAimTarget) { L.attackId = null; this.touchAimTarget = false; }
-          this.manualShot = {
-            x: L.x + Math.cos(ang) * L.range * 0.85,
-            y: L.y + Math.sin(ang) * L.range * 0.85,
-            until: this.elapsed + 0.3,
-          };
-        }
+        this.manualShot = {
+          x: L.x + Math.cos(ang) * L.range * 0.85,
+          y: L.y + Math.sin(ang) * L.range * 0.85,
+          until: this.elapsed + 0.3,
+        };
       }
     }
 
@@ -7504,8 +7495,9 @@ export class GameEngine {
     if (u.vehicle && u.enemyType === "truck") {
       // The convoy truck: cab at the front (the way it faces),
       // canvas-covered bed behind, wheels as dark blocks. No
-      // turret, no gun — just a target on wheels, with the same
-      // health bar the tanks get.
+      // turret, no gun — just a target on wheels. No overhead
+      // bar: bars belong to the player's own squad only
+      // (Josh, 2026-11-13).
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
@@ -7522,12 +7514,6 @@ export class GameEngine {
       ctx.fillRect(cabX, fy - 11, 28, 22);
       ctx.fillStyle = "#2E3238";
       ctx.fillRect(flip ? cabX + 2 : cabX + 20, fy - 7, 6, 14);
-      const w = 64;
-      const pct = Math.max(0, u.hp / u.maxHp);
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 30, w, 4);
-      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 30, w * pct, 4);
       return;
     }
     if (u.vehicle && u.enemyType === "halftrack") {
@@ -7538,7 +7524,7 @@ export class GameEngine {
       // bench lines and the crew's helmets, and the mounted
       // MG on a pivot at the bay's front edge — the gun
       // traverses on u.turret like a tank's. German
-      // gray-green, health bar above like the tanks.
+      // gray-green. No overhead bar (own squad only).
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
@@ -7617,12 +7603,6 @@ export class GameEngine {
       ctx.fillStyle = "#4C4433";
       ctx.fillRect(-5, 3, 6, 5);
       ctx.restore();
-      const w = 72;
-      const pct = Math.max(0, u.hp / u.maxHp);
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 32, w, 4);
-      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 32, w * pct, 4);
       return;
     }
     if (u.vehicle) {
@@ -7632,7 +7612,9 @@ export class GameEngine {
       // from the reference pictures: a dark grey Panzer with
       // its turret number and a black cross on the rear deck,
       // an olive Sherman with the white star on the turret.
-      // No pose and no morale bar, just a health bar above.
+      // No pose and no bars at all above it: overhead bars
+      // belong to the player's own squad only (Josh,
+      // 2026-11-13) — not even the called Sherman gets one.
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
@@ -7704,12 +7686,6 @@ export class GameEngine {
         ctx.fillText("214", 2, 4);
       }
       ctx.restore();
-      const w = 84;
-      const pct = Math.max(0, u.hp / u.maxHp);
-      ctx.fillStyle = "rgba(0,0,0,0.6)";
-      ctx.fillRect(fx - w / 2, fy - 37, w, 5);
-      ctx.fillStyle = pct > 0.5 ? "#5EB872" : pct > 0.25 ? "#E5A93C" : "#E24A4A";
-      ctx.fillRect(fx - w / 2, fy - 37, w * pct, 5);
       return;
     }
     const isAlly = u.side === "allies";
@@ -8005,8 +7981,14 @@ export class GameEngine {
     }
 
     const headY = top + (pose === "crouch" ? 3 * PX : 0);
+    // Overhead bars belong to the player's own squad ONLY
+    // (Josh, 2026-11-13): his men show health, morale and
+    // reload; NPC allies, enemies and statics show nothing
+    // overhead at all, so how hurt anything else is stays
+    // unknown until it drops.
+    const ownBars = isAlly && !u.npc;
     // Health bar: pixel segments above the head.
-    if (u.hp < u.maxHp || isAlly) {
+    if (ownBars) {
       const segs = 8;
       const pct = Math.max(0, u.hp / u.maxHp);
       const on = Math.ceil(pct * segs);
@@ -8022,9 +8004,9 @@ export class GameEngine {
     // family on purpose (Josh, 2026-11-12) so it can never be
     // read as health: azure holds, royal blue wavers, violet is
     // close to breaking, deep indigo once broken (the BROKEN
-    // label above him says the rest). Allies always show it; an
-    // enemy shows it once his nerve starts to slip.
-    if (u.morale < 100 || isAlly) {
+    // label above him says the rest). Own squad only, like the
+    // health bar above.
+    if (ownBars) {
       const msegs = 8;
       const mpct = Math.max(0, u.morale / 100);
       const mon = Math.ceil(mpct * msegs);
@@ -8039,7 +8021,8 @@ export class GameEngine {
     // Reload bar (Josh, 2026-11-13): amber segments under the
     // morale bar, filling as the reload runs — the visible half
     // of the rule. While it shows, the man's weapon is silent.
-    if (u.reloadT > 0 && u.reloadTotal > 0) {
+    // Own squad only, like the rest of the cluster.
+    if (ownBars && u.reloadT > 0 && u.reloadTotal > 0) {
       const rsegs = 8;
       const rpct = Math.max(0, Math.min(1, 1 - u.reloadT / u.reloadTotal));
       const ron = Math.ceil(rpct * rsegs);
@@ -8049,7 +8032,7 @@ export class GameEngine {
       ctx.fillRect(rbx - PX, rby - PX, (rsegs + 2) * PX, PX * 3);
       ctx.fillStyle = "#E5A93C";
       ctx.fillRect(rbx, rby, ron * PX, PX);
-    } else if (u.altReloadT > 0 && u.altReloadTotal > 0) {
+    } else if (ownBars && u.altReloadT > 0 && u.altReloadTotal > 0) {
       // The sidearm's reload shows on the same bar.
       const rsegs = 8;
       const rpct = Math.max(0, Math.min(1, 1 - u.altReloadT / u.altReloadTotal));

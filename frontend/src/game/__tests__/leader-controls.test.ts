@@ -143,7 +143,10 @@ describe("team leader", () => {
     const hp0 = foe.hp;
     const lx = lead.x;
     e.leaderShootAt(foe.x, foe.y);
-    expect(lead.attackId).toBe(foe.id);
+    // The player shoots as he intends (Josh, 2026-11-13): the
+    // click aims at where the enemy stands, it does NOT lock
+    // him as a target the leader then tracks.
+    expect(lead.attackId).toBeNull();
     step(e, 2.5);
     expect(foe.hp).toBeLessThan(hp0);
     expect(Math.abs(lead.x - lx)).toBeLessThan(16);
@@ -184,8 +187,16 @@ describe("team leader", () => {
     const foe = e.units.find((u) => u.side === "axis" && u.alive)!;
     foe.x = lead.x + 400; foe.y = 675;
     e.setSquadOrder("defend");
-    step(e, 2);
-    expect(Math.hypot(follower.x - lead.x, follower.y - lead.y)).toBeLessThan(150);
+    // DEFEND (Josh, 2026-11-13): scatter to cover near where
+    // he stands — the follower must NOT close on the distant
+    // foe the way ATTACK would. (The scatter itself is pinned
+    // in phase-a-controls.test.ts.)
+    let minFoeD = Infinity;
+    for (let t = 0; t < 2; t += 0.25) {
+      e.update(0.25);
+      if (follower.alive) minFoeD = Math.min(minFoeD, Math.hypot(follower.x - foe.x, follower.y - foe.y));
+    }
+    expect(minFoeD).toBeGreaterThan(200);
     e.setSquadOrder("attack");
     let minD = Infinity;
     for (let t = 0; t < 4; t += 0.25) {
