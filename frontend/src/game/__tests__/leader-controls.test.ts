@@ -199,7 +199,10 @@ describe("team leader", () => {
     expect(minFoeD).toBeGreaterThan(200);
     e.setSquadOrder("attack");
     let minD = Infinity;
-    for (let t = 0; t < 4; t += 0.25) {
+    // 6s, not 4: since Phase B the defend scatter can end in
+    // a dolphin dive, and the prone hold costs the attack
+    // its first second before he is up and closing.
+    for (let t = 0; t < 6; t += 0.25) {
       e.update(0.25);
       if (follower.alive) minD = Math.min(minD, Math.hypot(follower.x - foe.x, follower.y - foe.y));
     }

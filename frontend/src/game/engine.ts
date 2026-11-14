@@ -575,6 +575,31 @@ interface Unit {
   diedAt?: number;
   shootT?: number;
   prevWalk?: number;
+  // Phase B (Josh, 2026-11-13): leaps — the dolphin dive and
+  // the obstacle vault share one arc: from (leapFrom) to
+  // (leapTo) over leapDur seconds, leapT counting down, leapP
+  // the 0..1 progress the draw reads for its height arc.
+  leapT?: number;
+  leapDur?: number;
+  leapFromX?: number;
+  leapFromY?: number;
+  leapToX?: number;
+  leapToY?: number;
+  leapKind?: "dive" | "vault";
+  leapP?: number;
+  /** After a dive landing he stays down at least this long
+   * (battle time), so the auto prone rule cannot pop him
+   * straight back up. */
+  proneHoldUntil?: number;
+  /** The leader's manual prone latch (PRONE button / X key):
+   * set, he stays prone until the player toggles him up. */
+  proneLatch?: boolean;
+  /** The cover spot the current cover run is heading for
+   * (stamped by seekCover) and whether this run's dolphin
+   * dive roll has already been spent. */
+  coverDestX?: number;
+  coverDestY?: number;
+  coverDiveTried?: boolean;
 }
 
 interface Cover {
@@ -2957,6 +2982,11 @@ export class GameEngine {
       if (dist(end.x, end.y, c.x, c.y) > 36) continue;
       u.orders = path;
       u.chase = [];
+      // A new cover run (Phase B): stamp the destination so
+      // the final approach can roll its one dolphin dive.
+      u.coverDestX = end.x;
+      u.coverDestY = end.y;
+      u.coverDiveTried = false;
       return true;
     }
     return false;
@@ -3057,6 +3087,12 @@ export class GameEngine {
     if (k === "q") {
       const lead = this.units.find((u) => this.selected.includes(u.id) && u.alive);
       if (lead) this.startAim(lead.id);
+      return;
+    }
+    if (k === "x") {
+      // PRONE (Phase B): still = drop and stay down; moving
+      // = dolphin dive. Pressing it again stands him up.
+      this.leaderProneToggle();
       return;
     }
     if (k === "escape") {
@@ -4623,6 +4659,35 @@ export class GameEngine {
       }
     }
 
+    // Leaps (Phase B): a diving or vaulting man rides a fixed
+    // arc from leapFrom to leapTo. His movement funnels refuse
+    // him while he is airborne (moveToward's leap guard), his
+    // cooldown is held so he cannot fire mid-leap, and a dive
+    // lands him prone with the minimum hold.
+    for (const u of this.units) {
+      if (!u.alive || (u.leapT ?? 0) <= 0) continue;
+      u.leapT = (u.leapT ?? 0) - dt;
+      const dur = u.leapDur ?? 0.3;
+      const p = Math.max(0, Math.min(1, 1 - Math.max(0, u.leapT) / dur));
+      u.leapP = p;
+      const fx0 = u.leapFromX ?? u.x;
+      const fy0 = u.leapFromY ?? u.y;
+      u.x = fx0 + ((u.leapToX ?? fx0) - fx0) * p;
+      u.y = fy0 + ((u.leapToY ?? fy0) - fy0) * p;
+      u.movedT = this.elapsed;
+      u.cooldown = Math.max(u.cooldown, u.leapT);
+      if (u.leapT <= 0) {
+        u.leapT = 0;
+        u.leapP = 1;
+        if (u.leapKind === "dive") {
+          u.prone = true;
+          u.proneT = this.elapsed;
+          u.proneHoldUntil = this.elapsed + 1.2;
+        }
+        u.leapKind = undefined;
+      }
+    }
+
     // Units.
     for (const u of this.units) {
       if (!u.alive) continue;
@@ -4636,7 +4701,11 @@ export class GameEngine {
       if (!u.vehicle && !u.isStatic) {
         const wasProne = u.prone;
         if (u.suppression >= 70) u.prone = true;
-        else if (u.suppression < 30) u.prone = false;
+        // A dive's minimum hold and the leader's manual latch
+        // both outrank the stand-up rule (Phase B): a man who
+        // threw himself down, or was put down by his player,
+        // stays down until the hold runs out / the latch opens.
+        else if (u.suppression < 30 && !u.proneLatch && this.elapsed >= (u.proneHoldUntil ?? 0)) u.prone = false;
         if (u.prone !== wasProne) u.proneT = this.elapsed;
       }
       u.abilityCd = Math.max(0, u.abilityCd - dt);
@@ -5004,6 +5073,31 @@ export class GameEngine {
       }
 
       if (!moving && focus) u.facing = Math.atan2(focus.y - u.y, focus.x - u.x);
+
+      // Dolphin dive into cover (Phase B, Josh 2026-11-13):
+      // an AI footman running to a cover spot sometimes throws
+      // himself the last stretch — one roll per cover run, on
+      // the final approach, landing prone in the cover. The
+      // player's leader never auto-dives (his dive is on the
+      // PRONE button); statics, vehicles and mortar teams
+      // never dive at all.
+      if (
+        moving && !this.retreating && !u.vehicle && !u.isStatic && !u.broken && !u.prone &&
+        u.enemyType !== "mortar" && (u.leapT ?? 0) <= 0 && !u.coverDiveTried &&
+        !(this.leaderId === u.id && !this.autoBattle) &&
+        u.coverDestX !== undefined && u.orders.length > 0
+      ) {
+        const dest = u.orders[u.orders.length - 1];
+        if (Math.abs(dest.x - (u.coverDestX ?? -9999)) < 4 && Math.abs(dest.y - (u.coverDestY ?? -9999)) < 4) {
+          const dd = dist(u.x, u.y, dest.x, dest.y);
+          if (dd <= 55 && dd > 6) {
+            u.coverDiveTried = true;
+            if (Math.random() < 0.35 && !this.pointBlocked(dest.x, dest.y)) {
+              this.startLeap(u, dest.x, dest.y, "dive", Math.max(0.18, Math.min(0.35, dd / 170)));
+            }
+          }
+        }
+      }
 
       // Stuck detection: a unit with a move order that makes almost no
       // progress for a full second is wedged — on a blocker corner, in a
@@ -5790,11 +5884,81 @@ export class GameEngine {
     }
   }
 
+  /** Start a leap (Phase B): a dolphin dive or an obstacle
+   * vault. Orders and chase are cleared — the arc is the
+   * movement now — and any burst in flight dies with it. */
+  private startLeap(u: Unit, tx: number, ty: number, kind: "dive" | "vault", dur: number) {
+    u.leapFromX = u.x;
+    u.leapFromY = u.y;
+    u.leapToX = tx;
+    u.leapToY = ty;
+    u.leapDur = dur;
+    u.leapT = dur;
+    u.leapKind = kind;
+    u.leapP = 0;
+    u.orders = [];
+    u.chase = [];
+    u.burst = 0;
+    u.burstTarget = null;
+    u.facing = Math.atan2(ty - u.y, tx - u.x);
+  }
+
+  /** The PRONE button / X key (Josh, 2026-11-13): pressed
+   * standing still, the leader goes prone and STAYS prone
+   * (the manual latch) until pressed again. Pressed while he
+   * is moving, he DOLPHIN DIVES — a forward leap in his move
+   * direction that lands him prone. His alone: followers and
+   * NPCs keep the auto prone rule. */
+  leaderProneToggle() {
+    if (this.phase !== "battle" || this.autoBattle || this.retreating || this.paused) return;
+    const L = this.leaderUnit();
+    if (!L || L.broken || L.fled || (L.leapT ?? 0) > 0) return;
+    if (L.prone && L.proneLatch) {
+      // Up he gets — the player's word beats the dive hold too.
+      L.proneLatch = false;
+      L.proneHoldUntil = undefined;
+      L.prone = false;
+      L.proneT = this.elapsed;
+      this.dirty = true;
+      return;
+    }
+    L.proneLatch = true;
+    let dx = (this.keys.has("d") ? 1 : 0) - (this.keys.has("a") ? 1 : 0);
+    let dy = (this.keys.has("s") ? 1 : 0) - (this.keys.has("w") ? 1 : 0);
+    if (dx === 0 && dy === 0 && this.touchMove) {
+      dx = this.touchMove.x;
+      dy = this.touchMove.y;
+    }
+    const hasInput = dx !== 0 || dy !== 0;
+    const moving = hasInput || this.elapsed - (L.movedT ?? -9) < 0.18;
+    if (moving) {
+      const ang = hasInput ? Math.atan2(dy, dx) : L.facing;
+      // Full leap if the landing is clear, shorter hops if
+      // not; no clear landing at all means he just drops
+      // where he stands, latched.
+      for (const d of [50, 38, 26]) {
+        const tx = L.x + Math.cos(ang) * d;
+        const ty = L.y + Math.sin(ang) * d;
+        if (!this.pointBlocked(tx, ty)) {
+          this.startLeap(L, tx, ty, "dive", 0.3);
+          this.dirty = true;
+          return;
+        }
+      }
+    }
+    L.prone = true;
+    L.proneT = this.elapsed;
+    this.dirty = true;
+  }
+
   private moveToward(u: Unit, x: number, y: number, dt: number, speedMult = 1) {
     // A deployed MG gunner does not move (Josh, 2026-11-13):
     // every order, chase, anchor and key press funnels through
     // here, and the planted gun answers none of them.
     if (this.deployedBipod(u)) return;
+    // Airborne men do not walk (Phase B): the leap arc owns
+    // their position until it lands.
+    if ((u.leapT ?? 0) > 0) return;
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
     const sx = u.x;
@@ -5827,6 +5991,53 @@ export class GameEngine {
     const step = sp * dt;
     const dx = ((x - u.x) / d) * step;
     const dy = ((y - u.y) / d) * step;
+    // Vaulting (Phase B, Josh 2026-11-13): a footman on the
+    // move whose next step is blocked by a LOW obstacle with
+    // open ground on the far side hops it instead of pathing
+    // around. The only low hard blocker in the grid is a
+    // crate (sandbag lines never block movement at all, so
+    // there is nothing to vault there), and crate props are
+    // placed as one tight three-crate pile, so the check
+    // marches the movement ray: if the blocked run ahead is
+    // short and every blocker it crosses is a crate, he
+    // hops to the first clear ground past the run. Walls,
+    // ruins, hedgerows, buildings, wrecks, hedgehogs and
+    // pillboxes disqualify the run, and a run longer than
+    // the march cap is a wall, not a hop. Vehicles, statics
+    // and prone men never vault.
+    if (!u.vehicle && !u.isStatic && !u.prone && d > 24 && this.pointBlocked(u.x + dx, u.y + dy)) {
+      const dirX = (x - u.x) / d;
+      const dirY = (y - u.y) / d;
+      let crossed = false;
+      let allCrates = true;
+      let runEnd = -1;
+      for (let s = 4; s <= 84; s += 4) {
+        const px = u.x + dirX * s;
+        const py = u.y + dirY * s;
+        if (this.pointBlocked(px, py)) {
+          crossed = true;
+          for (const b of this.blockers) {
+            if (dist(b.x, b.y, px, py) < b.r + 12 && b.kind !== "crate") {
+              allCrates = false;
+              break;
+            }
+          }
+          if (!allCrates) break;
+        } else if (crossed) {
+          runEnd = s;
+          break;
+        }
+      }
+      if (crossed && allCrates && runEnd > 0) {
+        const leapDist = runEnd + 12;
+        const lx = u.x + dirX * leapDist;
+        const ly = u.y + dirY * leapDist;
+        if (!this.pointBlocked(lx, ly)) {
+          this.startLeap(u, lx, ly, "vault", Math.min(0.55, Math.max(0.22, leapDist / 170)));
+          return;
+        }
+      }
+    }
     // Slide along obstacles instead of walking straight into them: the
     // old code moved the full diagonal step and let resolveCollisions
     // push the unit back out every frame, so a unit whose waypoint was
@@ -7702,6 +7913,10 @@ export class GameEngine {
       // knee buckling), then flat on the ground.
       const t = u.deathT ?? 1;
       pose = t < 0.18 ? "hit" : t < 0.5 ? "fall" : "dead";
+    } else if ((u.leapT ?? 0) > 0) {
+      // Airborne (Phase B): a dolphin dive shows the dive
+      // frame; a vault keeps a stride frame under its arc.
+      pose = u.leapKind === "dive" ? "dive" : Math.floor(u.walk / 1.6) % 2 === 0 ? "walkA" : "walkB";
     } else if (this.elapsed - (u.proneT ?? -9) < 0.22) {
       // Just dropped or just rising: the halfway frame.
       pose = "proneDown";
@@ -7761,7 +7976,13 @@ export class GameEngine {
 
     const img = sprite(look.pal, pose, look.weapon, look.head, flip, look.fx);
     const ax = flip ? SPR_W - 1 - FEET_X : FEET_X;
-    const top = feetY - SPR_H * PX;
+    // Leap lift (Phase B): the body rides a sine arc while
+    // airborne; the shadow and selection ring stay on the
+    // ground (they read feetY), everything on the man lifts.
+    const lift = (u.leapT ?? 0) > 0
+      ? Math.round(Math.sin((u.leapP ?? 0) * Math.PI) * (u.leapKind === "dive" ? 8 : 12))
+      : 0;
+    const top = feetY - SPR_H * PX - lift;
     // Recoil kick (Slice 1): in the first frames after a shot
     // the whole man rocks one pixel back against the blast, on
     // top of the shoot pose's own lean. The sprite canvas is

@@ -17,7 +17,7 @@ export const SPR_H = 14;
 export const SPR_SCALE = 2;
 export const FEET_X = 5;
 
-export type Pose = "stand" | "walkA" | "walkB" | "walkC" | "walkD" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "fall" | "prone" | "proneA" | "proneB" | "proneDown";
+export type Pose = "stand" | "walkA" | "walkB" | "walkC" | "walkD" | "shoot" | "crouch" | "hit" | "kneel" | "dead" | "fall" | "prone" | "proneA" | "proneB" | "proneDown" | "dive";
 export type Weapon = "rifle" | "smg" | "mg" | "sniper" | "bazooka" | "panzerfaust" | "pistol" | "mortar" | "flak" | "none" | "thompson" | "springfield" | "mp40" | "carbine" | "trench" | "bar" | "fg42";
 export type Head = "us" | "us-medic" | "stahl" | "para" | "cap" | "officer" | "us-net" | "us-para" | "us-jeep" | "us-pile" | "us-hbt";
 
@@ -85,6 +85,71 @@ function paint(px: Px, dp: Px, pal: Palette, pose: Pose, weapon: Weapon, head: H
     px(9, 8, SKIN_D);
     if (head === "us-medic") { px(9, 6, "#D8D6C8"); px(9, 7, "#A0302A"); }
     if (weapon !== "none" && weapon !== "flak" && weapon !== "mortar") for (let x = 3; x <= 9; x++) px(x, 13, x < 5 ? WOOD : METAL);
+    return;
+  }
+  if (pose === "dive") {
+    // The dolphin dive (Phase B, Josh 2026-11-13): fully
+    // airborne and horizontal — legs trailing straight behind
+    // with the boots kicked up, body flat, BOTH arms thrown
+    // forward past the head to take the landing, the weapon
+    // clutched underneath him. Same horizontal read as the
+    // prone family, but stretched longer and reaching.
+    px(0, 8, pal.boots); // trailing boots, kicked up
+    px(1, 8, pal.boots);
+    px(0, 9, pal.boots);
+    px(1, 9, pal.pantsDark);
+    for (let x = 1; x <= 5; x++) {
+      px(x, 10, pal.pants);
+      px(x, 11, pal.pantsDark);
+    }
+    px(2, 9, pal.pants); // legs together, straight out
+    px(3, 9, pal.pants);
+    for (let x = 5; x <= 10; x++) {
+      for (let y = 9; y <= 11; y++) {
+        let c = y === 11 ? pal.uniDark : pal.uni;
+        if (pal.camo && (x * 7 + y * 3) % 4 === 0) c = pal.camo[(x + y) % pal.camo.length];
+        px(x, y, c);
+      }
+    }
+    px(7, 10, pal.gear); // pack strap across the back
+    // Both arms stretched forward past the head.
+    px(11, 9, pal.uni);
+    px(12, 9, pal.uni);
+    px(13, 9, pal.uniDark);
+    px(14, 9, SKIN_D); // leading hand, fingers first
+    px(15, 9, SKIN);
+    px(11, 10, pal.uni);
+    px(12, 10, pal.uniDark);
+    px(13, 10, SKIN_D); // second hand just under the first
+    px(14, 10, SKIN);
+    // Head at the front, chin up, eyes on the landing.
+    for (let x = 10; x <= 12; x++) px(x, 6, pal.helmetHi);
+    for (let x = 10; x <= 12; x++) px(x, 7, pal.helmet);
+    for (let x = 9; x <= 12; x++) px(x, 8, pal.helmet); // brim
+    px(11, 8, SKIN);
+    px(12, 8, SKIN);
+    dp(12 * 2 + 1, 8 * 2 + 1, SKIN_D); // jaw shade at native density
+    if (head === "us-medic") { px(11, 6, "#D8D6C8"); px(11, 7, "#A0302A"); }
+    if (head === "us-jeep" || head === "us-pile" || head === "us-hbt") {
+      const capTone = head === "us-hbt" ? "#6A7050" : head === "us-pile" ? "#6B6C52" : "#565840";
+      for (let x = 10; x <= 12; x++) { px(x, 6, capTone); px(x, 7, capTone); px(x, 8, capTone); }
+      if (head === "us-pile") { px(9, 8, "#4C4E38"); px(9, 9, "#4C4E38"); }
+    }
+    if (head === "us-net") { px(10, 6, pal.uniDark); px(12, 7, pal.uniDark); px(9, 8, "#4A5232"); }
+    if (head === "us-para") { px(9, 8, "#2E2A20"); px(9, 9, "#2E2A20"); }
+    // The weapon clutched under the chest, muzzle forward.
+    if (weapon === "rifle" || weapon === "carbine") {
+      for (let x = 8; x <= 13; x++) px(x, 12, x <= 10 ? WOOD : METAL);
+    } else if (weapon === "mg" || weapon === "bar" || weapon === "fg42") {
+      for (let x = 8; x <= 13; x++) px(x, 12, METAL);
+    } else if (weapon === "sniper" || weapon === "springfield") {
+      for (let x = 8; x <= 13; x++) px(x, 12, METAL);
+      px(11, 11, METAL); // scope digging into the ribs
+    } else if (weapon === "thompson" || weapon === "mp40" || weapon === "smg" || weapon === "pistol" || weapon === "trench") {
+      for (let x = 9; x <= 12; x++) px(x, 12, METAL);
+    } else if (weapon === "bazooka") {
+      for (let x = 7; x <= 12; x++) { px(x, 12, "#4A5234"); px(x, 13, "#3E4A34"); }
+    }
     return;
   }
   if (pose === "proneDown") {

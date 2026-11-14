@@ -180,6 +180,17 @@ export default function TouchControls({ engineRef, disabled, formation, squadOrd
         ABILITY
       </button>
 
+      {/* Prone: beside Ability, same ghost style (Phase B,
+          Josh 2026-11-13). Still = drop and stay down; hit it
+          while moving and the leader dolphin dives. */}
+      <button
+        data-testid="touch-prone-btn"
+        className="pointer-events-auto absolute bottom-44 right-24 flex h-16 w-16 items-center justify-center rounded-full border border-[#4ECDC4]/60 bg-[#0E2A28]/40 font-mono text-[10px] font-bold tracking-wider text-[#9BE8E0]"
+        onClick={() => eng()?.leaderProneToggle()}
+      >
+        PRONE
+      </button>
+
       {/* The sticks */}
       <div className="absolute bottom-5 left-4">
         <Stick label="MOVE" accent="#4ECDC4" onVector={(v) => eng()?.setTouchMove(v)} />
