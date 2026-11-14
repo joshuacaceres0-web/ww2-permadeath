@@ -181,7 +181,7 @@ describe("cowards", () => {
     expect(hud().units.find((u) => u.soldierId === "s1")!.coward).toBe(true);
   });
 
-  it("a broken volks runs for the edge and deserts, and the wave loses a gun", async () => {
+  it("a broken volks runs for the edge and deserts, and the enemy loses a gun", async () => {
     const { e, hud } = await makeEngine();
     (e as unknown as { fleeChance: number }).fleeChance = 1; // the roll always lands
     const volks = e.units.find((u) => u.side === "axis" && u.enemyType === "volks")!;
@@ -189,14 +189,16 @@ describe("cowards", () => {
     volks.x = 600; volks.y = 100; // near the north edge: he flees north, away from the squad
     const startX = volks.x;
     const startY = volks.y;
-    expect(e.enemiesAlive()).toBe(3);
+    // CONQUEST: the fixture's full force (6 across all three
+    // groups) is on the field from the start, not just group 1.
+    expect(e.enemiesAlive()).toBe(6);
     breakAndHold(e, volks, 8);
     expect(volks.alive).toBe(false);
     expect(volks.fled).toBe(true);
     // He ran for the nearest edge (not always east — he spawns at the
     // beach now, so it may be north, south or west): he moved.
     expect(Math.hypot(volks.x - startX, volks.y - startY)).toBeGreaterThan(0);
-    expect(e.enemiesAlive()).toBe(2);
+    expect(e.enemiesAlive()).toBe(5);
     expect(hud().log.map((l) => l.text).join(" ")).toMatch(/broke and ran off the field/);
     expect((e as unknown as { fallen: Array<{ soldierId: string }> }).fallen.length).toBe(0);
   });

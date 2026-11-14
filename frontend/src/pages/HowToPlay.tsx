@@ -34,7 +34,7 @@ export default function HowToPlay() {
           ))}
         </ol>
         <p className="mt-6 font-mono text-xs text-[#5A664F]">
-          Desktop: you drive your team leader — WASD to move, left click to shoot, right click or Q for his ability, 1 / 2 / 3 for squad orders (Attack, Defend, Form up), F for formation, Esc for the battle menu. Phone: left stick moves the leader, right stick aims and fires, buttons for ability, orders and radio.
+          Desktop: you drive your team leader — WASD to move, left click to shoot (hold it down for automatic fire), hold right click to aim for straighter shots, Q for his ability, C to drop prone (hit it while moving and he dolphin dives; press it again to stand), G sends the squad to cover, 1 / 2 / 3 for squad orders (Attack, Defend, Form up), F for formation, Esc for the battle menu. Phone: left stick moves the leader, right stick aims and fires, buttons for ability, orders and radio.
         </p>
       </div>
     </div>

@@ -52,8 +52,9 @@ describe("stalemate breaker", () => {
     // test is about the breaker in a true stalemate; counter-attacks
     // are covered by enemy-tanks.test.ts.
     e.counterAttacks = 2;
-    // Bring in wave 2 so the static MG42 exists, then set up the stalemate.
-    (e as { spawnWave: (i: number) => void }).spawnWave(1);
+    // CONQUEST (Phase D): the static MG42 (the fixture's second
+    // deployment group) is on the field from setup — no wave to
+    // bring in. Set up the stalemate from the deployed force.
     const units = e.units as Array<Record<string, unknown>>;
     // Stalemate setup: only the player squad (west) and one static MG42
     // (east, 1900 away — MG42 range is 320) alive. No NPCs, no mobile axis.

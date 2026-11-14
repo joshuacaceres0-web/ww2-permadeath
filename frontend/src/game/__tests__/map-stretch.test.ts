@@ -85,7 +85,8 @@ const SQUAD = [
 ] as never;
 
 type U = Record<string, unknown> & {
-  x: number; y: number; side: string; type: string;
+  x: number; y: number; side: string; type: string; alive: boolean;
+  trenchHold?: boolean;
 };
 type AnyEngine = Record<string, unknown> & {
   units: U[];
@@ -152,27 +153,27 @@ describe("map stretch: 3200 -> 4000 wide", () => {
   );
 
   it.each(["dday", "town", "causeway", "forest"])(
-    "terrain %s spawns wave 2 reinforcements on the new eastern ground",
+    "terrain %s deploys its depth group on the new eastern ground from the start",
     async (terrain) => {
       const e = await makeEngine(terrain);
-      // Wave 1 is the beach garrison (west). Wave 2 is reinforcements
-      // from the east, so drive it in and check it lands east of x=3200.
-      (e as unknown as { spawnWave: (i: number) => void }).spawnWave(1);
+      // CONQUEST (Phase D): the second deployment group is not
+      // a reinforcement wave any more — it is on the eastern
+      // ground from the first minute.
       const east = e.units.filter((u) => u.side === "axis" && u.x > 3200);
-      expect(east.length, `${terrain} must spawn wave 2 enemies east of x=3200`).toBeGreaterThan(0);
+      expect(east.length, `${terrain} must deploy its depth group east of x=3200 at the start`).toBeGreaterThan(0);
     },
   );
 
   it.each(["dday", "town", "causeway", "forest"])(
-    "terrain %s garrisons wave 1 at the beach, in the west",
+    "terrain %s garrisons its first group at the beach, in the west",
     async (terrain) => {
       const e = await makeEngine(terrain);
-      const wave1 = e.units.filter((u) => u.side === "axis" && u.alive);
-      expect(wave1.length).toBeGreaterThan(0);
-      for (const u of wave1) {
-        // Wave 1 is in the first trench line now: the western trench
-        // sits at x 900-1500 depending on terrain.
-        expect(u.x, `${terrain} wave 1 ${u.type} spawned at x=${Math.round(u.x)}, not at the beach`).toBeLessThan(1600);
+      const garrison = e.units.filter((u) => u.side === "axis" && u.alive && u.trenchHold);
+      expect(garrison.length).toBeGreaterThan(0);
+      for (const u of garrison) {
+        // The garrison is in the first trench line: the western
+        // trench sits at x 900-1500 depending on terrain.
+        expect(u.x, `${terrain} garrison ${u.type} spawned at x=${Math.round(u.x)}, not at the beach`).toBeLessThan(1600);
       }
     },
   );

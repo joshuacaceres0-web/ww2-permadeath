@@ -1,7 +1,10 @@
 // @vitest-environment node
 // Phase B of the 2026-11-13 voice-call package (Josh):
 //  - vaulting: a footman on the move hops a low crate with
-//    open ground behind it instead of pathing around;
+//    open ground behind it instead of pathing around —
+//    AI footmen only, per Josh's later amendment the same
+//    day: the player's leader never auto-vaults in manual
+//    play ("player has controlled prone");
 //  - the PRONE button: still = go prone and stay (latch);
 //    moving = DOLPHIN DIVE forward, landing prone with a
 //    minimum hold the auto prone rule cannot undo;
@@ -77,7 +80,8 @@ const TOWN = {
 type U = {
   id: number; side: string; npc: boolean; alive: boolean; x: number; y: number;
   hp: number; maxHp: number; name: string; type: string; prone: boolean; suppression: number;
-  leapT?: number; leapKind?: string; proneLatch?: boolean; proneHoldUntil?: number;
+  leapT?: number; leapKind?: string; leapToX?: number; proneLatch?: boolean; proneHoldUntil?: number;
+  diveReadyAt?: number;
   coverDiveTried?: boolean; coverDestX?: number; coverDestY?: number;
   orders: Array<{ x: number; y: number }>; cover: unknown;
 };
@@ -89,6 +93,8 @@ type Engine = {
   units: U[];
   leaderUnit: () => U | null;
   leaderProneToggle: () => void;
+  setAutoBattle: (on: boolean) => void;
+  moveToward: (u: U, x: number, y: number, dt: number) => void;
   keys: Set<string>;
   elapsed: number;
   isFollower: (u: U) => boolean;
@@ -145,6 +151,65 @@ describe("phase B: vaulting", () => {
     }
     expect(sawVault).toBe(true);
     expect(man.x).toBeGreaterThan(crate!.x + 40);
+  }, 60000);
+});
+
+describe("phase B amendment: auto-vault is AI-only (Josh, 2026-11-13)", () => {
+  // Same staging as the vault test above: a crate pile with
+  // clear ground on both sides.
+  function stageCrateLane(e: Engine) {
+    const laneClear = (b: { x: number; y: number; r: number }) => {
+      for (const p of [{ x: b.x - 45, y: b.y }, { x: b.x + 80, y: b.y }]) {
+        if (e.pointBlocked(p.x, p.y)) return false;
+      }
+      return true;
+    };
+    const crate = e.blockers.find((b) => b.kind === "crate" && laneClear(b));
+    expect(crate).toBeTruthy();
+    return crate!;
+  }
+
+  it("the player's leader, walked by hand into the pile, never vaults", async () => {
+    const e = await makeEngine();
+    e.begin();
+    parkEnemies(e);
+    const crate = stageCrateLane(e);
+    const lead = e.leaderUnit()!;
+    lead.x = crate.x - 45; lead.y = crate.y;
+    lead.suppression = 0;
+    e.keys.add("d"); // the player walks him east, into the pile
+    let sawLeap = false;
+    for (let t = 0; t < 2; t += 0.05) {
+      e.update(0.05);
+      if ((lead.leapT ?? 0) > 0 || lead.leapKind) sawLeap = true;
+    }
+    e.keys.delete("d");
+    // His movement is his hands alone: no leap of either kind
+    // (vault or dive — no prone press happened) in two full
+    // seconds pressed against the crates. Walking around the
+    // pile on foot would be his own doing and is not pinned;
+    // the auto jump is what Josh took out.
+    expect(sawLeap).toBe(false);
+  }, 60000);
+
+  it("the same leader in an AUTO battle — AI-driven — vaults like any footman", async () => {
+    const e = await makeEngine();
+    e.begin();
+    parkEnemies(e);
+    const crate = stageCrateLane(e);
+    const lead = e.leaderUnit()!;
+    lead.x = crate.x - 45; lead.y = crate.y;
+    lead.suppression = 0;
+    e.setAutoBattle(true);
+    // Drive him the way the AI movement drives him: a
+    // destination past the pile, one moveToward per frame.
+    let sawVault = false;
+    for (let i = 0; i < 40 && !sawVault; i++) {
+      e.moveToward(lead as never, crate.x + 80, crate.y, 0.05);
+      if (lead.leapKind === "vault" && (lead.leapT ?? 0) > 0) sawVault = true;
+    }
+    expect(sawVault).toBe(true);
+    expect(lead.leapToX ?? 0).toBeGreaterThan(crate.x);
   }, 60000);
 });
 
@@ -255,6 +320,45 @@ describe("phase B: AI dolphin dives into cover", () => {
       expect(sawDive).toBe(true);
       expect(man.prone).toBe(true); // landed prone...
       expect(man.cover).toBeTruthy(); // ...in the cover he was running for
+    } finally {
+      Math.random = realRandom;
+    }
+  }, 120000);
+
+  it("the dive cooldown binds AI divers too: a man still on cooldown runs the stretch on foot", async () => {
+    const e = await makeEngine();
+    e.begin();
+    const realRandom = Math.random;
+    Math.random = () => 0.1; // the dive roll would pass — the cooldown is the only gate
+    try {
+      const cover = e.covers.find((c) => c.x > 900 && c.x < 3000);
+      expect(cover).toBeTruthy();
+      const foe = e.units.find((u) => u.side === "axis" && u.alive)!;
+      foe.x = cover!.x + 210; foe.y = cover!.y;
+      foe.hp = 100000; foe.maxHp = 100000;
+      const man = e.units.find((u) => u.npc && u.side === "allies" && u.alive && u.type === "rifleman")
+        ?? e.units.find((u) => u.npc && u.side === "allies" && u.alive)!;
+      for (const u of e.units) {
+        if (u === man || u === foe || !u.alive) continue;
+        u.x = u.side === "axis" ? 3900 : 60;
+        u.y = u.side === "axis" ? 60 : 1290;
+        if (u.side === "axis") { u.hp = 100000; u.maxHp = 100000; }
+      }
+      man.x = cover!.x - 160; man.y = cover!.y;
+      man.suppression = 0;
+      // As if he landed a dive a moment ago (Josh, 2026-11-13:
+      // DIVE_COOLDOWN binds every diver). The one-roll-per-run
+      // rule is untouched — this is the backstop behind it.
+      man.diveReadyAt = e.elapsed + 999;
+      (e as unknown as { covers: unknown[] }).covers = [cover];
+      expect(e.seekCover(man as never, 220)).toBe(true);
+      let sawDive = false;
+      for (let t = 0; t < 12; t += 0.05) {
+        e.update(0.05);
+        if (man.leapKind === "dive") sawDive = true;
+      }
+      expect(sawDive).toBe(false);
+      expect(man.x).toBeGreaterThan(cover!.x - 160 + 60); // he ran the stretch on foot instead
     } finally {
       Math.random = realRandom;
     }

@@ -1,5 +1,5 @@
 // VANGUARD '44 battle engine — real-time top-down WW2 tactics with tactical pause,
-// fog of war, suppression, waves, and permadeath reporting. Pure canvas + rAF.
+// fog of war, suppression, conquest control points, and permadeath reporting. Pure canvas + rAF.
 
 import { CAUSES, CRATE_CHANCE, CRATE_RP, ENEMY_TYPES, GUN_DEFS, ITEM_BY_ID, LOOT_RADIUS, UNIT_TYPES, isCowardQuirk, levelBonus, medalBonus, rollCrateItem } from "./data";
 import type { EnemyTypeId, Mission, UnitTypeId } from "@/lib/types";
@@ -70,6 +70,23 @@ const PAN_SPEED = 900;
  * reach him. */
 const CAM_SMOOTH_TIME = 0.09;
 const CAM_SNAP_DIST = 90;
+
+/** Dolphin dive cooldown (Josh, 2026-11-13): a dive covers
+ * its 50 units faster than running does, so chained dives
+ * outran legs. After a man lands a dive he cannot dive again
+ * for this long, measured from the landing (stamped as
+ * diveReadyAt in the leap resolution). The cooldown gates
+ * the LEAP only: a prone press inside it while moving just
+ * drops the man prone in place, and ordinary prone — still
+ * presses, the stand-up toggle — is never cooled down. */
+const DIVE_COOLDOWN = 3.0;
+
+/** Hip fire spread penalty (Josh, 2026-11-13): a mouse shot
+ * taken without aiming flies at this multiple of the
+ * weapon's own spread, so aiming (holding the right mouse
+ * button) reads tighter than hip fire. Aimed shots and all
+ * touch fire use the weapon's spread as-is. Tunable. */
+const HIP_SPREAD_MULT = 2;
 
 /** One axis of a critically damped spring (Unity-style
  * SmoothDamp, no speed cap): returns [next position, next
@@ -233,9 +250,53 @@ export const ENGINEER_DETECT_RANGE = 70;
 export const ENGINEER_CLEAR_RANGE = 26;
 export const ENGINEER_CLEAR_SECONDS = 4;
 export const ENGINEER_SEEK_RANGE = 130;
+/** Revealed-mine avoidance (Josh, 2026-11-13): the radius
+ * of the ring an AI man steers around a marked mine at
+ * (the trigger ring itself is 11, so the ring leaves him
+ * water on every side). Unspotted mines bend nothing —
+ * for the men, they are not there. */
+export const MINE_AVOID_RANGE = 26;
 /** Reloading (Josh, 2026-11-13): a pinned man's hands shake,
  * so his reload takes half again as long. */
 export const RELOAD_PINNED_MULT = 1.5;
+/** CONQUEST (Phase D, Josh, 2026-11-13): the trench lines are
+ * control points, and holding every one of them at once wins
+ * the battle. A point is one dug trench line: the terrain
+ * builder lays a line's cover spots 22 units apart (with
+ * 120-wide gaps at the crossings), and separate lines stand
+ * 360+ units apart, so spots chained within POINT_LINK_DIST
+ * belong to the same line. A footman holds ground for his
+ * side when he stands within POINT_PRESENCE_DIST of any of
+ * the line's spots — in the trench, in plain terms. */
+export const POINT_LINK_DIST = 160;
+/** How close to a trench spot a footman must stand to count
+ * as holding that point (the spots themselves have r 14). */
+export const POINT_PRESENCE_DIST = 46;
+/** Seconds of uncontested presence to flip a point to the
+ * side holding it. Contested ground (both sides present)
+ * freezes the clock; ground the challenger has left bleeds
+ * progress back at the same rate. */
+export const CAPTURE_TIME = 6;
+/** Retake pressure: every RETAKE_INTERVAL seconds, each
+ * trench line the player holds gets up to RETAKE_PARTY enemy
+ * footmen ordered onto it to take it back. */
+export const RETAKE_INTERVAL = 12;
+export const RETAKE_PARTY = 3;
+/** Grenade fuse (Josh, 2026-11-13): a thrown frag does not
+ * burst the moment it lands — it sits where it fell, live and
+ * visible, and goes off this many seconds after the throw.
+ * One number: tune it here. */
+export const GRENADE_FUSE = 2.0;
+/** Max frag throw range (Josh, 2026-11-13): a man can only
+ * throw a grenade this far. A throw ordered past the cap
+ * still happens — the grenade lands at the cap, on the same
+ * line. One number: tune it here. */
+export const GRENADE_THROW_RANGE = 200;
+/** Grenade scatter margin (Josh, 2026-11-13): an AI footman
+ * runs from a live frag when its landing point is inside the
+ * blast radius plus this margin — he wants this much water
+ * between himself and the burst, not just survival. */
+export const GRENADE_FLEE_MARGIN = 30;
 
 /** Tank armour and turrets (Josh, 2026-11-13): a tank's hide
  * turns small arms — only tank guns, anti-tank weapons and
@@ -389,9 +450,10 @@ interface Unit {
   /** A counter-attacker: spawned by a random counter-attack, he charges
    * the player's squad and ignores the camp-and-defend rule. */
   counterAttack: boolean;
-  /** Aggressive: a Wave 2 or Wave 3 man. He charges on spawn instead
-   * of camping and defending — the reinforcements come at the player,
-   * they do not wait to be found. Same charge as a counter-attacker. */
+  /** Aggressive: a man who charges instead of camping and
+   * defending — counter-attackers and retreat flankers. Deployment
+   * groups are never aggressive (CONQUEST, 2026-11-13: the old
+   * aggressive reinforcement waves are gone). */
   aggressive?: boolean;
   /** Garrison home (where the man spawned) and his current patrol
    * target. A camping enemy patrols around his home instead of
@@ -620,8 +682,13 @@ interface Unit {
    * (battle time), so the auto prone rule cannot pop him
    * straight back up. */
   proneHoldUntil?: number;
-  /** The leader's manual prone latch (PRONE button / X key):
-   * set, he stays prone until the player toggles him up. */
+  /** Battle time at which this man may dolphin dive again:
+   * landing time + DIVE_COOLDOWN, stamped when a dive lands.
+   * Undefined until his first dive. */
+  diveReadyAt?: number;
+  /** The leader's manual prone latch (PRONE button / C key,
+   * X still works too): set, he stays prone until the player
+   * toggles him up. */
   proneLatch?: boolean;
   /** The cover spot the current cover run is heading for
    * (stamped by seekCover) and whether this run's dolphin
@@ -664,6 +731,13 @@ interface Bullet {
   sourceType: string;
   killerId: number | null;
   ally: boolean;
+  /** The leader's manual shots only (Josh, 2026-11-13): the
+   * round dies after travelling this far from the muzzle —
+   * his weapon's range. Clicking past his range means the
+   * rounds fall short, never that the click is refused. AI
+   * fire sets no cap and behaves exactly as it always has:
+   * range there is an acquisition rule, not a travel rule. */
+  maxTravel?: number;
 }
 
 interface Projectile {
@@ -682,6 +756,12 @@ interface Projectile {
   sourceType: string;
   killerId: number | null;
   smokeT: number;
+  /** A thrown frag's fuse (Josh, 2026-11-13): seconds left
+   * until it bursts, counted from the throw. While it runs
+   * the grenade sits where it landed instead of exploding on
+   * arrival. Undefined on everything else — mortar shells,
+   * rockets and the satchel charge still burst on arrival. */
+  fuseT?: number;
   /** True once this shell's incoming whistle has been played
    * (about a second before impact; the only warning a mortar
    * round gives now). */
@@ -771,8 +851,14 @@ export interface HudSnapshot {
   units: HudUnit[];
   selectedIds: number[];
   enemiesAlive: number;
+  /** Conquest: there are no waves any more. These two fields
+   * stay at 1/1 so the snapshot shape does not change. */
   wave: number;
   waves: number;
+  /** CONQUEST: trench lines held by the player's squad, of
+   * the lines on the map. Holding all of them at once wins. */
+  pointsHeld: number;
+  pointsTotal: number;
   aimUnitId: number | null;
   log: LogLine[];
   formation: Formation;
@@ -831,6 +917,28 @@ export interface SupplyCrate {
   x: number;
   y: number;
   looted: boolean;
+}
+
+/** A conquest control point (Phase D, 2026-11-13): one dug
+ * trench line. `spots` are the line's trench cover positions;
+ * a footman standing within POINT_PRESENCE_DIST of any spot
+ * holds ground there for his side. `progress` is the seconds
+ * of uncontested presence the challenging side has banked
+ * toward flipping the point. Points start in enemy hands:
+ * the defense owns the ground until the squad takes it. */
+export interface ControlPoint {
+  id: number;
+  /** Letter label, west to east: A, B, C. */
+  label: string;
+  /** Centroid of the line's spots: where the marker is
+   * drawn. Orders go to the trench spot nearest it (see
+   * standSpot) — the centroid can sit in a gap in the line. */
+  x: number;
+  y: number;
+  owner: "axis" | "allies";
+  progress: number;
+  contested: boolean;
+  spots: Array<{ x: number; y: number }>;
 }
 
 export interface BattleReport {
@@ -1237,9 +1345,14 @@ export class GameEngine {
   private fogT = 0;
 
   private nextId = 1;
+  /** The current deployment group index. Under CONQUEST
+   * (2026-11-13) every group deploys at setup and this stays
+   * parked; it survives because the replay recorder reads it
+   * for the frame's wave field (always group 1 now). */
   private waveIndex = 0;
+  /** The mission's enemy specs, grouped by their deployment
+   * group (the old wave number). All groups deploy at setup. */
   private waves: Array<Array<{ type: EnemyTypeId; count: number }>> = [];
-  private nextWaveT = 0;
   /** Coward chance: the share of Volkssturm conscripts who are
    * cowards. A coward is only a man who CAN flee — the flee itself
    * is a separate roll (fleeChance) each time he breaks. */
@@ -1258,8 +1371,10 @@ export class GameEngine {
    * number above, and break more often besides (doubled nerve loss),
    * so they are still the ones who usually run. */
   private fleeChanceNormal = 0.1;
-  /** Enemy radio: seconds until this wave's Funker calls in 2 more men,
-   * and whether this wave's one call-in has already happened. */
+  /** Enemy radio: seconds until the Funker's one call-in of 2
+   * more men, and whether it has already happened. It used to
+   * re-arm per wave; with no waves (CONQUEST, 2026-11-13) it
+   * arms once per battle. */
   private enemyRadioT = 0;
   /** Random counter-attacks: seconds until the next one, and how many
    * have already happened this battle (at most COUNTER_ATTACK_MAX).
@@ -1286,6 +1401,14 @@ export class GameEngine {
   /** Supply crates on this map, and the RP looted from them. Crates
    * are public so the replay recorder and tests can read them. */
   crates: SupplyCrate[] = [];
+  /** CONQUEST control points: the map's trench lines, built at
+   * setup. Public so tests can read the capture state. */
+  points: ControlPoint[] = [];
+  /** Seconds since the last retake order issue (see RETAKE_INTERVAL). */
+  private retakeT = 0;
+  /** Seconds since the AUTO capture driver last re-issued
+   * mop-up orders (see updatePoints). */
+  private autoCaptureT = 0;
   private lootRp = 0;
   private lootItem: string | null = null;
   /** Crate chance: the roll for whether this battle has a supply
@@ -1324,7 +1447,28 @@ export class GameEngine {
   // test driver, never as a player mode.
   private leaderId: number | null = null;
   private squadOrder: SquadOrder = "formup";
-  private manualShot: { x: number; y: number; until: number } | null = null;
+  /** A queued click shot. targetId: the enemy the click's
+   * aim snap landed on, if any (the AT man's bazooka answers
+   * a vehicle snap, nothing else reads it — the shot itself
+   * stays a point, never a lock). src: which input queued
+   * it; hip spread applies to mouse shots only. */
+  private manualShot: { x: number; y: number; until: number; targetId?: number; src?: "mouse" | "touch" } | null = null;
+  /** Click-fire feedback (Josh, 2026-11-13): when a state
+   * gate (reloading, pinned, crawling) eats a click, the
+   * reason floats at the click point instead of silence.
+   * Distance NEVER produces one: the trigger is not refused
+   * for range. Same reason at most once a second. */
+  private clickTags: { x: number; y: number; text: string; until: number }[] = [];
+  private lastTagAt = new Map<string, number>();
+  /** Left mouse button currently held down on the canvas:
+   * automatics keep firing at the cursor while it lasts. */
+  private mouseHeld = false;
+  /** Right mouse button currently held: the leader is in
+   * AIM MODE (Josh, 2026-11-13) — his shots use the weapon's
+   * own spread and the range ring shows, instead of hip
+   * fire's doubled spread. Mouse only; touch has no aim
+   * mode and never pays the hip penalty. */
+  private aiming = false;
   // Twin-stick touch (Josh, 2026-11-12): the left stick drives
   // the leader like WASD, the right stick aims and fires him.
   private touchMove: { x: number; y: number } | null = null;
@@ -1445,7 +1589,6 @@ export class GameEngine {
     this.paused = false;
     this.battleState = "active";
     this.waveIndex = 0;
-    this.nextWaveT = 0;
     this.enemyRadioT = 0;
     this.enemyRadioCalled = false;
     this.counterAttackT = 45 + Math.random() * 45;
@@ -1480,6 +1623,11 @@ export class GameEngine {
     this.blockers = built.blockers;
     this.blocked = buildBlockedGrid(built.blockers);
     this.covers = built.covers;
+    // CONQUEST: the trench lines on this map are the control
+    // points (built from the trench cover the terrain laid down).
+    this.points = this.buildPoints();
+    this.retakeT = 0;
+    this.autoCaptureT = 0;
     this.hedgehogs = built.blockers.filter((b) => b.kind === "hedgehog");
     this.foliage = built.blockers.filter((b) => b.kind === "tree" || b.kind === "bush");
     // Beach mines (Josh's suggestion, 2026-11-12): Tellermines in
@@ -1531,6 +1679,10 @@ export class GameEngine {
     // experienced man deployed. Selection locks onto him.
     this.squadOrder = "formup";
     this.manualShot = null;
+    this.clickTags = [];
+    this.lastTagAt.clear();
+    this.mouseHeld = false;
+    this.aiming = false;
     const roster = this.units.filter((u) => u.side === "allies" && !u.npc && u.soldierId);
     const picked = leaderSoldierId ? roster.find((u) => u.soldierId === leaderSoldierId) : undefined;
     const lead = picked ?? this.mostExperienced(roster);
@@ -1550,7 +1702,17 @@ export class GameEngine {
     // drop zone AUTO went 0 for 6, wiped in under 71 seconds.
     const npcAllies = mission.terrain === "dday" ? 32 : 12;
     this.spawnNpcAllies(npcAllies, rng);
-    this.spawnWave(0);
+    // CONQUEST (Phase D, Josh, 2026-11-13): there are no waves.
+    // The mission's enemy specs are deployment groups now, and
+    // the FULL force takes the field at setup — group 1 in the
+    // prepared positions (the trench garrison, the beach lines),
+    // groups 2 and 3 in depth in the east, camped and defending
+    // like any garrison. Nothing arrives later; what you see at
+    // the start is everything they have. (spawnWave still stamps
+    // waveIndex per group; park it back at 0 — the replay
+    // recorder's wave field reads 1, as it should with no waves.)
+    for (let i = 0; i < this.waves.length; i++) this.spawnWave(i);
+    this.waveIndex = 0;
     // Intro sequences: built here, run by update() after begin().
     this.boats = [];
     this.planes = [];
@@ -1984,26 +2146,107 @@ export class GameEngine {
    * now (a snapshot, not a lock) and a click on open ground
    * aims at the point — either way it is the same short
    * manualShot window, and fire input NEVER sets attackId,
-   * so the leader never chases or tracks a clicked target. */
+   * so the leader never chases or tracks a clicked target.
+   * And he shoots WHEREVER the player clicks (Josh, later
+   * the same day: "I need to be able to shoot wherever I
+   * click"): distance never refuses the trigger — the
+   * rounds fly toward the point and fall at his weapon's
+   * range. Only the state gates (reloading, pinned in the
+   * open, prone and crawling) can still eat a click, and
+   * those now say so at the click point. */
   leaderShootAt(x: number, y: number) {
     if (this.phase !== "battle" || this.autoBattle || this.retreating) return;
+    // A click during the intro cinematic queues nothing:
+    // elapsed is frozen while it runs, so a shot stamped
+    // then would still be "fresh" when combat starts and
+    // fire late at a stale point.
+    if (this.introT >= 0) return;
     const L = this.leaderUnit();
     if (!L || L.broken) return;
+    const aim = this.snapAim(x, y);
+    this.manualShot = { x: aim.x, y: aim.y, until: this.elapsed + 1.5, targetId: aim.target?.id, src: "mouse" };
+    this.clickFireFeedback(L, aim.x, aim.y, aim.target);
+    this.dirty = true;
+  }
+
+  /** The click's aim point: the point itself, or the enemy
+   * standing on it (within snap distance) — his position
+   * right now, never a lock-on. */
+  private snapAim(x: number, y: number): { x: number; y: number; target: Unit | null } {
     let tx = x;
     let ty = y;
+    let target: Unit | null = null;
     let bestD = 30;
     for (const u of this.units) {
       if (u.side !== "axis" || !u.alive) continue;
       const d = dist(x, y, u.x, u.y);
-      if (d < bestD) { tx = u.x; ty = u.y; bestD = d; }
+      if (d < bestD) { tx = u.x; ty = u.y; target = u; bestD = d; }
     }
-    this.manualShot = { x: tx, y: ty, until: this.elapsed + 1.5 };
+    return { x: tx, y: ty, target };
+  }
+
+  /** Is the leader under movement input right now — the
+   * same signals the prone toggle reads. */
+  private leaderMovingInput(L: Unit): boolean {
+    const dx = (this.keys.has("d") ? 1 : 0) - (this.keys.has("a") ? 1 : 0);
+    const dy = (this.keys.has("s") ? 1 : 0) - (this.keys.has("w") ? 1 : 0);
+    if (dx !== 0 || dy !== 0) return true;
+    if (this.touchMove && (this.touchMove.x !== 0 || this.touchMove.y !== 0)) return true;
+    return this.elapsed - (L.movedT ?? -9) < 0.18;
+  }
+
+  /** The state gate that would eat this click, if any —
+   * evaluated with the manual branch's own rules, in the
+   * order a player can act on them: the man's state first,
+   * then his weapon's. Distance is NEVER a reason (Josh,
+   * 2026-11-13): the trigger is not refused for range. */
+  private clickBlockReason(L: Unit, tx: number, ty: number, target: Unit | null): string | null {
+    if (L.pinned && !L.cover) return "Pinned down";
+    if (L.prone && this.leaderMovingInput(L)) return "Can't fire while crawling";
+    const s = this.sidearmOf(L);
+    if (s) {
+      // The AT man: a vehicle snap inside the bazooka's
+      // reach is the tube's shot and answers to its reload;
+      // every other click is the trench gun's.
+      if (target?.vehicle && dist(L.x, L.y, tx, ty) <= L.range) {
+        if (L.reloadT > 0) return "Reloading";
+      } else if (L.altReloadT > 0) return "Reloading";
+    } else if (L.reloadT > 0) return "Reloading";
+    return null;
+  }
+
+  /** Float the blocking reason at the click point,
+   * throttled: the same reason at most once a second, so
+   * click spam (or holding through a reload) does not flood
+   * the field. */
+  private clickFireFeedback(L: Unit, tx: number, ty: number, target: Unit | null) {
+    const reason = this.clickBlockReason(L, tx, ty, target);
+    if (!reason) return;
+    if (this.elapsed - (this.lastTagAt.get(reason) ?? -9) < 1) return;
+    this.lastTagAt.set(reason, this.elapsed);
+    this.clickTags.push({ x: tx, y: ty, text: reason, until: this.elapsed + 0.9 });
+    if (this.clickTags.length > 6) this.clickTags.shift();
     this.dirty = true;
   }
 
-  /** Right click in battle: the leader uses his class ability,
-   * aimed abilities landing at the clicked point, exactly like
-   * pressing Q and clicking there in one motion. */
+  /** Is this man's current weapon full-auto (Josh,
+   * 2026-11-13)? An equipped looted gun answers from its
+   * own def; otherwise the class weapon — and only the MG
+   * class gun is automatic. The set: MG class gun, Thompson,
+   * MP40, BAR, FG42. Everything else fires once per press. */
+  private autoWeapon(u: Unit): boolean {
+    for (const g of u.equipment) {
+      const def = GUN_DEFS[g];
+      if (def) return !!def.auto;
+    }
+    return u.type === "mg";
+  }
+
+  /** The leader's class ability at a point, in one motion:
+   * arm and cast together. In play the ability is armed
+   * with Q alone and cast by the next left click (Josh,
+   * 2026-11-13: right click is AIM MODE now, not the
+   * ability); this direct helper is what the tests drive. */
   leaderAbilityAt(x: number, y: number) {
     if (this.phase !== "battle" || this.retreating) return;
     const L = this.leaderUnit();
@@ -2463,7 +2706,7 @@ export class GameEngine {
     return (u.side === "allies" && u.type === "radioman") || this.isFunker(u);
   }
 
-  /** The Funker's call-in: 2 fresh Volkssturm from the east edge, once per wave. */
+  /** The Funker's call-in: 2 fresh Volkssturm from the east edge, once per battle. */
   private spawnEnemyCallIn() {
     const rng = Math.random;
     for (let i = 0; i < 2; i++) {
@@ -2559,33 +2802,10 @@ export class GameEngine {
     this.pushLog("Enemy radio: the Funker rallies his men.", "info");
   }
 
-  /** Fresh allies for the next wave: 2 weak 2nd Platoon riflemen from the west edge. */
-  private spawnWaveAllies(n: number) {
-    const rng = Math.random;
-    // Wave-clear men join a living NPC squad (Josh, 2026-11-12):
-    // the smallest one, so squads fill back up instead of a new
-    // pair wandering alone. When every squad is gone they form a
-    // fresh one and the first man leads it.
-    const living = new Map<number, number>();
-    let maxSquad = -1;
-    for (const u of this.units) {
-      if (u.npcSquad === undefined) continue;
-      maxSquad = Math.max(maxSquad, u.npcSquad);
-      if (u.npc && u.alive) living.set(u.npcSquad, (living.get(u.npcSquad) ?? 0) + 1);
-    }
-    let squadIdx: number;
-    if (living.size) {
-      squadIdx = [...living.entries()].sort((a, b) => a[1] - b[1] || a[0] - b[0])[0][0];
-    } else {
-      squadIdx = maxSquad + 1;
-    }
-    const fresh = living.size === 0;
-    for (let i = 0; i < n; i++) {
-      const py = 120 + (i * (MAP_H - 240)) / Math.max(1, n - 1) + rng() * 40;
-      this.addNpc("rifleman", 90 + rng() * 80, py, this.nextId + i, rng(), true, squadIdx, fresh && i === 0);
-    }
-    this.pushLog(`2nd Platoon sends ${n} fresh men up the line.`, "info");
-  }
+  // spawnWaveAllies is gone (CONQUEST, 2026-11-13): it sent 2
+  // fresh 2nd Platoon riflemen in whenever a wave was cleared,
+  // and there are no waves to clear. The platoon takes the
+  // field whole at setup, like the enemy does.
 
   canReinforce(): boolean {
     return this.phase === "battle" && this.battleState === "active" && !this.retreating && this.reinforcements < MAX_REINFORCEMENTS && this.radioLive() && this.commanderLevel >= RADIO_CALL_LEVEL.reinforce;
@@ -3066,7 +3286,7 @@ export class GameEngine {
     // Selection works in the briefing too, so the squad can be picked
     // before BEGIN THE ASSAULT: the old code returned here for the whole
     // briefing, so 1-8, 0 and Esc did nothing until the battle started
-    // and the controls looked dead. Orders (right-click, Q, C, F) still
+    // and the controls looked dead. Orders (Q, G, F) still
     // need the battle to be running.
     if (k === "0") {
       this.selectAll();
@@ -3104,7 +3324,12 @@ export class GameEngine {
       return;
     }
     if (this.phase === "briefing") return;
-    if (k === "c") {
+    if (k === "g") {
+      // TAKE COVER lives on G now (Josh, 2026-11-13): C is
+      // the prone key (below), so the cover order moved here
+      // rather than vanish — G for "Get down!", its own log
+      // line. The COVER button calls takeCover() directly and
+      // is unaffected.
       this.takeCover();
       return;
     }
@@ -3118,9 +3343,14 @@ export class GameEngine {
       if (lead) this.startAim(lead.id);
       return;
     }
-    if (k === "x") {
-      // PRONE (Phase B): still = drop and stay down; moving
-      // = dolphin dive. Pressing it again stands him up.
+    if (k === "c" || k === "x") {
+      // PRONE (Josh, 2026-11-13): C is the desktop prone key,
+      // wired to the same toggle as the touch PRONE button —
+      // still = drop and stay down (latch); moving = dolphin
+      // dive. Pressing it again stands him up. C used to be
+      // Take Cover; that order moved to G (above) instead of
+      // being dropped. X, the Phase B key, stays wired to the
+      // same toggle so the older habit keeps working.
       this.leaderProneToggle();
       return;
     }
@@ -3154,10 +3384,14 @@ export class GameEngine {
       return;
     }
     if (e.button === 2) {
-      // Battle: right click is the leader's ability at that
-      // point. Everywhere else it stays the classic move order.
-      if (this.phase === "battle" && !this.autoBattle) {
-        this.leaderAbilityAt(p.x, p.y);
+      // Battle: holding the right button is AIM MODE (Josh,
+      // 2026-11-13) — the ability moved off right click
+      // entirely and lives on Q alone, exactly as Q has
+      // always worked (Q arms, left click casts). Everywhere
+      // else right click stays the classic move order.
+      if (this.phase === "battle" && !this.autoBattle && e.pointerType !== "touch") {
+        this.aiming = true;
+        this.dirty = true;
         return;
       }
       this.issueOrder(p.x, p.y, e.shiftKey);
@@ -3173,6 +3407,9 @@ export class GameEngine {
     if (this.phase === "battle" && !this.autoBattle && e.pointerType !== "touch") {
       // Battle: left click is the leader's trigger. No marquee,
       // no per-man selection: the squad is the leader's now.
+      // The press also starts a possible hold: automatics
+      // keep firing while the button stays down.
+      this.mouseHeld = true;
       this.leaderShootAt(p.x, p.y);
       return;
     }
@@ -3213,9 +3450,23 @@ export class GameEngine {
 
   private onPointerLeave = () => {
     this.mouse = { ...this.mouse, inside: false };
+    this.mouseHeld = false;
+    this.aiming = false;
   };
 
   private onPointerUp = (e: PointerEvent) => {
+    if (e.pointerType !== "touch" && e.button === 2) {
+      this.aiming = false; // aim mode lasts only while held
+    }
+    if (e.pointerType !== "touch" && e.button === 0) {
+      this.mouseHeld = false;
+      // Release ends the shot: a held automatic stops with
+      // the button, and a plain click does not keep firing
+      // on its window after the finger lifts.
+      if (this.manualShot?.src === "mouse") {
+        this.manualShot.until = Math.min(this.manualShot.until, this.elapsed + 0.1);
+      }
+    }
     if (this.touchPan) {
       const tp = this.touchPan;
       this.touchPan = null;
@@ -3293,7 +3544,16 @@ export class GameEngine {
     }
     if (target) {
       for (const u of squad) {
-        u.attackId = target.id;
+        // Phase A (Josh, 2026-11-13): the team leader never
+        // takes a target lock. His fire is his player's
+        // clicks — snapshot shots, never an acquisition the
+        // engine then tracks and shoots on its own (the
+        // generic fire branch follows attackId, and this
+        // order takes manual control back as it lands, so a
+        // lock written here would auto-fire him in manual
+        // play). A fire-concentration order locks his men,
+        // not him.
+        if (u.id !== this.leaderId) u.attackId = target.id;
         if (!queue) u.orders = [];
       }
       this.pushLog(`Fire concentration on ${ENEMY_TYPES[target.enemyType!].label}.`, "info");
@@ -3308,11 +3568,20 @@ export class GameEngine {
   private castGround(u: Unit, x: number, y: number) {
     const spec = UNIT_TYPES[u.type].ability;
     if (u.type === "rifleman") {
+      // Max throw range (Josh, 2026-11-13): the throw is a
+      // property of the man's arm, not of the click — a cast
+      // ordered past GRENADE_THROW_RANGE still throws, and
+      // the grenade lands at the cap along the same line.
+      // Every frag in the game is born here (leader ability,
+      // followers, NPC allies), so the cap binds them all.
+      const d0 = dist(u.x, u.y, x, y);
+      const tx = d0 > GRENADE_THROW_RANGE ? u.x + ((x - u.x) / d0) * GRENADE_THROW_RANGE : x;
+      const ty = d0 > GRENADE_THROW_RANGE ? u.y + ((y - u.y) / d0) * GRENADE_THROW_RANGE : y;
       this.projectiles.push({
-        x: u.x, y: u.y, sx: u.x, sy: u.y, tx: x, ty: y, t: 0,
-        dur: Math.max(0.5, dist(u.x, u.y, x, y) / 380),
+        x: u.x, y: u.y, sx: u.x, sy: u.y, tx, ty, t: 0,
+        dur: Math.max(0.5, dist(u.x, u.y, tx, ty) / 380),
         side: "allies", dmg: u.equipment.includes("grenades") ? 85 : 60, aoe: u.equipment.includes("grenades") ? 85 : 70, kind: "grenade", sourceType: "grenade",
-        killerId: u.id, smokeT: 0,
+        killerId: u.id, smokeT: 0, fuseT: GRENADE_FUSE,
       });
       u.abilityCd = spec.cd * (u.equipment.includes("grenades") ? 0.6 : 1);
       this.pushLog(`${u.name} frags the objective.`, "info");
@@ -3344,6 +3613,53 @@ export class GameEngine {
       this.pushLog(`${u.name} throws up a sandbag position.`, "info");
     }
     this.dirty = true;
+  }
+
+  /** Scatter from a live grenade (Josh, 2026-11-13): if a
+   * thrown frag's fuse is running and its landing point is
+   * close enough that the blast could reach this man (aoe +
+   * GRENADE_FLEE_MARGIN), he runs — straight away from the
+   * landing point, to a spot past the danger line. Returns
+   * the point to run to, or null when he stays.
+   *
+   * Who does NOT run — the pinned-down list, exactly:
+   * - a man in the pinned state (suppression latched at 55+):
+   *   he keeps his head down where he is;
+   * - an MG gunner deployed on his bipod: the planted gun
+   *   does not pack up for a grenade;
+   * - statics and mortar teams: they cannot move at all;
+   * - a broken man: morale already owns his legs (fall back
+   *   or flight), the grenade does not re-task him;
+   * - a man airborne mid-dive or mid-vault: the leap owns
+   *   his position until he lands;
+   * - vehicles: armour does not scatter from a frag;
+   * - the player's directly controlled leader in a manual
+   *   battle (Phase A): his feet are the player's hands,
+   *   never an autopilot. In AUTO battles he is AI-driven
+   *   like anyone and scatters like anyone. */
+  private grenadeFleePoint(u: Unit): { x: number; y: number } | null {
+    if (!u.alive || u.vehicle || u.isStatic || u.enemyType === "mortar") return null;
+    if (u.broken || u.fled || u.pinned) return null;
+    if ((u.leapT ?? 0) > 0) return null;
+    if (this.deployedBipod(u)) return null;
+    if (!this.autoBattle && u.id === this.leaderId) return null;
+    for (const p of this.projectiles) {
+      if (p.fuseT === undefined) continue; // only live frags tick men off
+      const danger = p.aoe + GRENADE_FLEE_MARGIN;
+      const d = dist(u.x, u.y, p.tx, p.ty);
+      if (d >= danger) continue;
+      let dx = (u.x - p.tx) / (d || 1);
+      let dy = (u.y - p.ty) / (d || 1);
+      if (d < 0.01) {
+        // Dead centre of the burst: pick a fixed direction by
+        // id so the men do not all pick the same one.
+        const ang = (u.id % 8) * (Math.PI / 4);
+        dx = Math.cos(ang);
+        dy = Math.sin(ang);
+      }
+      return { x: p.tx + dx * (danger + 40), y: p.ty + dy * (danger + 40) };
+    }
+    return null;
   }
 
   /** Engineers work the minefields (Josh, 2026-11-12). The
@@ -3997,13 +4313,208 @@ export class GameEngine {
       .filter((s) => !this.pointBlocked(s.x + 8, s.y));
   }
 
+  /** CONQUEST: group the map's trench cover spots into lines.
+   * The terrain builder calls one drawTrench per line and lays
+   * its spots 22 apart (crossing gaps bite 120 out), and the
+   * nearest separate line stands 360+ away, so greedy chaining
+   * at POINT_LINK_DIST reconstructs exactly the drawn lines.
+   * Points come out west to east, lettered A, B, C, every one
+   * starting in enemy hands. */
+  private buildPoints(): ControlPoint[] {
+    const spots = this.covers
+      .filter((c) => c.kind === "trench")
+      .map((c) => ({ x: c.x, y: c.y }));
+    const clusters: Array<Array<{ x: number; y: number }>> = [];
+    for (const s of spots) {
+      const hit = clusters.find((cl) =>
+        cl.some((o) => dist(s.x, s.y, o.x, o.y) <= POINT_LINK_DIST),
+      );
+      if (hit) hit.push(s);
+      else clusters.push([s]);
+    }
+    const raw = clusters.map((cl) => ({
+      x: cl.reduce((n, s) => n + s.x, 0) / cl.length,
+      y: cl.reduce((n, s) => n + s.y, 0) / cl.length,
+      spots: cl,
+    }));
+    raw.sort((a, b) => a.x - b.x || a.y - b.y);
+    return raw.map((p, i) => ({
+      id: i,
+      label: String.fromCharCode(65 + i),
+      x: p.x,
+      y: p.y,
+      owner: "axis" as const,
+      progress: 0,
+      contested: false,
+      spots: p.spots,
+    }));
+  }
+
+  /** Is this man standing in the point's trench line? */
+  private atPoint(u: Unit, p: ControlPoint): boolean {
+    return p.spots.some((s) => dist(u.x, u.y, s.x, s.y) <= POINT_PRESENCE_DIST);
+  }
+
+  /** Where an ordered man should stand to take this point:
+   * the trench spot nearest the centroid. The centroid itself
+   * can sit in a gap in the line (the street crossing breaks
+   * every town line), where a man stands on open road and
+   * holds nothing — orders go to real trench ground. */
+  private standSpot(p: ControlPoint): { x: number; y: number } {
+    let best = p.spots[0];
+    for (const s of p.spots) {
+      if (dist(s.x, s.y, p.x, p.y) < dist(best.x, best.y, p.x, p.y)) best = s;
+    }
+    return best;
+  }
+
+  /** Who is holding a point, right now: living footmen standing
+   * in the line. The player's count is his roster only — the
+   * 2nd Platoon fights its own fight and neither takes nor
+   * contests a point (CONQUEST rule, 2026-11-13). Vehicles
+   * never hold a trench; static guns do — a nest sitting in a
+   * line holds it until it is cleared. */
+  private pointPresence(p: ControlPoint): { allies: number; axis: number } {
+    let allies = 0;
+    let axis = 0;
+    for (const u of this.units) {
+      if (!u.alive || u.vehicle || u.extracted || u.fled) continue;
+      if (u.side === "allies" && u.npc) continue;
+      if (!this.atPoint(u, p)) continue;
+      if (u.side === "allies") allies++;
+      else axis++;
+    }
+    return { allies, axis };
+  }
+
+  /** The conquest clock, run once per battle tick while the
+   * battle is active and the squad is not falling back: flip
+   * points on uncontested presence, bleed banked progress on
+   * abandoned ground, freeze it on contested ground, keep the
+   * retake pressure coming, and (AUTO only) walk the squad
+   * onto the points once the field is clear. */
+  private updatePoints(dt: number) {
+    for (const p of this.points) {
+      const { allies, axis } = this.pointPresence(p);
+      const challenger = p.owner === "axis" ? allies : axis;
+      const defender = p.owner === "axis" ? axis : allies;
+      p.contested = challenger > 0 && defender > 0;
+      if (challenger > 0 && defender === 0) {
+        p.progress += dt;
+        if (p.progress >= CAPTURE_TIME) {
+          p.owner = p.owner === "axis" ? "allies" : "axis";
+          p.progress = 0;
+          p.contested = false;
+          if (p.owner === "allies") {
+            const held = this.points.filter((q) => q.owner === "allies").length;
+            this.pushLog(
+              `Trench line ${p.label} is ours — ${held} of ${this.points.length} held.`,
+              "info",
+            );
+          } else {
+            this.pushLog(`The enemy retakes trench line ${p.label}.`, "wave");
+          }
+          this.dirty = true;
+        }
+      } else if (challenger === 0 && p.progress > 0) {
+        p.progress = Math.max(0, p.progress - dt);
+      }
+    }
+    // Retake pressure (2026-11-13): a lost line is not lost
+    // quietly. Every RETAKE_INTERVAL, the nearest free enemy
+    // footmen are ordered onto each line the player holds —
+    // the same orders mechanism the stalemate breaker uses.
+    this.retakeT += dt;
+    if (this.retakeT >= RETAKE_INTERVAL) {
+      this.retakeT = 0;
+      for (const p of this.points) {
+        if (p.owner === "allies") this.issueRetake(p);
+      }
+    }
+    // AUTO mop-up: an auto squad that has cleared the field
+    // still has a battle to win — walk it onto the lines.
+    if (this.autoBattle) {
+      this.autoCaptureT += dt;
+      if (this.autoCaptureT >= 4) {
+        this.autoCaptureT = 0;
+        this.issueAutoCapture();
+      }
+    }
+  }
+
+  /** Order a retake party onto a player-held point: up to
+   * RETAKE_PARTY mobile enemy footmen, nearest first. The
+   * trench garrison keeps its own line, the convoy keeps its
+   * march, broken men are morale's business, and a man who is
+   * the only defender of a line the enemy still holds is
+   * never pulled off it. */
+  private issueRetake(p: ControlPoint) {
+    const candidates = this.units.filter((u) => {
+      if (u.side !== "axis" || !u.alive || u.isStatic || u.vehicle) return false;
+      if (u.enemyType === "mortar" || u.broken || u.convoy || u.trenchHold) return false;
+      if (u.extracted || u.fled) return false;
+      if (this.atPoint(u, p)) return false; // already in the lost line: he is the fight
+      for (const q of this.points) {
+        if (q.owner === "axis" && this.atPoint(u, q) && this.pointPresence(q).axis === 1) {
+          return false; // sole defender of a held line
+        }
+      }
+      return true;
+    });
+    candidates.sort(
+      (a, b) => dist(a.x, a.y, p.x, p.y) - dist(b.x, b.y, p.x, p.y),
+    );
+    const spot = this.standSpot(p);
+    for (const u of candidates.slice(0, RETAKE_PARTY)) {
+      u.orders = findPath(this.blocked, u.x, u.y, spot.x, spot.y);
+      u.chase = [];
+      // The party becomes the line's new garrison: without
+      // this, a camping man who reaches the trench turns
+      // around and patrols back toward his old home, and the
+      // line never sits held long enough to flip (watched in
+      // the conquest tests: parties yo-yoed in and out and
+      // the capture clock never finished). His patrol anchor
+      // moves to the trench spot he was ordered to.
+      u.trenchHold = true;
+      u.homeX = spot.x + 8;
+      u.homeY = spot.y;
+      u.patrolX = u.homeX;
+      u.patrolY = u.homeY;
+    }
+    if (candidates.length) this.dirty = true;
+  }
+
+  /** AUTO battles only (2026-11-13): once no living enemy is
+   * left, the auto squad walks onto the trench lines nobody
+   * holds and takes them — the mop-up a human does by hand.
+   * It never fires while an enemy lives, so it cannot pull a
+   * man out of a firefight. Men are spread across the unheld
+   * lines instead of stacking onto one. */
+  private issueAutoCapture() {
+    if (this.enemiesAlive() > 0) return;
+    const unheld = this.points.filter((p) => p.owner !== "allies");
+    if (!unheld.length) return;
+    const men = this.units.filter(
+      (u) =>
+        u.side === "allies" && !u.npc && u.alive && !u.vehicle &&
+        !u.broken && !u.extracted && !u.fled,
+    );
+    men.forEach((u, i) => {
+      if (unheld.some((p) => this.atPoint(u, p))) return; // standing on one: stay and take it
+      const p = unheld[i % unheld.length];
+      const spot = this.standSpot(p);
+      u.orders = findPath(this.blocked, u.x, u.y, spot.x, spot.y);
+      u.chase = [];
+    });
+  }
+
   private spawnWave(index: number) {
     if (!this.mission) return;
     this.waveIndex = index;
     this.enemyRadioT = 25;
     this.enemyRadioCalled = false;
     const rng = mulberry32(hashStr(this.mission.id + ":wave:" + index));
-    // Wave 1 garrisons IN the first trench line, not on open ground
+    // Group 1 garrisons IN the first trench line, not on open ground
     // near the beach: the mobile men stand in the dug trench (the
     // westernmost one), spread along the whole line. Each man stands
     // 8 units east of the trench floor so the trench sits on the
@@ -4014,9 +4525,10 @@ export class GameEngine {
     // defense sits in three lines: the MG nests at the grassline
     // where the beach meets the grass, the mortars at the shoreline,
     // and the overflow scattered east inland (see the shoreline
-    // branch below). Waves 2 and 3 are AGGRESSIVE
-    // reinforcements from the east: they charge on spawn instead of
-    // camping and defending, so the fight comes to the player.
+    // branch below). Groups 2 and 3 deploy in depth in the east
+    // (CONQUEST, 2026-11-13): they camp and defend where they
+    // stand — nobody charges on spawn any more; the old aggressive
+    // reinforcement waves are gone with the wave system itself.
     const beach = index === 0;
     const shoreline = beach && this.mission.terrain === "dday" && this.variant !== "airborne";
     // Josh's beach layout: the first 6 MG42 nests sit at the
@@ -4166,10 +4678,10 @@ export class GameEngine {
         const u = this.spawnEnemyUnit(spec.type, x, y, rng, trench);
         if (trench) u.trenchHold = true;
         if (convoy) u.convoy = true;
-        // Waves 2 and 3 are aggressive: the mobile men charge on
-        // spawn instead of camping. Statics stay put (they cannot
-        // move), and the wave 1 garrison keeps holding its trench.
-        if (index > 0 && !isStatic) u.aggressive = true;
+        // CONQUEST (2026-11-13): no group is aggressive. Groups 2
+        // and 3 used to charge on spawn as reinforcement waves;
+        // deployed from the start, they camp and defend in depth
+        // like the group 1 men outside the trench.
         // A Scharfschutze never takes the field alone (ranges
         // pass, 2026-11-13): his Beobachter spotter spawns at his
         // shoulder, and the pair works like the player's Recon
@@ -4178,8 +4690,7 @@ export class GameEngine {
         if (spec.type === "scharfschutze") {
           const sx = Math.max(24, Math.min(MAP_W - 24, x + 30));
           const sy = Math.max(24, Math.min(MAP_H - 24, y + (i % 2 === 0 ? 34 : -34)));
-          const sp = this.spawnEnemyUnit("spotter", sx, sy, rng, false);
-          if (index > 0) sp.aggressive = true;
+          this.spawnEnemyUnit("spotter", sx, sy, rng, false);
         }
       }
     }
@@ -4213,7 +4724,8 @@ export class GameEngine {
       const rear = this.spawnEnemyUnit("panzer", 3820, roadYAt(3820), rng, false);
       rear.convoy = true;
     }
-    if (index > 0) this.pushLog(`Reinforcements — wave ${index + 1} coming through the trees!`, "wave");
+    // No "reinforcements" log: this is the initial deployment,
+    // not an arrival (CONQUEST, 2026-11-13).
     this.dirty = true;
   }
 
@@ -4326,6 +4838,10 @@ export class GameEngine {
           }
         }
         this.introT = -1;
+        // No shot queued during the cinematic survives it
+        // (leaderShootAt refuses them now; this is the belt
+        // to that braces).
+        this.manualShot = null;
       }
     } else if (this.introKind === "drop") {
       // The formation's eyes (Josh, 2026-11-13): as each C-47
@@ -4363,7 +4879,10 @@ export class GameEngine {
         }
       }
       this.recomputeFog();
-      if (this.introT >= this.dropEnd + 0.1 || this.introT >= 12) this.introT = -1;
+      if (this.introT >= this.dropEnd + 0.1 || this.introT >= 12) {
+        this.introT = -1;
+        this.manualShot = null;
+      }
     }
   }
 
@@ -4391,25 +4910,29 @@ export class GameEngine {
       this.recordReplayFrame();
     }
 
-    // Wave / win logic. Frozen during a fall back: the squad
-    // is leaving, so clearing the field wins nothing and no
-    // fresh wave pours in behind them.
-    if (this.enemiesAlive() === 0 && !this.retreating) {
-      if (this.waveIndex < this.waves.length - 1) {
-        if (this.nextWaveT === 0) {
-          this.nextWaveT = 4;
-          this.pushLog("Enemy reinforcements inbound from the east.", "wave");
-        }
-        this.nextWaveT -= dt;
-        if (this.nextWaveT <= 0) {
-          this.nextWaveT = 0;
-          this.spawnWaveAllies(2);
-          this.spawnWave(this.waveIndex + 1);
-        }
-      } else if (this.battleState === "active") {
+    // CONQUEST win logic (Phase D, 2026-11-13). Frozen during
+    // a fall back: the squad is leaving, so ground taken on
+    // the way out wins nothing. Victory is ground, not bodies:
+    // every trench line held by the squad at once. Killing
+    // the whole enemy force wins nothing by itself any more —
+    // the lines still have to be taken and held. (A map with
+    // no trench lines at all keeps the old rule as a fallback:
+    // clear the field. Every operation map has lines.)
+    if (this.battleState === "active" && !this.retreating) {
+      this.updatePoints(dt);
+      const won =
+        this.points.length > 0
+          ? this.points.every((p) => p.owner === "allies")
+          : this.enemiesAlive() === 0;
+      if (won) {
         this.battleState = "victory";
         this.phase = "over";
-        this.pushLog("Area secured. VICTORY.", "win");
+        this.pushLog(
+          this.points.length > 0
+            ? "Every trench line is ours. VICTORY."
+            : "Area secured. VICTORY.",
+          "win",
+        );
         this.dirty = true;
       }
     }
@@ -4431,9 +4954,10 @@ export class GameEngine {
       }
     }
 
-    // Enemy radio call-in: 25s into the wave, the Funker gets one
-    // call-in of 2 more men — but only if he is still alive. Kill
-    // him first and the wave gets no reinforcements.
+    // Enemy radio call-in: 25s into the battle, the Funker gets
+    // one call-in of 2 more men — but only if he is still alive.
+    // Kill him first and no call-in comes. Once per battle
+    // (it re-armed per wave before CONQUEST, 2026-11-13).
     if (
       this.battleState === "active" &&
       this.enemiesAlive() > 0 &&
@@ -4619,7 +5143,7 @@ export class GameEngine {
     // either). Josh's class spec (2026-11-12) puts abilities on
     // AI logic for followers and NPCs, so the driver runs in
     // every live battle now. The leader's own ability stays on
-    // the player's hand (Q / right click / button): both drivers
+    // the player's hand (Q key / touch button): both drivers
     // skip him (he is not a follower and not an NPC).
     {
       this.autoAbilityT -= dt;
@@ -4684,7 +5208,25 @@ export class GameEngine {
           x: L.x + Math.cos(ang) * L.range * 0.85,
           y: L.y + Math.sin(ang) * L.range * 0.85,
           until: this.elapsed + 0.3,
+          src: "touch",
         };
+      }
+    }
+
+    // Held mouse button (Josh, 2026-11-13): an AUTOMATIC
+    // weapon keeps firing at the cursor while the button
+    // stays down — the aim follows the mouse, the shot is
+    // re-stamped every tick, and a reload mid-hold pauses
+    // the fire (with its feedback tag) until the weapon is
+    // back, resuming only because the button is still down.
+    // Semi-automatics get no refresh: their press already
+    // fired its one shot and spent the click.
+    if (this.phase === "battle" && !this.autoBattle && !this.paused && !this.retreating && this.mouseHeld && !this.touchAimVec) {
+      const L = this.leaderUnit();
+      if (L && !L.broken && !L.fled && this.autoWeapon(L)) {
+        const aim = this.snapAim(this.mouse.x, this.mouse.y);
+        this.manualShot = { x: aim.x, y: aim.y, until: this.elapsed + 0.3, targetId: aim.target?.id, src: "mouse" };
+        this.clickFireFeedback(L, aim.x, aim.y, aim.target);
       }
     }
 
@@ -4712,6 +5254,9 @@ export class GameEngine {
           u.prone = true;
           u.proneT = this.elapsed;
           u.proneHoldUntil = this.elapsed + 1.2;
+          // The dive cooldown runs from the landing (Josh,
+          // 2026-11-13): no chained dives to outrun legs.
+          u.diveReadyAt = this.elapsed + DIVE_COOLDOWN;
         }
         u.leapKind = undefined;
       }
@@ -4801,6 +5346,14 @@ export class GameEngine {
         );
       }
 
+      // Phase A (Josh, 2026-11-13): in a manual battle the
+      // leader's target is ALWAYS null — the gate below only
+      // stops him ACQUIRING one, so a targetId he picked up
+      // while the AUTO driver had him (or any other stale
+      // state) must be dropped here, or the generic fire
+      // branch below would keep shooting at it on its own
+      // after manual control resumes.
+      if (u.id === this.leaderId && !this.autoBattle) u.targetId = null;
       let target = this.unitById(u.targetId);
       if (target && !this.los(u, target)) target = null;
       if (!target || !target.alive) {
@@ -4855,7 +5408,15 @@ export class GameEngine {
         }
       }
       let moving = false;
-      if (u.broken && !u.isStatic) {
+      const fleePt = this.grenadeFleePoint(u);
+      if (fleePt) {
+        // A live frag is about to burst on him (Josh,
+        // 2026-11-13): scattering outranks every standing
+        // order, anchor and chase for as long as it ticks.
+        // When it goes off, this branch stops answering and
+        // his normal AI resumes on the next tick.
+        moving = this.chaseTo(u, fleePt.x, fleePt.y, dt);
+      } else if (u.broken && !u.isStatic) {
         if (u.willFlee) {
           const dxEdge = Math.min(u.x, MAP_W - u.x);
           const dyEdge = Math.min(u.y, MAP_H - u.y);
@@ -5048,7 +5609,18 @@ export class GameEngine {
                 // into the open. Anyone else patrols around home.
                 let picked = false;
                 if (u.trenchHold) {
-                  const near = this.firstTrenchSpots().filter(
+                  // The line he holds: the control point at his
+                  // home (a retake party garrisons the line it
+                  // took back), or the first trench line as
+                  // before.
+                  let lineSpots: Array<{ x: number; y: number }> = this.firstTrenchSpots();
+                  for (const p of this.points) {
+                    if (dist(p.x, p.y, u.homeX, u.homeY) <= 200) {
+                      lineSpots = p.spots;
+                      break;
+                    }
+                  }
+                  const near = lineSpots.filter(
                     (s) => dist(s.x, s.y, u.homeX, u.homeY) <= 150,
                   );
                   if (near.length) {
@@ -5113,6 +5685,12 @@ export class GameEngine {
       if (
         moving && !this.retreating && !u.vehicle && !u.isStatic && !u.broken && !u.prone &&
         u.enemyType !== "mortar" && (u.leapT ?? 0) <= 0 && !u.coverDiveTried &&
+        // The dive cooldown binds AI divers too (Josh,
+        // 2026-11-13) — a backstop only: the one-roll-per-run
+        // rule above is unchanged, so this can bite only if a
+        // man somehow lands one dive and runs to cover again
+        // inside DIVE_COOLDOWN.
+        this.elapsed >= (u.diveReadyAt ?? 0) &&
         !(this.leaderId === u.id && !this.autoBattle) &&
         u.coverDestX !== undefined && u.orders.length > 0
       ) {
@@ -5422,29 +6000,66 @@ export class GameEngine {
         u.id === this.leaderId && !this.autoBattle && u.cooldown <= 0 && this.manualReady(u) && this.manualShot &&
         this.elapsed < this.manualShot.until && (!u.pinned || u.cover) && !u.broken && (!u.prone || (!moving && u.movedT !== this.elapsed))
       ) {
-        // The player clicked open ground: the leader fires at
-        // the point itself while the click is fresh. No target,
-        // no auto-acquire; the rounds fly and hit what is there.
+        // The player clicked: the leader fires toward the
+        // point while the click is fresh (Josh, 2026-11-13:
+        // "I need to be able to shoot wherever I click"). No
+        // target, no auto-acquire, and NO range gate on the
+        // trigger — the rounds fly and hit what they cross,
+        // and every manual round dies at the answering
+        // weapon's range (maxTravel), so a click past it
+        // simply falls short.
         const ms = this.manualShot;
         const s = this.sidearmOf(u);
         const clickD = dist(u.x, u.y, ms.x, ms.y);
-        if (s) {
-          // An AT leader answers a close click with the trench
-          // gun; the bazooka never fires at bare ground.
-          if (clickD <= s.range && u.altReloadT <= 0) {
+        const msTarget = ms.targetId !== undefined ? this.unitById(ms.targetId) : null;
+        // Hip or aimed (Josh, 2026-11-13): a mouse shot made
+        // without the right button held pays the hip spread
+        // penalty; aimed shots and touch fire (touch has no
+        // aim mode) use the weapon's own spread.
+        const hip = ms.src === "mouse" && !this.aiming ? HIP_SPREAD_MULT : 1;
+        let fired = false;
+        if (s && msTarget?.vehicle && msTarget.alive && msTarget.side !== u.side && clickD <= u.range) {
+          // The click snapped to an enemy vehicle inside the
+          // bazooka's reach: the tube answers (Josh's
+          // decision, 2026-11-13), through the same fireAt
+          // his automatic vehicle shots use — satchel first
+          // up close, then the rocket, on the bazooka's own
+          // reload. The bazooka still never fires at bare
+          // ground or at infantry.
+          if (u.reloadT <= 0) {
+            u.cooldown = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
+            u.facing = Math.atan2(msTarget.y - u.y, msTarget.x - u.x);
+            this.fireAt(u, msTarget, moving, u.range, hip);
+            fired = true;
+          }
+        } else if (s) {
+          // Every other AT click is the trench gun's, fired
+          // toward the point at any distance — its rounds
+          // die at the trench gun's own 110.
+          if (u.altReloadT <= 0) {
             u.cooldown = s.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
             u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
-            this.spawnBullet(u, ms.x, ms.y, s.spread * (u.pinned ? 1.5 : 1), s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun");
+            this.spawnBullet(u, ms.x, ms.y, s.spread * (u.pinned ? 1.5 : 1) * hip, s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun", s.range);
+            fired = true;
           }
-        } else if (clickD <= u.range) {
+        } else {
           const interval = u.fireInterval * aura * (u.pinned ? 1.8 : 1) * (u.prone ? 1.4 : 1);
           u.cooldown = interval;
           u.facing = Math.atan2(ms.y - u.y, ms.x - u.x);
           if (!this.trySatchel(u, ms.x, ms.y)) {
             const close = u.equipment.includes("bayonet") && clickD <= 70 ? 1.35 : 1;
-            this.spawnBullet(u, ms.x, ms.y, u.spread * (u.pinned ? 1.5 : 1), u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14);
+            this.spawnBullet(u, ms.x, ms.y, u.spread * (u.pinned ? 1.5 : 1) * hip, u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14, false, undefined, undefined, u.range);
           }
+          fired = true;
         }
+        // Semi-automatics fire once per click press: a shot
+        // spends the click (Josh, 2026-11-13). Automatics
+        // keep the window — and a held button keeps
+        // re-aiming it (the hold refresh in update()). Only
+        // a MOUSE press is spent: the touch stick is a held
+        // state, re-asserted every tick by its setter, so
+        // spending it would change nothing but the flicker.
+        if (fired && ms.src === "mouse" && !this.autoWeapon(u)) this.manualShot = null;
       }
 
       // Medic passive aura — both sides. A medic mends his own
@@ -5484,6 +6099,16 @@ export class GameEngine {
         b.y += (b.vy * dt) / steps;
         b.life -= dt / steps;
         if (b.life <= 0) {
+          this.suppressArea(b.x, b.y, b.side, b.suppress * 0.5);
+          dead = true;
+          break;
+        }
+        if (b.maxTravel !== undefined && dist(b.x, b.y, b.ox, b.oy) > b.maxTravel) {
+          // A leader's manual round at the end of its
+          // weapon's reach: it falls here, suppression and
+          // all, like a round dying of old age (Josh,
+          // 2026-11-13 — clicks past his range fall short,
+          // they are never refused).
           this.suppressArea(b.x, b.y, b.side, b.suppress * 0.5);
           dead = true;
           break;
@@ -5599,7 +6224,17 @@ export class GameEngine {
         const py = p.y + (p.ty - p.sy) * (p.t / p.dur);
         this.particles.push({ x: px, y: py, vx: 0, vy: 0, life: 0.6, max: 0.6, size: 4, kind: "smoke" });
       }
-      if (p.t >= p.dur) {
+      if (p.fuseT !== undefined) {
+        // A thrown frag (Josh, 2026-11-13): it bursts on its
+        // fuse, not on arrival. The flight still plays out on
+        // t/dur, then the grenade sits where it fell, live,
+        // until the fuse runs out — and men near it know it.
+        p.fuseT -= dt;
+        if (p.fuseT <= 0) {
+          this.explode(p.tx, p.ty, p.aoe, p.dmg, p.side, p.sourceType, p.killerId);
+          this.projectiles.splice(i, 1);
+        }
+      } else if (p.t >= p.dur) {
         const x = p.tx;
         const y = p.ty;
         this.explode(x, y, p.aoe, p.dmg, p.side, p.sourceType, p.killerId);
@@ -5617,9 +6252,32 @@ export class GameEngine {
     if (this.mines.length) {
       for (const m of this.mines) {
         if (!m.armed) continue;
-        const stepped = this.units.some((u) => u.side === "allies" && u.alive && !u.vehicle && dist(m.x, m.y, u.x, u.y) <= 11);
-        if (stepped) {
+        // The man on the pressure plate: the nearest allied
+        // footman inside the trigger ring.
+        let stepper: Unit | null = null;
+        let stepperD = 11;
+        for (const u of this.units) {
+          if (u.side !== "allies" || !u.alive || u.vehicle) continue;
+          const d = dist(m.x, m.y, u.x, u.y);
+          if (d <= stepperD) {
+            stepper = u;
+            stepperD = d;
+          }
+        }
+        if (stepper) {
           m.armed = false;
+          // Instant kill (Josh, 2026-11-13): stepping on a
+          // Tellermine is not a damage roll and no amount of
+          // health survives it. He dies where he stands,
+          // before the blast is worked out — and the kill goes
+          // through kill(), not damage(), so the lucky charm
+          // never gets its 15% roll. The charm turns aside a
+          // killing HIT; this is not a hit, it is the mine
+          // itself. (Judgment call, flagged to Josh.)
+          stepper.damageTaken += stepper.hp;
+          this.kill(stepper, "mine", null);
+          // Everyone else keeps the blast they have always
+          // had: 55 at the centre, falling off to the 34 edge.
           this.explode(m.x, m.y, 34, 55, "axis", "mine", null);
         }
       }
@@ -5935,12 +6593,15 @@ export class GameEngine {
     u.facing = Math.atan2(ty - u.y, tx - u.x);
   }
 
-  /** The PRONE button / X key (Josh, 2026-11-13): pressed
-   * standing still, the leader goes prone and STAYS prone
-   * (the manual latch) until pressed again. Pressed while he
-   * is moving, he DOLPHIN DIVES — a forward leap in his move
-   * direction that lands him prone. His alone: followers and
-   * NPCs keep the auto prone rule. */
+  /** The PRONE button / C key (Josh, 2026-11-13; X, the
+   * Phase B key, calls the same toggle): pressed standing
+   * still, the leader goes prone and STAYS prone (the manual
+   * latch) until pressed again. Pressed while he is moving,
+   * he DOLPHIN DIVES — a forward leap in his move direction
+   * that lands him prone — unless the dive is still on its
+   * cooldown (DIVE_COOLDOWN from his last landing), in which
+   * case the press just drops him prone in place. His alone:
+   * followers and NPCs keep the auto prone rule. */
   leaderProneToggle() {
     if (this.phase !== "battle" || this.autoBattle || this.retreating || this.paused) return;
     const L = this.leaderUnit();
@@ -5963,7 +6624,11 @@ export class GameEngine {
     }
     const hasInput = dx !== 0 || dy !== 0;
     const moving = hasInput || this.elapsed - (L.movedT ?? -9) < 0.18;
-    if (moving) {
+    // Inside the dive cooldown (DIVE_COOLDOWN, from his last
+    // landing) there is no leap at all: the press falls
+    // through to the plain drop below — prone in place,
+    // latched — exactly like a still press.
+    if (moving && this.elapsed >= (L.diveReadyAt ?? 0)) {
       const ang = hasInput ? Math.atan2(dy, dx) : L.facing;
       // Full leap if the landing is clear, shorter hops if
       // not; no clear landing at all means he just drops
@@ -5991,6 +6656,56 @@ export class GameEngine {
     // Airborne men do not walk (Phase B): the leap arc owns
     // their position until it lands.
     if ((u.leapT ?? 0) > 0) return;
+    // The player's own leader, driven by hand in a manual
+    // battle: his movement is his hands alone (auto-vault and
+    // mine steering both honour this; in AUTO battles he is
+    // AI-driven like anyone).
+    const playerDriven = !this.autoBattle && u.id === this.leaderId;
+    // Revealed-mine avoidance (Josh, 2026-11-13): an AI man
+    // steers around a mine the engineers have marked. If his
+    // line to the target passes within MINE_AVOID_RANGE of a
+    // marked mine, this step's target becomes a detour point
+    // on the far side of the ring — recomputed every step, so
+    // he arcs around the danger and rejoins his line past
+    // it. (A gentle push on the target does NOT do this job:
+    // head-on it only shortens the target, and he walks
+    // straight over the plate.) Only REVEALED mines exist for
+    // him — an unspotted mine is not in his world at all. The
+    // leader is exempt (the mark is his warning, not an
+    // autopilot), and so is the engineer himself: walking
+    // the field is his trade, and his seek-and-clear code
+    // already stands him off from the plate at 18. And if
+    // his goal itself sits inside the ring — a man ordered
+    // to a spot beside a marked mine — he is left to reach
+    // it: the ring bends journeys, not destinations.
+    if (!playerDriven && !u.vehicle && u.type !== "engineer" && this.mines.length) {
+      for (const m of this.mines) {
+        if (!m.armed || !m.revealed) continue;
+        if (dist(x, y, m.x, m.y) <= MINE_AVOID_RANGE) continue;
+        const vx = x - u.x;
+        const vy = y - u.y;
+        const len2 = vx * vx + vy * vy;
+        if (len2 < 1) continue;
+        const tStar = Math.max(0, Math.min(1, ((m.x - u.x) * vx + (m.y - u.y) * vy) / len2));
+        const cx = u.x + vx * tStar;
+        const cy = u.y + vy * tStar;
+        if (dist(cx, cy, m.x, m.y) >= MINE_AVOID_RANGE) continue;
+        const len = Math.sqrt(len2);
+        const ux = vx / len;
+        const uy = vy / len;
+        // The side away from the mine: if the mine sits on
+        // the perpendicular's side, detour the other way.
+        let nx = -uy;
+        let ny = ux;
+        if (nx * (m.x - u.x) + ny * (m.y - u.y) > 0) {
+          nx = -nx;
+          ny = -ny;
+        }
+        x = cx + nx * MINE_AVOID_RANGE + ux * 6;
+        y = cy + ny * MINE_AVOID_RANGE + uy * 6;
+        break; // one detour at a time; the field is sparse
+      }
+    }
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return;
     const sx = u.x;
@@ -6036,8 +6751,14 @@ export class GameEngine {
     // ruins, hedgerows, buildings, wrecks, hedgehogs and
     // pillboxes disqualify the run, and a run longer than
     // the march cap is a wall, not a hop. Vehicles, statics
-    // and prone men never vault.
-    if (!u.vehicle && !u.isStatic && !u.prone && d > 24 && this.pointBlocked(u.x + dx, u.y + dy)) {
+    // and prone men never vault. And the player's own leader
+    // never vaults in manual play (Josh, 2026-11-13: "Take
+    // out the auto jumping for the player & only do it for
+    // NPCS. player has controlled prone") — his movement is
+    // his hands alone; every AI-driven footman keeps the hop,
+    // the leader in AUTO battles included, where he is
+    // AI-driven like anyone else (playerDriven, above).
+    if (!playerDriven && !u.vehicle && !u.isStatic && !u.prone && d > 24 && this.pointBlocked(u.x + dx, u.y + dy)) {
       const dirX = (x - u.x) / d;
       const dirY = (y - u.y) / d;
       let crossed = false;
@@ -6076,13 +6797,28 @@ export class GameEngine {
     // across a wall or around a corner made no net progress at all.
     // Try the full step, then X-only, then Y-only; if all are blocked,
     // stay put and let the stuck detector re-path or sidestep.
+    // For a VEHICLE, an axis slide only counts if it actually
+    // closes on the target: when the target is almost dead
+    // ahead, the perpendicular slide is a hair's breadth
+    // (~0.01 units) and always "succeeds", so the pocket
+    // escape below never gets its turn and the vehicle freezes
+    // against the blocker forever (bug #25: the called-in
+    // Sherman sat out whole beach battles this way, wedged
+    // where a hedgehog's blocked cell reaches into the road at
+    // the Phase C hull radius — its hair slide closed at
+    // ~0.002x the step, and no stuck detector watches the
+    // tank-road branch). A genuine diagonal slide closes at
+    // ~0.7x the step; the bar is 0.1x. Footmen keep the plain
+    // slide: the bug #1 stuck detector is their backstop, and
+    // it rescues a hair-sliding man in ~2s (wedge.test.ts).
     const bodyR = u.vehicle ? vehicleBodyRadius(u.enemyType, u.type) : UNIT_R;
+    const closes = (nx: number, ny: number) => !u.vehicle || d - dist(nx, ny, x, y) >= step * 0.1;
     if (!this.pointBlocked(u.x + dx, u.y + dy, bodyR)) {
       u.x += dx;
       u.y += dy;
-    } else if (!this.pointBlocked(u.x + dx, u.y, bodyR)) {
+    } else if (!this.pointBlocked(u.x + dx, u.y, bodyR) && closes(u.x + dx, u.y)) {
       u.x += dx;
-    } else if (!this.pointBlocked(u.x, u.y + dy, bodyR)) {
+    } else if (!this.pointBlocked(u.x, u.y + dy, bodyR) && closes(u.x, u.y + dy)) {
       u.y += dy;
     } else {
       // Pocket escape: every step toward the waypoint is blocked — the
@@ -6109,8 +6845,17 @@ export class GameEngine {
       // movement is untouched.
       const away = Math.atan2(u.y - y, u.x - x);
       let escaped = false;
+      // A vehicle's "pocket" is usually a gap its hull almost
+      // fits (bug #25): it probes toward the waypoint first, so
+      // it can jump past the blocker that wedged it instead of
+      // backing down the road and re-wedging on the same cell.
+      // Footmen keep the back-out-first order above: a man in a
+      // cover pocket has to leave the way he came in.
+      const offs = u.vehicle
+        ? [Math.PI, (3 * Math.PI) / 4, -(3 * Math.PI) / 4, Math.PI / 2, -Math.PI / 2, Math.PI / 4, -Math.PI / 4, 0]
+        : [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, -(3 * Math.PI) / 4, Math.PI];
       for (const mult of [1, 2, 4, 8, 16, 24]) {
-        for (const off of [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, (3 * Math.PI) / 4, -(3 * Math.PI) / 4, Math.PI]) {
+        for (const off of offs) {
           const a = away + off;
           const px = u.x + Math.cos(a) * step * mult;
           const py = u.y + Math.sin(a) * step * mult;
@@ -6277,7 +7022,7 @@ export class GameEngine {
     return true;
   }
 
-  private fireAt(u: Unit, target: Unit, moving: boolean) {
+  private fireAt(u: Unit, target: Unit, moving: boolean, maxTravel?: number, spreadMult = 1) {
     const lead = moving ? 1.6 : u.pinned ? 1.5 : 1;
     // A satchel man meeting armour up close throws the charge,
     // not a rocket (once a battle).
@@ -6290,7 +7035,7 @@ export class GameEngine {
     // the bazooka's piercing "at").
     const s = this.sidearmOf(u);
     if (s && !target.vehicle) {
-      this.spawnBullet(u, target.x, target.y, s.spread * lead, s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun");
+      this.spawnBullet(u, target.x, target.y, s.spread * lead * spreadMult, s.dmg * u.dmgMult, 14, true, s.bulletSpeed, "shotgun", maxTravel);
       return;
     }
     // A deployed bipod shoots tighter (Josh, 2026-11-13).
@@ -6298,7 +7043,7 @@ export class GameEngine {
     // Fixed Bayonet (rifleman class item): inside 70 his fire
     // hits 35% harder — the steel makes a man bold up close.
     const close = u.equipment.includes("bayonet") && dist(u.x, u.y, target.x, target.y) <= 70 ? 1.35 : 1;
-    this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod, u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14);
+    this.spawnBullet(u, target.x, target.y, u.spread * lead * bipod * spreadMult, u.dmg * u.dmgMult * close, u.type === "mg" ? 20 : 14, false, undefined, undefined, maxTravel);
     // The pair at work, made visible: while a sniper engages
     // an elite his spotter picked out, the man carries the
     // open amber tag (drawUnit).
@@ -6307,7 +7052,7 @@ export class GameEngine {
     }
   }
 
-  private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number, alt = false, bulletSpeed?: number, source?: string) {
+  private spawnBullet(u: Unit, tx: number, ty: number, spread: number, dmg: number, suppress: number, alt = false, bulletSpeed?: number, source?: string, maxTravel?: number) {
     // Reloading (Josh, 2026-11-13): no weapon fires mid-reload,
     // whatever path called for the shot. A sidearm shot answers
     // to the sidearm's own reload only: the trench gun works
@@ -6358,6 +7103,7 @@ export class GameEngine {
       sourceType: source ?? (u.side === "allies" ? u.type : u.enemyType!),
       killerId: u.id,
       ally: u.side === "allies",
+      maxTravel,
     });
     this.stampNpcSquad(u);
     // Muzzle flash.
@@ -7026,8 +7772,10 @@ export class GameEngine {
       teamA: this.teamIds(0),
       teamB: this.teamIds(1),
       enemiesAlive: this.enemiesAlive(),
-      wave: this.waveIndex + 1,
-      waves: this.waves.length,
+      wave: 1,
+      waves: 1,
+      pointsHeld: this.points.filter((p) => p.owner === "allies").length,
+      pointsTotal: this.points.length,
       aimUnitId: this.aimUnitId,
       log: this.log.slice(-7),
       formation: this.formation,
@@ -7126,7 +7874,10 @@ export class GameEngine {
     if (this.terrainKind === "beach") this.drawWaterLife(ctx);
 
     this.drawCrates(ctx);
+    this.drawClickTags(ctx);
+    this.drawAimRing(ctx);
     this.drawMines(ctx);
+    this.drawControlPoints(ctx);
     this.drawBoats(ctx);
 
     // Fallen bodies stay where they dropped.
@@ -7221,7 +7972,10 @@ export class GameEngine {
 
     // Projectiles.
     for (const p of this.projectiles) {
-      const k = p.t / p.dur;
+      // A fused frag sits where it landed once its flight is
+      // done: the arc parameter clamps at the target instead
+      // of running past it while the fuse burns down.
+      const k = p.fuseT !== undefined ? Math.min(1, p.t / p.dur) : p.t / p.dur;
       const x = p.x + (p.tx - p.sx) * k;
       const y = p.y + (p.ty - p.sy) * k;
       const arc = p.kind === "grenade" ? Math.sin(Math.PI * k) * (p.dur > 1 ? 60 : 18) : 0;
@@ -7666,14 +8420,59 @@ export class GameEngine {
     }
   }
 
-  /** Beach mines, drawn as what they are: a small dark disc in
-   * the sand with a pressure plate on top. Easy to miss at a
-   * glance, which is the point — but they are on the map to be
-   * seen by a careful eye, in explored ground only. A detonated
-   * mine leaves nothing to draw but the crater. */
+  /** CONQUEST markers (Phase D, 2026-11-13): a ring and a
+   * little flag on each trench line's centroid, in the colour
+   * of the side holding it — red while the enemy holds the
+   * line, teal once the squad takes it. A line being taken
+   * shows its banked clock as a white arc sweeping the ring;
+   * a contested line pulses. Like the crates and the corpses,
+   * a marker only shows on ground the squad has explored. */
+  private drawControlPoints(ctx: CanvasRenderingContext2D) {
+    for (const p of this.points) {
+      if (!this.explored[this.cellAt(p.x, p.y)]) continue;
+      const x = snap(p.x);
+      const y = snap(p.y);
+      const col = p.owner === "allies" ? "#4ECDC4" : "#E24A4A";
+      ctx.save();
+      ctx.globalAlpha = p.contested ? 0.6 + 0.35 * Math.sin(this.elapsed * 6) : 0.92;
+      ctx.strokeStyle = col;
+      ctx.lineWidth = 2 * PX;
+      ctx.beginPath();
+      ctx.arc(x, y, 8 * PX, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = p.owner === "allies" ? "rgba(78,205,196,0.15)" : "rgba(226,74,74,0.15)";
+      ctx.fill();
+      // Flag pole and flag, the mine marker's furniture.
+      ctx.fillStyle = "#8D9A83";
+      ctx.fillRect(x - PX, y - 11 * PX, PX, 4 * PX);
+      ctx.fillStyle = col;
+      ctx.fillRect(x, y - 11 * PX, 4 * PX, 3 * PX);
+      ctx.font = `bold ${11 * PX}px monospace`;
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#E3E7DC";
+      ctx.fillText(p.label, x, y + 4 * PX);
+      ctx.restore();
+      if (p.progress > 0) {
+        ctx.strokeStyle = "#F0F5EB";
+        ctx.lineWidth = 2 * PX;
+        ctx.beginPath();
+        ctx.arc(x, y, 10 * PX, -Math.PI / 2, -Math.PI / 2 + (p.progress / CAPTURE_TIME) * Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  /** Beach mines (Josh, 2026-11-13): a mine nobody has
+   * spotted is not drawn at all — it is invisible to the
+   * player, exactly as it is to the men. Once an engineer
+   * spots one it is marked for the rest of the battle: the
+   * disc, the red ring and the little flag, so the squad can
+   * see the danger and route around it (or watch him work
+   * it). A detonated mine leaves nothing but the crater. */
   private drawMines(ctx: CanvasRenderingContext2D) {
     for (const m of this.mines) {
       if (!m.armed) continue;
+      if (!m.revealed) continue;
       if (!this.explored[this.cellAt(m.x, m.y)]) continue;
       const x = snap(m.x);
       const y = snap(m.y);
@@ -7746,6 +8545,45 @@ export class GameEngine {
       }
       ctx.restore();
     }
+  }
+
+  /** Click-fire feedback tags (Josh, 2026-11-13): the
+   * reason a state gate ate the click, floating at the
+   * click point and fading — the field's answer instead of
+   * silence. Render state only; replays never see them. */
+  private drawClickTags(ctx: CanvasRenderingContext2D) {
+    if (!this.clickTags.length) return;
+    this.clickTags = this.clickTags.filter((t) => this.elapsed < t.until);
+    for (const t of this.clickTags) {
+      const left = t.until - this.elapsed;
+      const rise = (0.9 - left) * 12;
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, Math.max(0, left / 0.3));
+      ctx.font = `bold ${11 * PX}px monospace`;
+      ctx.textAlign = "center";
+      ctx.fillStyle = "#E24A4A";
+      ctx.fillText(t.text.toUpperCase(), snap(t.x), snap(t.y) - 16 - rise);
+      ctx.restore();
+    }
+  }
+
+  /** The aim-mode range ring (Josh, 2026-11-13): while the
+   * right button is held, a faint ring at the leader's
+   * listed weapon range — the honest reach of his rounds,
+   * shown only while aiming. For an AT leader the ring is
+   * the bazooka's 260; his trench-gun rounds still stop at
+   * their own 110. */
+  private drawAimRing(ctx: CanvasRenderingContext2D) {
+    if (!this.aiming) return;
+    const L = this.leaderUnit();
+    if (!L || !L.alive) return;
+    ctx.save();
+    ctx.strokeStyle = "rgba(229,169,60,0.25)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(snap(L.x), snap(L.y), L.range, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   private drawUnit(ctx: CanvasRenderingContext2D, u: Unit) {

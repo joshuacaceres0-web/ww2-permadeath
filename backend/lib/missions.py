@@ -62,12 +62,18 @@ UNIT_COSTS = {
     "engineer": 170,
 }
 
+# CONQUEST (Phase D, 2026-11-13): the "wave" number on each enemy
+# spec is a DEPLOYMENT GROUP now, not an arrival schedule. The
+# whole force deploys at battle start — group 1 in the prepared
+# positions, groups 2 and 3 in depth. Battles are won by taking
+# and holding every trench line on the map, not by clearing
+# waves. Mirrored in frontend/src/lib/localBackend.ts.
 MISSIONS: List[dict] = [
     {
         "id": "op_01",
         "code": "OPERATION OVERLORD",
         "location": "Normandy, France — 6 June 1944",
-        "objective": "D-Day. Get ashore or get down from the sky, break the coastal defense, silence the MG42",
+        "objective": "Conquest: take and hold all three trench lines on the bluffs",
         "difficulty": "MODERATE",
         "reward": 250,
         "terrain": "dday",
@@ -76,7 +82,11 @@ MISSIONS: List[dict] = [
             "under the bluffs and the steel hedgehogs, or by C-47 in the dark with the "
             "airborne — scattered across the hedgerows behind the Atlantic Wall. Either way an "
             "MG42 is waiting. Use the gaps, keep moving, and remember: every man you lose is "
-            "gone for good."
+            "gone for good. This is a conquest: the whole German force is dug in from the "
+            "first minute — there are no waves, and killing them all wins nothing by itself. "
+            "The three trench lines are the battle. Stand your men in a line with no enemy "
+            "in it to take it, and hold all three at once to win. They will come back for "
+            "any line you leave empty."
         ),
         "enemies": [
             {"type": "volks", "wave": 1, "count": 6},
@@ -103,7 +113,7 @@ MISSIONS: List[dict] = [
         "id": "op_02",
         "code": "OPERATION SILENT CHATEAU",
         "location": "Valognes Estate",
-        "objective": "Eliminate the SS Signals Officer and clear the estate grounds",
+        "objective": "Conquest: take and hold all three trench lines in the estate grounds",
         "difficulty": "HARD",
         "reward": 400,
         "terrain": "town",
@@ -111,7 +121,12 @@ MISSIONS: List[dict] = [
             "An SS Hauptmann is running the estate as a signals relay. His presence "
             "stiffens every gun in the village — kill him and the defense wavers. "
             "Fight house to house. Grenadiers in the streets, an MG42 dug in the "
-            "courtyard. Short ranges, no room to run."
+            "courtyard. Short ranges, no room to run. This is a conquest: the whole "
+            "garrison is on the grounds from the first minute — there are no waves, "
+            "and killing them all wins nothing by itself. The three trench lines are "
+            "the battle. Stand your men in a line with no enemy in it to take it, "
+            "and hold all three at once to win. They will come back for any line "
+            "you leave empty."
         ),
         "enemies": [
             {"type": "grenadier", "wave": 1, "count": 3},
@@ -141,15 +156,19 @@ MISSIONS: List[dict] = [
         "id": "op_03",
         "code": "OPERATION IRON CROSSROADS",
         "location": "Carentan Causeway",
-        "objective": "Destroy the twin MG42 nests and hold against the counter-attack",
+        "objective": "Conquest: take and hold both trench lines along the causeway",
         "difficulty": "SEVERE",
         "reward": 650,
         "terrain": "causeway",
         "brief": (
             "A narrow causeway over flooded ground — one way in, one way out. Two "
             "interlocking MG42 nests cover the crossing and a Panzerfaust team hunts "
-            "anything that stops. Take the nests, then dig in: they always "
-            "counter-attack across the flats."
+            "anything that stops. This is a conquest: the whole defense is dug in "
+            "from the first minute — there are no waves, and killing them all wins "
+            "nothing by itself. Two trench lines run the length of the causeway, "
+            "one each side of the road. Stand your men in a line with no enemy in "
+            "it to take it, and hold both at once to win. They will come back for "
+            "any line you leave empty."
         ),
         "enemies": [
             {"type": "grenadier", "wave": 1, "count": 2},
@@ -180,7 +199,7 @@ MISSIONS: List[dict] = [
         "id": "op_04",
         "code": "OPERATION PERMAFROST FLAK",
         "location": "Hürtgen Forest Bunker Complex",
-        "objective": "Demolish the Flak 38 battery and break the bunker garrison",
+        "objective": "Conquest: take and hold all three trench lines in the bunker complex",
         "difficulty": "NIGHTMARE",
         "reward": 1000,
         "terrain": "forest",
@@ -188,7 +207,11 @@ MISSIONS: List[dict] = [
             "Last leg of the line: a Flak 38 emplacement zeroed on the forest road, "
             "an officer's command post, and every grenadier they can scrape together. "
             "Cold enough to freeze a rifle bolt. Get the gun, break the garrison, "
-            "and bring everyone home you can."
+            "and bring everyone home you can. This is a conquest: the whole garrison "
+            "is dug in from the first minute — there are no waves, and killing them "
+            "all wins nothing by itself. The three trench lines are the battle. "
+            "Stand your men in a line with no enemy in it to take it, and hold all "
+            "three at once to win. They will come back for any line you leave empty."
         ),
         "enemies": [
             {"type": "grenadier", "wave": 1, "count": 2},

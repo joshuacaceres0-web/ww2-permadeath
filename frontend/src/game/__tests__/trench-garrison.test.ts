@@ -125,22 +125,33 @@ function nearestTrench(e: AnyEngine, u: U) {
   return best;
 }
 
-describe("wave 1 garrisons in the first trench line", () => {
+describe("the first group garrisons in the first trench line", () => {
   it.each(["dday", "town", "causeway", "forest"])(
-    "terrain %s: wave 1 mobile men stand in the first trench, not on open ground",
+    "terrain %s: the garrison's mobile men stand in the first trench, not on open ground",
     async (terrain) => {
       const e = await makeEngine(terrain);
       const mobile = e.units.filter((u) => u.side === "axis" && u.alive && !u.isStatic);
       expect(mobile.length).toBeGreaterThan(0);
-      for (const u of mobile) {
-        expect(u.trenchHold, `${terrain} wave 1 ${u.enemyType} is not a trench garrison man`).toBe(true);
+      // CONQUEST (Phase D): the mobile men split at deployment —
+      // the first group garrisons the first trench line, the
+      // depth group camps in the east. Only the garrison is
+      // trenchHold, and it is the men this test is about.
+      const garrison = mobile.filter((u) => u.trenchHold);
+      expect(garrison.length, `${terrain} trench garrison`).toBeGreaterThan(0);
+      for (const u of garrison) {
         expect(
           nearestTrench(e, u),
-          `${terrain} wave 1 ${u.enemyType} at (${Math.round(u.x)}, ${Math.round(u.y)}) is not in a trench`,
+          `${terrain} garrison ${u.enemyType} at (${Math.round(u.x)}, ${Math.round(u.y)}) is not in a trench`,
         ).toBeLessThan(40);
       }
       // In the western trench, not the eastern lines at x 2600/3400.
-      expect(Math.max(...mobile.map((u) => u.x)), `${terrain} wave 1 in the wrong trench line`).toBeLessThan(1600);
+      expect(Math.max(...garrison.map((u) => u.x)), `${terrain} garrison in the wrong trench line`).toBeLessThan(1600);
+      // And the depth men are already out east, not in the trench.
+      const depth = mobile.filter((u) => !u.trenchHold);
+      expect(depth.length, `${terrain} depth group deployed`).toBeGreaterThan(0);
+      for (const u of depth) {
+        expect(u.x, `${terrain} depth ${u.enemyType} at x=${Math.round(u.x)}`).toBeGreaterThan(3200);
+      }
       // Static guns hold the west line, not the trench. On the
       // beach landing their MGs sit at the grassline, the foot of
       // the dune ridge; on the other terrains they hold the old
@@ -160,7 +171,7 @@ describe("wave 1 garrisons in the first trench line", () => {
     },
   );
 
-  it("a wave 1 man in the trench has trench cover, the best cover in the game", { timeout: 30000 }, async () => {
+  it("a garrison man in the trench has trench cover, the best cover in the game", { timeout: 30000 }, async () => {
     const e = await makeEngine("dday");
     // The boat intro runs for the first seconds now; step past
     // it so the cover pass has run on the garrison.

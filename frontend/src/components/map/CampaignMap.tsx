@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { Flame, Medal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { GameState, MemorialEntry, Mission } from "@/lib/types";
+import type { EnemyTypeId, GameState, MemorialEntry, Mission } from "@/lib/types";
 import { ENEMY_TYPES } from "@/game/data";
 import { OP_POS, REGIONS, ROUTE, TOWNS, UNKNOWN_GROUND, campaignMapImage } from "./mapArt";
 
@@ -258,10 +258,12 @@ function Briefing({
   onDeploy: () => void;
   onClose: () => void;
 }) {
-  const waves = useMemo(() => {
-    const m = new Map<number, Mission["enemies"]>();
-    for (const e of mission.enemies) m.set(e.wave, [...(m.get(e.wave) ?? []), e]);
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  // CONQUEST (2026-11-13): no waves — intel aggregates the
+  // whole force that deploys at the start.
+  const force = useMemo(() => {
+    const m = new Map<EnemyTypeId, number>();
+    for (const e of mission.enemies) m.set(e.type, (m.get(e.type) ?? 0) + e.count);
+    return [...m.entries()].map(([type, count]) => ({ type, count }));
   }, [mission]);
   return (
     <>
@@ -296,11 +298,9 @@ function Briefing({
         <p className="font-mono text-xs text-[#E3E7DC]">{mission.objective}</p>
         <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.2em] text-[#8D9A83]">Enemy intel</p>
         <div className="mt-1 space-y-1" data-testid="map-briefing-intel">
-          {waves.map(([w, specs]) => (
-            <p key={w} className="font-mono text-[11px] text-[#A2B29A]">
-              <span className="text-[#4ECDC4]">W{w}</span> {specs.map((e) => `${ENEMY_TYPES[e.type].label} ×${e.count}`).join(" · ")}
-            </p>
-          ))}
+          <p className="font-mono text-[11px] text-[#A2B29A]">
+            <span className="text-[#4ECDC4]">FULL FORCE</span> {force.map((e) => `${ENEMY_TYPES[e.type].label} ×${e.count}`).join(" · ")}
+          </p>
         </div>
         {status === "ACTIVE" ? (
           <Button data-testid="map-deploy-btn" size="lg" className="mt-4 w-full" onClick={onDeploy} disabled={!canDeploy}>

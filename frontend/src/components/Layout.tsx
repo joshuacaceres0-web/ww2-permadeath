@@ -43,75 +43,85 @@ export default function Layout() {
       className="flex min-h-svh flex-col bg-[#121411] text-[#E3E7DC]"
       onClickCapture={MENU_SOUND_PATHS.includes(pathname) ? onMenuClick : undefined}
     >
-      <header className={cn("sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur", inGame && "short:hidden")}>
-        <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-          <Link to="/war-room" className="flex items-center gap-2.5" data-testid="brand-link">
-            <span className="flex h-8 w-8 items-center justify-center border border-[#E5A93C] text-[#E5A93C]">
-              <Crosshair size={16} strokeWidth={2.4} />
-            </span>
-            <span className="leading-none">
-              <span className="block font-heading text-lg font-bold tracking-wider text-[#F0F5EB]">
-                VANGUARD '44
+      {/* The battle takes the full screen (Josh, 2026-11-13):
+          on /game the app header is not rendered at all, so
+          the map gains its height. The header is menu
+          furniture — brand, nav, commander and RP chips,
+          DEPLOY — and the battle carries its own status
+          strip (mission, RP, timer), MENU/Esc and fullscreen
+          button, so nothing the battle needs is lost. The
+          footer and mobile nav were already /game-free. */}
+      {!inGame && (
+        <header className="sticky top-0 z-40 border-b border-[#2E3628] bg-[#121411]/95 backdrop-blur">
+          <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
+            <Link to="/war-room" className="flex items-center gap-2.5" data-testid="brand-link">
+              <span className="flex h-8 w-8 items-center justify-center border border-[#E5A93C] text-[#E5A93C]">
+                <Crosshair size={16} strokeWidth={2.4} />
               </span>
-              <span className="hidden font-mono text-[9px] uppercase tracking-[0.3em] text-[#8D9A83] min-[420px]:block">
-                Permafrost · The Sacrifice Division
+              <span className="leading-none">
+                <span className="block font-heading text-lg font-bold tracking-wider text-[#F0F5EB]">
+                  VANGUARD '44
+                </span>
+                <span className="hidden font-mono text-[9px] uppercase tracking-[0.3em] text-[#8D9A83] min-[420px]:block">
+                  Permafrost · The Sacrifice Division
+                </span>
               </span>
-            </span>
-          </Link>
-
-          <nav className="ml-6 hidden items-center gap-1 md:flex">
-            {NAV.map((n) => (
-              <NavLink
-                key={n.to}
-                to={n.to}
-                data-testid={n.testid}
-                className={({ isActive }) =>
-                  cn(
-                    "border border-transparent px-3 py-1.5 font-mono text-xs tracking-[0.18em] transition-colors duration-150",
-                    isActive
-                      ? "border-[#2E3628] bg-[#1A1D17] text-[#E5A93C]"
-                      : "text-[#8D9A83] hover:border-[#2E3628] hover:text-[#E3E7DC]"
-                  )
-                }
-              >
-                {n.label}
-              </NavLink>
-            ))}
-          </nav>
-
-          <div className="ml-auto flex items-center gap-3">
-            <div
-              data-testid="commander-chip"
-              className="hidden border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono sm:block"
-              title="Your rank as commander"
-            >
-              <span className="block text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">Commander</span>
-              <span className="block max-w-40 truncate text-sm font-semibold text-[#F0F5EB]">
-                {state ? `${state.commander_rank} ${state.commander_name}` : "—"}
-              </span>
-            </div>
-            <div
-              data-testid="requisition-chip"
-              className="border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono"
-              title="Requisition points"
-            >
-              <span className="block text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">
-                Requisition
-              </span>
-              <span className="block text-sm font-semibold text-[#E5A93C]">
-                {state ? `${state.requisition} RP` : "— RP"}
-              </span>
-            </div>
-            <Link
-              to="/game"
-              data-testid="quick-deploy-btn"
-              className={buttonVariants({ variant: "default", size: "sm" })}
-            >
-              DEPLOY
             </Link>
+
+            <nav className="ml-6 hidden items-center gap-1 md:flex">
+              {NAV.map((n) => (
+                <NavLink
+                  key={n.to}
+                  to={n.to}
+                  data-testid={n.testid}
+                  className={({ isActive }) =>
+                    cn(
+                      "border border-transparent px-3 py-1.5 font-mono text-xs tracking-[0.18em] transition-colors duration-150",
+                      isActive
+                        ? "border-[#2E3628] bg-[#1A1D17] text-[#E5A93C]"
+                        : "text-[#8D9A83] hover:border-[#2E3628] hover:text-[#E3E7DC]"
+                    )
+                  }
+                >
+                  {n.label}
+                </NavLink>
+              ))}
+            </nav>
+
+            <div className="ml-auto flex items-center gap-3">
+              <div
+                data-testid="commander-chip"
+                className="hidden border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono sm:block"
+                title="Your rank as commander"
+              >
+                <span className="block text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">Commander</span>
+                <span className="block max-w-40 truncate text-sm font-semibold text-[#F0F5EB]">
+                  {state ? `${state.commander_rank} ${state.commander_name}` : "—"}
+                </span>
+              </div>
+              <div
+                data-testid="requisition-chip"
+                className="border border-[#2E3628] bg-[#1A1D17] px-3 py-1.5 text-right font-mono"
+                title="Requisition points"
+              >
+                <span className="block text-[9px] uppercase tracking-[0.2em] text-[#8D9A83]">
+                  Requisition
+                </span>
+                <span className="block text-sm font-semibold text-[#E5A93C]">
+                  {state ? `${state.requisition} RP` : "— RP"}
+                </span>
+              </div>
+              <Link
+                to="/game"
+                data-testid="quick-deploy-btn"
+                className={buttonVariants({ variant: "default", size: "sm" })}
+              >
+                DEPLOY
+              </Link>
+            </div>
           </div>
-        </div>
-      </header>
+        </header>
+      )}
 
       <main
         className={

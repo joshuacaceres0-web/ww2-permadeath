@@ -465,7 +465,7 @@ export default function Battlefield() {
             <span className="font-bold tracking-wider text-[#F0F5EB]">{mission.code}</span>
             <span className="text-[#E5A93C]" data-testid="battle-rp">{state?.requisition ?? "—"} RP</span>
             <span className="text-[#8D9A83]" data-testid="battle-timer">T+{mmss(hud?.elapsed ?? 0)}</span>
-            <span className="text-[#4ECDC4]" data-testid="battle-wave">WAVE {hud?.wave ?? 1}/{hud?.waves ?? 1}</span>
+            <span className="text-[#4ECDC4]" data-testid="battle-points" title="Trench lines held of the lines on the map — hold every line at once to win">TRENCHES {hud?.pointsHeld ?? 0}/{hud?.pointsTotal ?? 0}</span>
             <span className="text-[#E24A4A]" data-testid="battle-hostiles">HOSTILES {hud?.enemiesAlive ?? "—"}</span>
             <span className={hud?.radioLive ? "text-[#5EB872]" : "text-[#E24A4A]"} data-testid="radio-status" title={hud?.radioLive ? "Radioman alive, radio support is up" : "No radioman, radio support is down"}>
               RADIO {hud?.radioLive ? "● LIVE" : "✕ DOWN"}
@@ -559,7 +559,7 @@ export default function Battlefield() {
               <button
                 data-testid="take-cover-btn"
                 onClick={() => engineRef.current?.takeCover()}
-                title="Leader takes cover (C)"
+                title="Leader takes cover (G)"
                 className={`flex items-center px-2 py-1.5 text-[10px] ${PANEL_BTN}`}
               >
                 <Shield size={12} className="mr-1" /> COVER
@@ -704,8 +704,10 @@ export default function Battlefield() {
                     </>
                   ) : (
                     <>
-                      You control the leader: WASD moves him, left click shoots, right click (or Q) uses his
-                      ability, and X drops him prone — hit X while moving and he dolphin dives.
+                      You control the leader: WASD moves him, left click shoots (hold it down and an
+                      automatic weapon keeps firing), hold right click to aim — aimed shots fly
+                      straighter and the ring shows his range — Q uses his ability, and C drops
+                      him prone — hit C while moving and he dolphin dives.
                       The rest of the squad follows him under your orders: 1 ATTACK, 2 DEFEND,
                       3 FORM UP, with F for formation. DEFEND scatters them to cover where they
                       stand; FORM UP keeps them in formation on him. If he falls, the next most experienced man takes over.
@@ -987,6 +989,8 @@ export default function Battlefield() {
               enemiesAlive: 0,
               wave: 1,
               waves: 1,
+              pointsHeld: 0,
+              pointsTotal: 0,
               aimUnitId: null,
               log: [],
               formation: "wedge",

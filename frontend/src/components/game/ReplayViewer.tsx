@@ -285,7 +285,6 @@ export default function ReplayViewer({ replay, onClose }: { replay: BattleReplay
       <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
         <span className="font-heading text-sm font-bold tracking-wider text-[#F0F5EB]">BATTLE REPLAY — {replay.mission}</span>
         <span className="text-[#E5A93C]">T+{(frame?.t ?? 0).toFixed(1)}s</span>
-        <span className="text-[#4ECDC4]">WAVE {frame?.wave ?? 1}</span>
         <span className="text-[#A2B29A]">
           Squad alive {squadAlive}/5 · Enemies alive {foesAlive} · {replay.result.toUpperCase()}
         </span>

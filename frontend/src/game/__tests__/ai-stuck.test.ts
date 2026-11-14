@@ -106,7 +106,7 @@ describe("AI stuck / cover simulation — Silent Chateau", () => {
 
     const units = () => (anyEngine.units as Array<Record<string, unknown>>).filter((u) => u.alive);
     const totalEnemies = SILENT_CHATEAU.enemies.reduce((t, e) => t + e.count, 0);
-    expect(units().filter((u) => u.side === "axis").length).toBe(7); // wave 1 only at start
+    expect(units().filter((u) => u.side === "axis").length).toBe(totalEnemies); // CONQUEST: the full force deploys at the start, no waves
     expect(units().filter((u) => u.side === "allies" && u.npc).length).toBe(12); // 2nd Platoon
     expect(totalEnemies).toBe(27);
 

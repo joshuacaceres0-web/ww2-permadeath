@@ -283,9 +283,9 @@ interface MissionDef {
 const MISSIONS: MissionDef[] = [
   {
     id: "op_01", code: "OPERATION OVERLORD", location: "Normandy, France — 6 June 1944",
-    objective: "D-Day. Get ashore or get down from the sky, break the coastal defense, silence the MG42",
+    objective: "Conquest: take and hold all three trench lines on the bluffs",
     difficulty: "MODERATE", reward: 250, terrain: "dday",
-    brief: "D-Day. Choose how your squad goes in: across Omaha Beach in a Higgins boat, under the bluffs and the steel hedgehogs, or by C-47 in the dark with the airborne — scattered across the hedgerows behind the Atlantic Wall. Either way an MG42 is waiting. Use the gaps, keep moving, and remember: every man you lose is gone for good.",
+    brief: "D-Day. Choose how your squad goes in: across Omaha Beach in a Higgins boat, under the bluffs and the steel hedgehogs, or by C-47 in the dark with the airborne — scattered across the hedgerows behind the Atlantic Wall. Either way an MG42 is waiting. Use the gaps, keep moving, and remember: every man you lose is gone for good. This is a conquest: the whole German force is dug in from the first minute — there are no waves, and killing them all wins nothing by itself. The three trench lines are the battle. Stand your men in a line with no enemy in it to take it, and hold all three at once to win. They will come back for any line you leave empty.",
     enemies: [
       { type: "volks", wave: 1, count: 6 }, { type: "funk", wave: 1, count: 1 }, { type: "medic", wave: 1, count: 1 },
       { type: "grenadier", wave: 1, count: 3 }, { type: "mg42", wave: 1, count: 9 }, { type: "mortar", wave: 1, count: 3 },
@@ -298,9 +298,9 @@ const MISSIONS: MissionDef[] = [
   },
   {
     id: "op_02", code: "OPERATION SILENT CHATEAU", location: "Valognes Estate",
-    objective: "Eliminate the SS Signals Officer and clear the estate grounds",
+    objective: "Conquest: take and hold all three trench lines in the estate grounds",
     difficulty: "HARD", reward: 400, terrain: "town",
-    brief: "An SS Hauptmann is running the estate as a signals relay. His presence stiffens every gun in the village — kill him and the defense wavers. Fight house to house. Grenadiers in the streets, an MG42 dug in the courtyard. Short ranges, no room to run.",
+    brief: "An SS Hauptmann is running the estate as a signals relay. His presence stiffens every gun in the village — kill him and the defense wavers. Fight house to house. Grenadiers in the streets, an MG42 dug in the courtyard. Short ranges, no room to run. This is a conquest: the whole garrison is on the grounds from the first minute — there are no waves, and killing them all wins nothing by itself. The three trench lines are the battle. Stand your men in a line with no enemy in it to take it, and hold all three at once to win. They will come back for any line you leave empty.",
     enemies: [
       { type: "grenadier", wave: 1, count: 3 }, { type: "volks", wave: 1, count: 3 }, { type: "funk", wave: 1, count: 1 },
       { type: "medic", wave: 1, count: 1 }, { type: "mg42", wave: 1, count: 3 },
@@ -314,9 +314,9 @@ const MISSIONS: MissionDef[] = [
   },
   {
     id: "op_03", code: "OPERATION IRON CROSSROADS", location: "Carentan Causeway",
-    objective: "Destroy the twin MG42 nests and hold against the counter-attack",
+    objective: "Conquest: take and hold both trench lines along the causeway",
     difficulty: "SEVERE", reward: 650, terrain: "causeway",
-    brief: "A narrow causeway over flooded ground — one way in, one way out. Two interlocking MG42 nests cover the crossing and a Panzerfaust team hunts anything that stops. Take the nests, then dig in: they always counter-attack across the flats.",
+    brief: "A narrow causeway over flooded ground — one way in, one way out. Two interlocking MG42 nests cover the crossing and a Panzerfaust team hunts anything that stops. This is a conquest: the whole defense is dug in from the first minute — there are no waves, and killing them all wins nothing by itself. Two trench lines run the length of the causeway, one each side of the road. Stand your men in a line with no enemy in it to take it, and hold both at once to win. They will come back for any line you leave empty.",
     enemies: [
       { type: "grenadier", wave: 1, count: 2 }, { type: "funk", wave: 1, count: 1 }, { type: "panzerfaust", wave: 1, count: 2 },
       { type: "mg42", wave: 1, count: 3 }, { type: "volks", wave: 1, count: 2 }, { type: "medic", wave: 1, count: 1 },
@@ -330,9 +330,9 @@ const MISSIONS: MissionDef[] = [
   },
   {
     id: "op_04", code: "OPERATION PERMAFROST FLAK", location: "Hürtgen Forest Bunker Complex",
-    objective: "Demolish the Flak 38 battery and break the bunker garrison",
+    objective: "Conquest: take and hold all three trench lines in the bunker complex",
     difficulty: "NIGHTMARE", reward: 1000, terrain: "forest",
-    brief: "Last leg of the line: a Flak 38 emplacement zeroed on the forest road, an officer's command post, and every grenadier they can scrape together. Cold enough to freeze a rifle bolt. Get the gun, break the garrison, and bring everyone home you can.",
+    brief: "Last leg of the line: a Flak 38 emplacement zeroed on the forest road, an officer's command post, and every grenadier they can scrape together. Cold enough to freeze a rifle bolt. Get the gun, break the garrison, and bring everyone home you can. This is a conquest: the whole garrison is dug in from the first minute — there are no waves, and killing them all wins nothing by itself. The three trench lines are the battle. Stand your men in a line with no enemy in it to take it, and hold all three at once to win. They will come back for any line you leave empty.",
     enemies: [
       { type: "grenadier", wave: 1, count: 2 }, { type: "funk", wave: 1, count: 1 }, { type: "officer", wave: 1, count: 1 },
       { type: "mg42", wave: 1, count: 3 }, { type: "flak", wave: 1, count: 1 }, { type: "volks", wave: 1, count: 2 },

@@ -83,3 +83,73 @@ Headless runs through the real engine (scratch drivers zz-audit / zz-probe2 / zz
 - Radio tank call landed at about 5s in all four operations (living radioman, commander level 8).
 - Wrecks persisted to battle end in every run (1 to 3 per operation).
 - Bipod exercise in AUTO runs was thin (deployed-MG time 0 to 2s per run): AUTO rarely holds the squad MG prone for long. The mechanic itself is pinned by mg-bipod.test.ts (3/3); Josh's manual play is where it will show.
+
+---
+
+# Bug hunt sweep 2026-11-13 #2 (tank focused, base HEAD 6d2bc2f)
+
+Second sweep, run in an isolated worktree (~/workspace/ww2-sweep-work) so the parallel graphics job's tree was never touched. Scratch drivers zz-sweep / zz-probe2 (seeded mulberry32 RNG installed as Math.random, so every run reproduces exactly from its seed; drivers deleted after, never committed, main save untouched). Six-man squad (rifleman leader, rifleman, radioman, medic, MG, AT), commander level 8, real backend compositions, Sherman called at T+5s in every run. Invariants checked every second of every run: finite positions/hp/morale, hp at or under max, mag and altMag inside their tubes, reload timers non-negative, nobody alive far out of the map. Every damage event of every run was audited at the damage() seam: armor class of the target vs the source type. Turret angles were checked every tick against the per-type traverse cap. Battle reports were validated at filing: fallen + deserted + survivors partition the squad exactly, each man's filed kills equal the engine's count, lootRp equals 25 x crates looted, at most one crate, victory flag matches battleState.
+
+## Play-test results (10 full AUTO runs + duel + retreat)
+- Overlord beach, seeds 11 / 77: VICTORY 185s / 212s, squad 3/6 and 2/6 alive. Sherman untouched (500) both, 3 and 4 kills. Wave-3 Panzer died in both. Crate looted in seed 77 (25 RP, exactly once).
+- Overlord airborne, seeds 23 / 91: VICTORY 169s / 145s, squad 5/6 and 4/6. All three Panzers (wave 3 + the 2 convoy) died in both; Sherman untouched. Crate looted in both (25 RP each).
+- Silent Chateau, seeds 31 / 55: VICTORY 178s / 154s, squad 3/6 both. Sherman untouched, Panzer died in both.
+- Iron Crossroads, seed 41: VICTORY 196s, squad 2/6, Sherman ground down to 60 hp by Panzer + panzerfaust fire and lived; both Panzers died. Seed 97: DEFEAT in 39s — wave 1 (twin MG42 nests + panzerfausts) wiped the squad before the Sherman could matter; filed cleanly. (Balance cliff, already an open design decision — not a bug.)
+- Permafrost, seed 61: VICTORY 249s, squad 1/6, the Sherman DIED this time (armor sources only, per the audit) after 3 kills; both Panzers died. Seed 83: DEFEAT 152s, squad wiped, Sherman alive at 500 with 3 kills, the last Panzer alive at 150 hp when the battle filed — filed cleanly as a defeat.
+- Duel micro-scenario (lone Panzer + 2 volks vs rifleman/radioman/AT/MG, Sherman called): VICTORY 25s — the AT man's bazooka killed the Panzer before the Sherman engaged. Armor sources only.
+- Retreat probe (Chateau, retreat at 25s): filed as a defeat, report fallen 2 / survivors 4 (extracted men counted, no drops, no doubles). Fit-map flag was still on at battle end on that engine instance, and a second setup() on the SAME engine started clean (flag reset, squad whole, phase fresh) — no leak into the next battle.
+
+## New bugs found
+- NONE. No table entries: nothing met the bar for #25. Zero invariant violations, zero armor violations across every audited damage event of all 13 runs, zero turret over-traverse ticks, zero stuck-vehicle candidates (no vehicle ended a battle alive after 60s+ of no movement and no damage dealt), zero soft-locks (longest battle 249s against a 1200s cap), zero HUD log nonsense hits.
+
+## Verified working (this sweep)
+- Armor rule under audit, not sampling: in 13 battles, no tank-armor target ever lost HP to a source outside ARMOR_SOURCES. The one Sherman death (Permafrost seed 61) and the 60-hp survival (Crossroads seed 41) came only from Panzer guns and panzerfaust rockets.
+- Halftrack half-damage: a full airborne battle audited at the damage seam — no small-arms event ever applied more than 0.7x of its raw hit to the convoy halftrack (the halving plus the marked-target ceiling is 0.65x).
+- Tank call gates: first call lands, second call refused (one Sherman only), call with a dead radioman refused and no tank spawns.
+- Deserter filing end-to-end: a staged break (flee roll forced, radioman + medic + the NPC radioman first removed through the real damage path) ran west, deserted at t=4s, filed in report.deserted — NOT in fallen (no Memorial entry) — and the battle filed as a defeat on the spot, partition exact. Note the layering that made the staging take three tries: a fleeing man is rescued by design at every layer — the squad radioman's Rally Call steadies him at 65, a morphine medic does the same, and the 2nd Platoon's NPC radioman mirrors the rally onto player men too (Pfc. Novak rescued the probe man twice). All three rescues are documented behavior, not bugs — but it means a desertion only ever completes when every rally source is dead or out of reach, which matches how rarely it fires in real play (zero deserters across all 10 open runs, with natural morale).
+- Crates: spawned in several runs, looted in 3, paid exactly 25 RP each time, never twice, never more than one crate on a map; lootItem stayed null whenever no crate was looted.
+- Kill accounting: in every run, each filed man's kills equaled the engine's own count, and the report partition matched the squad roster exactly — fallen, deserted and survivors, nobody dropped or double counted.
+
+---
+
+# Bug hunt sweep 2026-11-13 #3 (finished package build, base HEAD d3d3da2)
+
+Third sweep, on the finished package build: Phase A (bars/control), Phase B (vault/dive), Phase C (vehicle scale/honesty), the controls+fire job (C key, fullscreen battle, dive cooldown, click-fire rework, aim mode), the explosives pass (grenade fuse/range/flee, mine instant kill, mine visibility/avoidance) and Phase D conquest (no waves, trench control points, retakes). Method as before: seeded mulberry32 RNG installed as Math.random, real backend compositions (the local save mirror's /missions), seven-man squad (rifleman leader, rifleman, radioman, medic, MG, AT, engineer), commander level 8, Sherman called from t=5s in every run. Audits ran live inside every battle: the armor rule on every damage() event (target armor class vs source type, plus the halftrack small-arms ceiling), per-second invariants (finite positions/hp/morale, hp at or under max, mag/altMag inside their tubes, reload timers non-negative, nobody alive far out of the map), frag lifespans against the 2s fuse, mine detonations (every armed-to-gone mine must have an allied mine-source death beside it; revealed mines watched for steppers and for AI men lingering inside the trigger ring), control-point progress bounds and flip logging, stuck scans for infantry and vehicles, and full filing audits at battle end (files exactly once, report partitions the roster exactly, per-man kills match the engine, lootRp is 25 x crates looted and never more, victory only with every point held). Scratch drivers deleted after, never committed.
+
+## Play-test results (10 full AUTO runs, conquest rules)
+
+| Run | Result | Duration | Notes |
+| --- | --- | --- | --- |
+| Overlord beach, seed 101 | VICTORY | 236s | Roster 3/7, axis 51/51 dead. 6 point flips, including axis recaptures (C @175s, B @197s) — retakes work live. Sherman wedged — bug #25 below. |
+| Overlord beach, seed 202 | VICTORY | 319s | Roster 1/7. Same Sherman wedge at the identical spot. |
+| Overlord airborne, seed 303 | VICTORY | 231s | Sherman engaged and fought (no wedge on airborne geometry). |
+| Overlord airborne, seed 404 | VICTORY | 306s | Clean. |
+| Silent Chateau, seed 505 | VICTORY | 241s | Axis 39 dead: the base 33 plus the timed counter-attack pair and Funker call-ins — legal reinforcements, not a spawn error. |
+| Silent Chateau, seed 606 | VICTORY | 220s | Clean. |
+| Iron Crossroads, seed 707 | DEFEAT | 155s | Squad wipe against the full deployed force — the known full-force cliff (Josh's open call, not re-litigated). Filed cleanly. |
+| Iron Crossroads, seed 808 | VICTORY | 128s | Clean. |
+| Permafrost, seed 909 | DEFEAT | 171s | Point C taken @134s, retaken by axis @147s; squad ground down after. Filed cleanly. |
+| Permafrost, seed 111 | DEFEAT | 156s | Nightmare op; filed cleanly. |
+
+Every battle filed exactly once; every report audit passed. Zero invariant violations across all 10 runs.
+
+## New bugs found
+
+| # | Symptom & evidence | Where | Severity | Fixed? | Commit |
+| --- | --- | --- | --- | --- | --- |
+| 25 | The called-in Sherman never fought on the beach. In both seeded Overlord beach runs it rolled east on the road, stopped at exactly (501,650) around t=20s and sat there at full health for the rest of the battle (200s+), never firing (nearest enemy 516+ away). Root cause, bisected with a moveToward wrapper: its step target was (621,650); the full step was refused because a hedgehog at (515,604) puts a blocked grid cell inside the Phase C hull footprint (vehicle body radius 30, up from 22) — but the perpendicular "slide" step moved it ~0.01 units (the target was almost dead ahead), so moveToward accepted the hair slide forever and the pocket escape built for exactly this case never got a turn. The grid cell patch is coarser than the true circle geometry (a thread exists at y~658), and no stuck detector watches the tank-road branch, so nothing ever rescued it. Also stalls the same way under manual play (the Sherman is AI-driven in every mode). | engine.ts moveToward (step attempts + pocket escape) | HIGH — a paid radio call (60 RP) delivers a tank that sits out the whole battle on the flagship map. Not CRITICAL: the battle still files and infantry can win without it. | Yes — a vehicle's axis slide must actually close on its target (>= 0.1x the step; the hair slide closed at ~0.002x), and a wedged vehicle probes toward its waypoint first in the pocket escape instead of backing down the road into the same cell. Footmen keep the plain slide and the back-out-first order: the bug #1 stuck detector is their backstop (wedge.test.ts worst stuck ~2s, unchanged). Regression test beach-sherman.test.ts drives the real op_01 in AUTO on seed 101 and pins the Sherman through the belt (x > 900): fails pre-fix at exactly (501,650), passes post-fix (x~1100 by t=40, fighting). | 007a464 |
+
+## Test staging repair (not a game bug)
+
+leader-controls.test.ts flipped two tests on the untouched build (the assigned "a follower fires on his own at an enemy in range" ~1 run in 3; "left click on an enemy makes the leader fire without chasing" ~1 in 6). Diagnosed with a scratch harness (10–20 stagings per variant): since Phase D the staged foe is a trench-garrison man whose patrol re-picks a trench spot — overriding a plain home/patrol pin — and walks him east out of the shot inside the window (740 → 828 in every staging); the follower, teleported 150 from his leader, correctly walks back to his formation slot and fires only marginally on the way; and the left-click's single semi-auto shot at the old 160 range is a ~4-in-5 hit roll even at a stationary foe (8/10 stagings). Repairs are staging-only (no assertion weakened, no game code touched): the follower test stages the leader beside the follower; both tests pin the foe's home/patrol to the staged spot (Phase D's own repair pattern) and make him a static post so the patrol re-pick cannot override the pin; the left-click foe stages at 60, where the click's shot connects (20/20). Proof: 5 of 5 solo runs of the file, 10/10 tests each (baseline flipped in 3 of 6). Commit dcd0ae8.
+
+## Verified working (this sweep)
+
+- Armor rule under full audit: about 7,900 damage events across the 10 battles — no tank-class target ever lost HP to a source outside ARMOR_SOURCES, and no halftrack small-arms event ever applied more than 0.85x of its raw hit. Zero violations.
+- Conquest filing: every victory filed only with all points held at once; point progress stayed inside [0, CAPTURE_TIME] in every sample; axis recaptures observed live (beach C and B, Permafrost C) with retake parties arriving, garrisoning and re-flipping points — no loops, no stranded parties in the stuck scans.
+- Mines: 7 detonations observed in the beach probe run (3 of 24 mines revealed by the engineer); across all 10 battles, zero detonations without an allied stepper beside the mine, zero AI men stepping on a revealed mine, zero AI men lingering inside a revealed mine's trigger ring. The stepper died by the mine rule each time (no lucky-charm save), as designed.
+- Grenade fuses: every frag tracked from cast burst inside the audit window around the 2s fuse — none instant, none missing, none lingering past 3s.
+- The depth Panzer at (3948,1092) flagged by the stuck scan in both beach runs is LEGAL, not stuck: a camp-and-defend depth post with nothing in range (the fight was 2000+ away); it engaged and died at its post in both runs once the fight reached it.
+- Deserter filing end-to-end (staged the same way as sweep #2 — rally sources killed first through the real damage path, then witnessed deaths broke a Skittish rifleman): seeds 7 and 8 broke and fell back (the flee roll is 40% for a coward; falling back is the designed miss). Seed 9 rolled the flee: he ran, deserted with cause "Broke and ran", his 2 credited kills rode in report.deserted (never in fallen, no Memorial entry), the battle filed as a defeat on the desertion itself, the report partition was exact (fallen = the 3 dead, survivors = the 2 still standing), and POSTing the report to the local backend paid his 20 kill RP. One staging lesson worth keeping: Overlord's intro runs update() alone (no morale, elapsed frozen) until it ends — burn it before staging anything timed on op_01.
+- Filing end-to-end with the save's own squad: the founding squad fought real op_01, 3 kills credited through damage(), full wipe filed a defeat; POSTing the engine report paid exactly 30 RP (3 x 10, no win reward, no loot), etched all five fallen into the Memorial, removed them from the squad, and POSTing the identical report a second time paid 0 (battle_id idempotency), with battles_lost up exactly 1.
+- No new balance findings: the three known open items (Crossroads full-force difficulty, the no-AT-vs-panzer cliff, tank duel hardness) were not re-litigated; nothing else met the bar for an entry.

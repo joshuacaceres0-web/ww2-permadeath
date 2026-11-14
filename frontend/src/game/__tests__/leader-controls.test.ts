@@ -75,6 +75,8 @@ const SQUAD = [
 type U = {
   id: number; side: string; npc: boolean; alive: boolean; x: number; y: number;
   hp: number; maxHp: number; attackId: number | null; abilityCd: number; name: string; type: string;
+  homeX: number; homeY: number; patrolX: number; patrolY: number;
+  isStatic: boolean;
 };
 
 async function makeEngine(leaderPick = "") {
@@ -139,7 +141,20 @@ describe("team leader", () => {
     const lead = e.leaderUnit()!;
     lead.x = 600; lead.y = 675;
     const foe = e.units.find((u) => u.side === "axis" && u.alive)!;
-    foe.x = 760; foe.y = 675;
+    foe.x = 660; foe.y = 675;
+    // The foe stays HERE, close in (staging repair, sweep
+    // #3 — see the follower test below for the full note): a
+    // Phase D garrison man patrols off the clicked spot
+    // inside the window and the click fires at where he
+    // stood; and the click produces ONE shot from a
+    // semi-auto rifle, which at the old 160 range is a
+    // ~4-in-5 hit roll — the stage puts him at 60, where
+    // that shot connects (20/20 stagings in the sweep's
+    // diagnostic, vs 8/10 at 160). What is pinned — the
+    // click fires at the enemy, no target lock, no chase —
+    // is unchanged.
+    foe.homeX = foe.x; foe.homeY = foe.y; foe.patrolX = foe.x; foe.patrolY = foe.y;
+    foe.isStatic = true;
     const hp0 = foe.hp;
     const lx = lead.x;
     e.leaderShootAt(foe.x, foe.y);
@@ -166,7 +181,12 @@ describe("team leader", () => {
     expect(sawBullet).toBe(true);
   });
 
-  it("right click fires the leader ability at the point", async () => {
+  // Renamed 2026-11-13: this drives the ability-cast HELPER
+  // directly. In play the ability is armed with Q and cast by
+  // the next left click; right click is aim mode now and no
+  // longer calls this (the pointer behaviour is pinned in
+  // click-fire.test.ts).
+  it("the ability-cast helper fires the leader ability at the point", async () => {
     const e = await makeEngine();
     e.begin();
     const lead = e.leaderUnit()!;
@@ -227,8 +247,27 @@ describe("team leader", () => {
     e.begin();
     const follower = e.units.find((m) => e.isFollower(m) && m.alive && m.type === "rifleman")!;
     const foe = e.units.find((u) => u.side === "axis" && u.alive)!;
+    // The pair is staged together and the foe stays HERE
+    // (staging repair, sweep #3): since Phase D the staged foe
+    // is a trench-garrison man whose patrol re-picks a trench
+    // spot — overriding a plain home/patrol pin — and walks
+    // him east out of the follower's effective range inside
+    // the 2.5s window; and the follower, teleported 150 from
+    // his leader, quite correctly walks back to his formation
+    // slot and only fires marginally on the way. Together they
+    // made this test a coin flip (it failed ~1 run in 3 on the
+    // untouched build). Stage the leader beside the follower
+    // so his slot is here, pin the foe's home/patrol to the
+    // staged spot (the repair Phase D applied to the other
+    // staged suites) and make him a static post so the patrol
+    // re-pick cannot override the pin. The assertion below is
+    // unchanged.
+    const leader = e.leaderUnit()!;
+    leader.x = 560; leader.y = 675;
     follower.x = 600; follower.y = 675;
     foe.x = 740; foe.y = 675;
+    foe.homeX = foe.x; foe.homeY = foe.y; foe.patrolX = foe.x; foe.patrolY = foe.y;
+    foe.isStatic = true;
     const hp0 = foe.hp;
     step(e, 2.5);
     expect(foe.hp).toBeLessThan(hp0);

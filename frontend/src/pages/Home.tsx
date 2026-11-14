@@ -42,15 +42,13 @@ export default function Home() {
   const mission = missions && state ? missions.find((m) => m.index === state.mission_index) : undefined;
   const activeSquad = (squad ?? []).filter((s) => s.status === "active");
 
-  const waves = useMemo(() => {
-    if (!mission) return [] as Array<[number, Mission["enemies"]]>;
-    const m = new Map<number, Mission["enemies"]>();
-    for (const e of mission.enemies) {
-      const arr = m.get(e.wave) ?? [];
-      arr.push(e);
-      m.set(e.wave, arr);
-    }
-    return [...m.entries()].sort((a, b) => a[0] - b[0]);
+  // CONQUEST (2026-11-13): no waves — the intel lists the whole
+  // enemy force that deploys at the start, counts aggregated.
+  const force = useMemo(() => {
+    if (!mission) return [] as Mission["enemies"];
+    const m = new Map<string, number>();
+    for (const e of mission.enemies) m.set(e.type, (m.get(e.type) ?? 0) + e.count);
+    return [...m.entries()].map(([type, count]) => ({ type, count })) as Mission["enemies"];
   }, [mission]);
 
   const reset = useMutation({
@@ -174,20 +172,18 @@ export default function Home() {
                   Enemy intel
                 </p>
                 <div className="mt-2 space-y-2" data-testid="enemy-intel">
-                  {waves.map(([wave, specs]) => (
-                    <div key={wave} className="flex flex-wrap items-center gap-2">
-                      <span className="w-16 font-mono text-[10px] text-[#4ECDC4]">WAVE {wave}</span>
-                      {specs.map((e, i) => (
-                        <Badge
-                          key={i}
-                          variant="outline"
-                          className={`font-mono text-[10px] ${THREAT_TEXT[ENEMY_TYPES[e.type].threat]}`}
-                        >
-                          {ENEMY_TYPES[e.type].label} ×{e.count}
-                        </Badge>
-                      ))}
-                    </div>
-                  ))}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="w-16 font-mono text-[10px] text-[#4ECDC4]">FULL FORCE</span>
+                    {force.map((e, i) => (
+                      <Badge
+                        key={i}
+                        variant="outline"
+                        className={`font-mono text-[10px] ${THREAT_TEXT[ENEMY_TYPES[e.type].threat]}`}
+                      >
+                        {ENEMY_TYPES[e.type].label} ×{e.count}
+                      </Badge>
+                    ))}
+                  </div>
                 </div>
               </div>
               <div className="flex flex-wrap items-center gap-3 pt-1">

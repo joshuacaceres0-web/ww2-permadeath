@@ -571,16 +571,22 @@ export interface GunDef {
   spread: number;
   bulletSpeed: number;
   sprite: "thompson" | "mp40" | "carbine" | "springfield" | "trench" | "bar" | "fg42";
+  /** Full-auto (Josh, 2026-11-13): holding the mouse button
+   * keeps this gun firing. Only the true automatics carry
+   * the flag — the looted Thompson, MP40, BAR and FG42 here,
+   * and the MG class gun on its class spec (see UNIT_TYPES).
+   * Everything else fires once per click press. */
+  auto?: boolean;
 }
 
 export const GUN_DEFS: Record<string, GunDef> = {
-  thompson: { dmg: 11, range: 150, magSize: 50, reloadTime: 3.2, fireInterval: 0.11, spread: 0.1, bulletSpeed: 560, sprite: "thompson" },
-  mp40: { dmg: 9, range: 185, magSize: 32, reloadTime: 2.0, fireInterval: 0.13, spread: 0.055, bulletSpeed: 560, sprite: "mp40" },
+  thompson: { dmg: 11, range: 150, magSize: 50, reloadTime: 3.2, fireInterval: 0.11, spread: 0.1, bulletSpeed: 560, sprite: "thompson", auto: true },
+  mp40: { dmg: 9, range: 185, magSize: 32, reloadTime: 2.0, fireInterval: 0.13, spread: 0.055, bulletSpeed: 560, sprite: "mp40", auto: true },
   carbine: { dmg: 10, range: 230, magSize: 15, reloadTime: 1.6, fireInterval: 0.32, spread: 0.045, bulletSpeed: 640, sprite: "carbine" },
   springfield: { dmg: 34, range: 520, magSize: 5, reloadTime: 2.8, fireInterval: 1.6, spread: 0.012, bulletSpeed: 900, sprite: "springfield" },
   trench97: { dmg: 30, range: 110, magSize: 5, reloadTime: 2.2, fireInterval: 0.9, spread: 0.09, bulletSpeed: 540, sprite: "trench" },
-  bar: { dmg: 13, range: 300, magSize: 20, reloadTime: 3.4, fireInterval: 0.14, spread: 0.07, bulletSpeed: 720, sprite: "bar" },
-  fg42: { dmg: 14, range: 330, magSize: 20, reloadTime: 2.6, fireInterval: 0.12, spread: 0.05, bulletSpeed: 760, sprite: "fg42" },
+  bar: { dmg: 13, range: 300, magSize: 20, reloadTime: 3.4, fireInterval: 0.14, spread: 0.07, bulletSpeed: 720, sprite: "bar", auto: true },
+  fg42: { dmg: 14, range: 330, magSize: 20, reloadTime: 2.6, fireInterval: 0.12, spread: 0.05, bulletSpeed: 760, sprite: "fg42", auto: true },
 };
 export const ITEM_BY_ID: Record<string, ItemDef> = Object.fromEntries(ITEM_DEFS.map((d) => [d.id, d]));
 

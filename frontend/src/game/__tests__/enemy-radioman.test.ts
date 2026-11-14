@@ -1,8 +1,12 @@
 // @vitest-environment node
-// Enemy radioman: every wave carries one Funker. While he lives he
-// rallies nearby men over the radio, and 25s into the wave he calls
-// in 2 more men, once per wave. Kill him first and the wave gets no
-// call-in — the mirror of the squad radioman rule.
+// Enemy radioman: every deployment group carries one Funker.
+// While he lives he rallies nearby men over the radio, and 25s
+// into the battle a living Funker calls in 2 more men — once
+// per BATTLE under conquest (Phase D: the per-wave re-arm went
+// with the waves; both of this fixture's Funkers are on the
+// field from the start, and the call-in still fires only
+// once). Kill every Funker first and no call-in comes — the
+// mirror of the squad radioman rule.
 import { describe, expect, it } from "vitest";
 import { ENEMY_TYPES } from "../data";
 
@@ -144,37 +148,37 @@ describe("enemy radioman", () => {
     expect(spec.threat).toBe("LOW");
   });
 
-  it("a living Funker calls in 2 more men 25s into the wave", async () => {
+  it("a living Funker calls in 2 more men 25s into the battle", async () => {
     const { e, hud } = await makeEngine();
-    expect(axisAlive(e).length).toBe(3);
+    // CONQUEST: the whole fixture force (7 across all three
+    // groups, two Funkers among them) is on the field at once.
+    expect(axisAlive(e).length).toBe(7);
     park(e);
     step(e, 30);
-    expect(axisAlive(e).length).toBe(5);
+    expect(axisAlive(e).length).toBe(9);
     const called = axisAlive(e).filter((u) => u.enemyType === "volks");
-    expect(called.length).toBe(4); // the 2 from the wave plus the 2 called in
+    expect(called.length).toBe(6); // the 4 deployed plus the 2 called in
     expect(hud().log.map((l) => l.text).join(" ")).toMatch(/Enemy radio: two more men/);
   }, 30000); // 30s of sim is 1800 engine updates; slow under parallel load
 
-  it("if the Funker dies first, no call-in comes", async () => {
+  it("if every Funker dies first, no call-in comes", async () => {
     const { e, hud } = await makeEngine();
     park(e);
-    const funker = axisAlive(e).find((u) => u.enemyType === "funk")!;
-    e.damage(funker, 999, "rifle", null);
-    expect(funker.alive).toBe(false);
+    const funkers = axisAlive(e).filter((u) => u.enemyType === "funk");
+    expect(funkers.length).toBe(2);
+    for (const funker of funkers) e.damage(funker, 999, "rifle", null);
+    expect(funkers.every((f) => !f.alive)).toBe(true);
     step(e, 30);
-    expect(axisAlive(e).length).toBe(2);
+    expect(axisAlive(e).length).toBe(5);
     expect(hud().log.map((l) => l.text).join(" ")).not.toMatch(/two more men/);
     expect(hud().log.map((l) => l.text).join(" ")).toMatch(/Enemy radio is down/);
   }, 30000);
 
-  it("only one call-in per wave", async () => {
+  it("only one call-in per battle, even with two Funkers alive", async () => {
     const { e } = await makeEngine();
     park(e);
-    // 60s, not 90s: after 60s of no combat the stalemate breaker
-    // starts hunting, and a breaker-driven fight could clear wave 1
-    // and start wave 2 (with its own call-in) before the window ends.
-    // 60s still proves the point: the timer fires once at 25s and
-    // never re-arms within the wave.
+    // 60s still proves the point: the timer fires once at 25s
+    // and never re-arms, though two Funkers live through it.
     step(e, 60);
     // Count every axis man ever created, not just the living: the two
     // called-in men walk into the squad's guns and die, so the alive
@@ -183,7 +187,7 @@ describe("enemy radioman", () => {
     // can also add 2 men inside this 60s window, and they are a
     // separate feature, not a second Funker call-in.
     const totalAxis = e.units.filter((u) => u.side === "axis" && !u.counterAttack).length;
-    expect(totalAxis).toBe(5); // wave 1 (3) + one call-in (2), never 7
+    expect(totalAxis).toBe(9); // full force (7) + one call-in (2), never 11
   }, 30000); // 60s of sim is 3600 engine updates; slow under parallel load
 
   it("the Funker rallies his men over the radio", async () => {
@@ -206,12 +210,15 @@ describe("enemy radioman", () => {
     expect(funker.abilityCd).toBe(0);
   });
 
-  it("the HUD shows the enemy radio going down with the Funker", async () => {
+  it("the HUD shows the enemy radio going down with the last Funker", async () => {
     const { e, hud } = await makeEngine();
     expect(e.enemyRadioLive()).toBe(true);
     expect(hud().enemyRadioLive).toBe(true);
-    const funker = axisAlive(e).find((u) => u.enemyType === "funk")!;
-    e.damage(funker, 999, "rifle", null);
+    const funkers = axisAlive(e).filter((u) => u.enemyType === "funk");
+    e.damage(funkers[0], 999, "rifle", null);
+    // One Funker still lives: the radio is still up.
+    expect(e.enemyRadioLive()).toBe(true);
+    e.damage(funkers[1], 999, "rifle", null);
     expect(e.enemyRadioLive()).toBe(false);
     expect(hud().enemyRadioLive).toBe(false);
   });

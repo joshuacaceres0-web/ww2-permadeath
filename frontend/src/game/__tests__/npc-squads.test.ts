@@ -93,7 +93,6 @@ type Engine = {
   damage: (u: U, amount: number, source: string, killerId: number | null) => void;
   npcSquadLeaderOf: (s: number) => U | null;
   radioLive: () => boolean;
-  spawnWaveAllies: (n: number) => void;
   units: U[];
 };
 
@@ -174,20 +173,11 @@ describe("NPC squads", () => {
     expect(third.id).toBe(pfc.id);
   });
 
-  it("wave-clear men join the smallest living squad, or form a new one", async () => {
-    const e = await makeEngine(TOWN);
-    for (const u of npcsOf(e)) if (u.npcSquad === 1) e.damage(u, 100000, "test", null);
-    const before = npcsOf(e).length;
-    e.spawnWaveAllies(2);
-    const joined = npcsOf(e).slice(before);
-    expect(joined.length).toBe(2);
-    expect(joined.every((u) => u.npcSquad === 0)).toBe(true);
-    for (const u of npcsOf(e)) if (u.alive) e.damage(u, 100000, "test", null);
-    const before2 = npcsOf(e).length;
-    e.spawnWaveAllies(2);
-    const fresh = npcsOf(e).slice(before2);
-    expect(fresh[0].npcSquad).toBe(2);
-    expect(fresh[0].npcLeader).toBe(true);
-    expect(fresh[1].npcSquad).toBe(2);
-  });
+  // REMOVED with conquest (Phase D): "wave-clear men join the
+  // smallest living squad, or form a new one" drove
+  // spawnWaveAllies, the wave-clear platoon reinforcement.
+  // There are no wave clears any more — the 2nd Platoon takes
+  // the field at its starting strength and gets no fresh men
+  // (pinned in conquest.test.ts: the platoon count never
+  // grows), so the function and its case are gone together.
 });

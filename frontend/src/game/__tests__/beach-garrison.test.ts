@@ -91,6 +91,7 @@ const SQUAD = [
 type U = Record<string, unknown> & {
   x: number; y: number; hp: number; side: string; npc: boolean; type: string; enemyType: string | null;
   vehicle: boolean; alive: boolean; isStatic: boolean; homeX: number; homeY: number;
+  trenchHold?: boolean;
 };
 type AnyEngine = Record<string, unknown> & {
   units: U[];
@@ -116,26 +117,33 @@ function step(e: AnyEngine, seconds: number) {
 }
 const dist = (ax: number, ay: number, bx: number, by: number) => Math.hypot(ax - bx, ay - by);
 
-describe("wave 1 garrisons at the beach", () => {
+describe("conquest deployment: garrison west, depth force east, all at the start", () => {
   it.each(["dday", "town", "causeway", "forest"])(
-    "terrain %s: wave 1 spawns in the west, wave 2 in the east",
+    "terrain %s: the trench garrison holds the west and the depth group is already in the east",
     async (terrain) => {
       const e = await makeEngine(terrain);
-      const wave1 = e.units.filter((u) => u.side === "axis" && u.alive);
-      expect(wave1.length).toBeGreaterThan(0);
-      // Wave 1 is in the first trench line now (see trench-garrison
-      // test): the western trench sits at x 900-1500 depending on
-      // terrain, still the west of a 4000-wide map.
-      for (const u of wave1) {
-        expect(u.x, `${terrain} wave 1 ${u.enemyType} at x=${Math.round(u.x)}`).toBeLessThan(1600);
+      const all = e.units.filter((u) => u.side === "axis" && u.alive);
+      // CONQUEST (Phase D): the whole mission force — both
+      // deployment groups, 13 men — is on the field from the
+      // first minute. Nothing spawns in later waves.
+      expect(all.length, `${terrain} full force at the start`).toBe(13);
+      // The group 1 garrison is in the first trench line (see
+      // trench-garrison test): the western trench sits at
+      // x 900-1500 depending on terrain, still the west of a
+      // 4000-wide map.
+      const garrison = all.filter((u) => u.trenchHold);
+      expect(garrison.length, `${terrain} trench garrison`).toBeGreaterThan(0);
+      for (const u of garrison) {
+        expect(u.x, `${terrain} garrison ${u.enemyType} at x=${Math.round(u.x)}`).toBeLessThan(1600);
       }
-      e.spawnWave(1);
-      const wave2 = e.units.filter((u) => u.side === "axis" && u.alive && u.x > 3200);
-      expect(wave2.length, `${terrain} wave 2 must land east of x=3200`).toBeGreaterThan(0);
+      // The group 2 depth men deployed in the east from the
+      // start — they are not a later wave any more.
+      const depth = all.filter((u) => u.x > 3200);
+      expect(depth.length, `${terrain} depth force east of x=3200 at the start`).toBe(3);
     },
   );
 
-  it("wave 1 fields three MG42 nests spread along the beach defense", async () => {
+  it("the first group fields three MG42 nests spread along the beach defense", async () => {
     const e = await makeEngine("dday");
     const mgs = e.units.filter((u) => u.enemyType === "mg42");
     expect(mgs.length).toBe(3);
@@ -162,9 +170,11 @@ describe("wave 1 garrisons at the beach", () => {
     expect(mg).toBeDefined();
     expect(mg!.x).toBeGreaterThanOrEqual(820);
     expect(mg!.x).toBeLessThan(1120);
-    // The infantry is in the first trench line at x 1400 on the
-    // beach, not on open ground ahead of the gun.
-    const infantry = e.units.filter((u) => u.side === "axis" && u.alive && !u.isStatic);
+    // The garrison infantry is in the first trench line at
+    // x 1400 on the beach, not on open ground ahead of the
+    // gun. (The depth group's infantry starts in the far
+    // east under conquest — it is not beach infantry.)
+    const infantry = e.units.filter((u) => u.side === "axis" && u.alive && !u.isStatic && u.trenchHold);
     expect(Math.max(...infantry.map((u) => u.x))).toBeLessThan(1600);
     expect(Math.min(...infantry.map((u) => u.x))).toBeGreaterThan(1300);
   });
