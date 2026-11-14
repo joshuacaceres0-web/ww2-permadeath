@@ -10,6 +10,11 @@
  * turret traverses onto a target off the hull's line, the gun
  * fires only once lined up, and every fresh round spawns at
  * the short top-gun muzzle, never at 42.
+ * Phase C (Josh, 2026-11-13): the halftrack grew 1.3x with
+ * the rest of the fleet, barrel and all, so its muzzle is 31
+ * now and the tanks' is 55 — the pins below moved with the
+ * drawings, and the spawn band still sits far short of the
+ * tanks' muzzle.
  */
 import { describe, expect, it } from "vitest";
 import { MUZZLE_LEN } from "../engine";
@@ -53,8 +58,8 @@ const angDiff = (a: number, b: number) => Math.abs(Math.atan2(Math.sin(a - b), M
 
 describe("halftrack top MG", () => {
   it("traverses onto an off-line target and fires from the short muzzle", async () => {
-    expect(MUZZLE_LEN.halftrack).toBe(24);
-    expect(MUZZLE_LEN.panzer).toBe(42);
+    expect(MUZZLE_LEN.halftrack).toBe(31);
+    expect(MUZZLE_LEN.panzer).toBe(55);
     const GameEngine = await loadEngine();
     const { roadYAt } = await import("../engine");
     const canvas = (document as unknown as { createElement: (t: string) => HTMLCanvasElement }).createElement("canvas");
@@ -91,12 +96,13 @@ describe("halftrack top MG", () => {
     // so the rounds below already imply it; this pins it).
     expect(linedUpAt).not.toBeNull();
     // It fired, repeatedly, and every fresh round left from
-    // the top gun's short muzzle: about 24 from the centre,
-    // plus at most a tick of travel, never out at 42.
+    // the top gun's short muzzle: about 31 from the centre
+    // since Phase C, plus at most a tick of travel at the
+    // gun's bullet speed, never out at the tanks' 55.
     expect(spawnDists.length).toBeGreaterThanOrEqual(3);
     for (const d of spawnDists) {
-      expect(d).toBeGreaterThan(16);
-      expect(d).toBeLessThan(40);
+      expect(d).toBeGreaterThan(26);
+      expect(d).toBeLessThan(48);
     }
   }, 120000);
 });

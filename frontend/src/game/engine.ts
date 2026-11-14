@@ -247,8 +247,8 @@ export const ARMOR_SOURCES: ReadonlySet<string> = new Set([
   "panzer", "tank", "at", "panzerfaust", "rocket",
   "mortar", "artillery", "mine", "grenade",
 ]);
-export const TANK_HIT_R = 26;
-export const VEHICLE_HIT_R = 22;
+export const TANK_HIT_R = 34;
+export const VEHICLE_HIT_R = 29;
 /** Turret traverse, radians per second: a pintle MG swings
  * fast, a Sherman's turret faster than a Panzer's. A tank
  * only fires when its turret is lined up on the target. */
@@ -257,11 +257,40 @@ export const TURRET_TRAVERSE: Record<string, number> = {
 };
 export const TURRET_FIRE_TOLERANCE = 0.07;
 /** Where a turreted vehicle's fire leaves the barrel, by type:
- * the tanks' long guns at 42, the halftrack's top MG at 24,
- * matching where its drawn barrel ends. */
+ * the tanks' long guns at 55, the halftrack's top MG at 31 —
+ * scaled with the drawn barrels in Phase C so the shot still
+ * leaves where the barrel ends. */
 export const MUZZLE_LEN: Record<string, number> = {
-  panzer: 42, tank: 42, halftrack: 24,
+  panzer: 55, tank: 55, halftrack: 31,
 };
+/** Phase C (Josh, voice call 2026-11-13): every vehicle and
+ * craft is drawn BIGGER, with a more shaded, three-dimensional
+ * hand — tanks, halftracks and trucks at 1.3x their old size,
+ * the C-47s at 1.35x, and the Higgins boats at 1.5x (Josh: the
+ * D-Day boats still read very small; if anything, make them
+ * all bigger). The painters below work in the old design units
+ * multiplied by these factors, and every gameplay size that
+ * describes a vehicle is scaled to match — the bullet hit
+ * circles above, the muzzle lengths, blast distance measured
+ * to the hull, the movement body, separation — so what the
+ * player sees is what shots and movement collide with. Drawn
+ * sizes now: tank 156 long x 62 deep, halftrack 120 x 52,
+ * truck 104 x 42, Higgins boat 147 x 60, C-47 230 long with
+ * a 159 wingspan. */
+export const TANK_SCALE = 1.3;
+export const HALFTRACK_SCALE = 1.3;
+export const TRUCK_SCALE = 1.3;
+export const BOAT_SCALE = 1.5;
+export const PLANE_SCALE = 1.35;
+/** A vehicle's movement/collision body radius: half its
+ * drawn depth, a hair under, so a vehicle can still pass a
+ * gap exactly its own width. Footmen keep UNIT_R. */
+export function vehicleBodyRadius(enemyType: string | null, type: string): number {
+  if (enemyType === "panzer" || type === "tank") return 30;
+  if (enemyType === "halftrack") return 25;
+  if (enemyType === "truck") return 20;
+  return UNIT_R;
+}
 /** NPC squad idle push (Josh, 2026-11-13, bug hunt item 23):
  * a 2nd Platoon squad whose men have not fought for this many
  * seconds (nobody fired, hit, or was hit) pushes up toward the
@@ -4239,7 +4268,7 @@ export class GameEngine {
             b.wakeT -= 0.07;
             const side = this.particles.length % 2 === 0 ? -1 : 1;
             this.particles.push({
-              x: b.x - 46, y: b.y + side * (8 + (this.particles.length % 5)),
+              x: b.x - 74, y: b.y + side * (8 + (this.particles.length % 5)),
               vx: -26 - (this.particles.length % 3) * 7, vy: side * 6,
               life: 0.55, max: 0.55, size: 2.6, kind: "foam",
             });
@@ -4248,7 +4277,7 @@ export class GameEngine {
             // The bow grounds: a burst of spray at the ramp.
             for (let k = 0; k < 9; k++) {
               this.particles.push({
-                x: b.x + 46 + (k % 3) * 3, y: b.y - 12 + k * 3,
+                x: b.x + 72 + (k % 3) * 4, y: b.y - 27 + k * 6.5,
                 vx: 14 + (k % 4) * 6, vy: (k - 4) * 5,
                 life: 0.5, max: 0.5, size: 2.8, kind: "foam",
               });
@@ -4265,7 +4294,7 @@ export class GameEngine {
             const man = b.men[b.out];
             b.out++;
             man.embarked = false;
-            man.x = b.x + 54;
+            man.x = b.x + 72;
             man.y = b.y + ((b.out % 3) - 1) * 9;
           }
         }
@@ -5486,9 +5515,9 @@ export class GameEngine {
         if (dead) break;
         for (const u of this.units) {
           if (!u.alive || u.side === b.side) continue;
-          // Vehicles are big targets (a tank's hull is 120
-          // long since the 2026-11-13 size bump): their hit
-          // circle matches the footprint instead of a man's.
+          // Vehicles are big targets (a tank's hull is 156
+          // long since Phase C): their hit circle matches the
+          // footprint instead of a man's.
           if (dist(b.x, b.y, u.x, u.y) < (u.vehicle ? (u.enemyType === "panzer" || u.type === "tank" ? TANK_HIT_R : VEHICLE_HIT_R) : UNIT_R + 2)) {
             // Cover between shooter and target soaks the round — but
             // only cover on the shooter's side of the target, so a
@@ -5811,15 +5840,17 @@ export class GameEngine {
     return best;
   }
 
-  private pointBlocked(x: number, y: number): boolean {
+  private pointBlocked(x: number, y: number, r: number = UNIT_R): boolean {
     // Is a unit's body clear at (x, y)? Check the centre and the four
-    // points a unit radius out, against the blocked grid.
+    // points a body radius out, against the blocked grid. Vehicles
+    // pass their own body radius (Phase C), so a hull checks the
+    // ground it actually covers, not a man's footprint.
     const pts: Array<[number, number]> = [
       [x, y],
-      [x + UNIT_R, y],
-      [x - UNIT_R, y],
-      [x, y + UNIT_R],
-      [x, y - UNIT_R],
+      [x + r, y],
+      [x - r, y],
+      [x, y + r],
+      [x, y - r],
     ];
     for (const [px, py] of pts) {
       const cx = Math.floor(px / CELL);
@@ -5840,15 +5871,16 @@ export class GameEngine {
   private canStepToward(u: Unit, x: number, y: number): boolean {
     const d = dist(u.x, u.y, x, y);
     if (d < 1) return true;
+    const bodyR = u.vehicle ? vehicleBodyRadius(u.enemyType, u.type) : UNIT_R;
     const base = u.speed * (u.pinned ? 0.35 : 1) * (1 / 60);
     for (const mult of [1, 2, 4]) {
       const step = base * mult;
       const dx = ((x - u.x) / d) * step;
       const dy = ((y - u.y) / d) * step;
       if (
-        !this.pointBlocked(u.x + dx, u.y + dy) ||
-        !this.pointBlocked(u.x + dx, u.y) ||
-        !this.pointBlocked(u.x, u.y + dy)
+        !this.pointBlocked(u.x + dx, u.y + dy, bodyR) ||
+        !this.pointBlocked(u.x + dx, u.y, bodyR) ||
+        !this.pointBlocked(u.x, u.y + dy, bodyR)
       ) return true;
     }
     return false;
@@ -6044,12 +6076,13 @@ export class GameEngine {
     // across a wall or around a corner made no net progress at all.
     // Try the full step, then X-only, then Y-only; if all are blocked,
     // stay put and let the stuck detector re-path or sidestep.
-    if (!this.pointBlocked(u.x + dx, u.y + dy)) {
+    const bodyR = u.vehicle ? vehicleBodyRadius(u.enemyType, u.type) : UNIT_R;
+    if (!this.pointBlocked(u.x + dx, u.y + dy, bodyR)) {
       u.x += dx;
       u.y += dy;
-    } else if (!this.pointBlocked(u.x + dx, u.y)) {
+    } else if (!this.pointBlocked(u.x + dx, u.y, bodyR)) {
       u.x += dx;
-    } else if (!this.pointBlocked(u.x, u.y + dy)) {
+    } else if (!this.pointBlocked(u.x, u.y + dy, bodyR)) {
       u.y += dy;
     } else {
       // Pocket escape: every step toward the waypoint is blocked — the
@@ -6081,7 +6114,7 @@ export class GameEngine {
           const a = away + off;
           const px = u.x + Math.cos(a) * step * mult;
           const py = u.y + Math.sin(a) * step * mult;
-          if (!this.pointBlocked(px, py)) {
+          if (!this.pointBlocked(px, py, bodyR)) {
             u.x = px;
             u.y = py;
             u.facing = a;
@@ -6110,7 +6143,9 @@ export class GameEngine {
         if (b.kind === "trench") continue; // a trench is a hole, not a wall: men stand in it
         if ((b.kind === "tree" || b.kind === "bush") && !u.vehicle) continue; // footmen push through foliage; vehicles still cannot
         const d = dist(u.x, u.y, b.x, b.y);
-        const min = b.r + UNIT_R;
+        // A vehicle's hull, not a man's radius, sets how close
+        // its centre can sit to an obstacle (Phase C).
+        const min = b.r + (u.vehicle ? vehicleBodyRadius(u.enemyType, u.type) : UNIT_R);
         if (d < min && d > 0.001) {
           u.x += ((u.x - b.x) / d) * (min - d);
           u.y += ((u.y - b.y) / d) * (min - d);
@@ -6124,9 +6159,18 @@ export class GameEngine {
         const b = this.units[j];
         if (!b.alive) continue;
         const d = dist(a.x, a.y, b.x, b.y);
-        const min = UNIT_R * 2;
+        // Separation is size-honest (Phase C): each side keeps
+        // its own body radius off the other, so a man stands
+        // clear of a vehicle's hull — and a man never shoves a
+        // vehicle; he takes the whole push himself. Two
+        // vehicles split it, as two men always have.
+        const aR = a.vehicle ? vehicleBodyRadius(a.enemyType, a.type) : UNIT_R;
+        const bR = b.vehicle ? vehicleBodyRadius(b.enemyType, b.type) : UNIT_R;
+        const min = aR + bR;
         if (d < min && d > 0.001) {
           const push = (min - d) / 2;
+          const aPush = a.vehicle && !b.vehicle ? 0 : b.vehicle && !a.vehicle ? push * 2 : push;
+          const bPush = b.vehicle && !a.vehicle ? 0 : a.vehicle && !b.vehicle ? push * 2 : push;
           const nx = (a.x - b.x) / d;
           const ny = (a.y - b.y) / d;
           // Tangential nudge so two units meeting head-on slide past each
@@ -6136,12 +6180,12 @@ export class GameEngine {
           const tx = -ny * side;
           const ty = nx * side;
           if (!a.isStatic) {
-            a.x += nx * push + tx * push;
-            a.y += ny * push + ty * push;
+            a.x += nx * aPush + tx * aPush;
+            a.y += ny * aPush + ty * aPush;
           }
           if (!b.isStatic) {
-            b.x -= nx * push + tx * push;
-            b.y -= ny * push + ty * push;
+            b.x -= nx * bPush + tx * bPush;
+            b.y -= ny * bPush + ty * bPush;
           }
         }
       }
@@ -6213,7 +6257,10 @@ export class GameEngine {
   private trySatchel(u: Unit, tx: number, ty: number): boolean {
     if (u.type !== "at" || u.satchelUsed || !u.equipment.includes("satchel")) return false;
     const victim = this.units.find(
-      (v) => v.alive && v.vehicle && v.side !== u.side && dist(tx, ty, v.x, v.y) <= 45,
+      // The aim-point tolerance scales with the hulls (Phase
+      // C): 58 is the same three-quarter reach along a tank's
+      // half-length that 45 was before the size bump.
+      (v) => v.alive && v.vehicle && v.side !== u.side && dist(tx, ty, v.x, v.y) <= 58,
     );
     if (!victim || dist(u.x, u.y, victim.x, victim.y) > 170) return false;
     u.satchelUsed = true;
@@ -6555,7 +6602,13 @@ export class GameEngine {
   private explode(x: number, y: number, aoe: number, dmg: number, side: "allies" | "axis", sourceType: string, killerId: number | null) {
     for (const u of this.units) {
       if (!u.alive || u.side === side) continue;
-      const d = dist(x, y, u.x, u.y);
+      // For a vehicle the blast is measured to the hull, not
+      // the centre point (Phase C): a shell bursting on a
+      // tank's nose is on the tank, however long it is. A
+      // footman's distance is unchanged.
+      const d = u.vehicle
+        ? Math.max(0, dist(x, y, u.x, u.y) - vehicleBodyRadius(u.enemyType, u.type))
+        : dist(x, y, u.x, u.y);
       if (d < aoe) {
         this.damage(u, dmg * (1 - (d / aoe) * 0.6), sourceType, killerId);
         u.suppression = Math.min(100, u.suppression + 40);
@@ -7309,6 +7362,13 @@ export class GameEngine {
       const fx = snap(b.x);
       const fy = snap(b.y);
       const grounded = b.x >= 200;
+      // Phase C: the Higgins boat at 1.5x — Josh's word was
+      // that she still read very small on the run in. The
+      // painter works in the old design units x BOAT_SCALE.
+      const S = BOAT_SCALE;
+      const X = (o: number) => fx + o * S;
+      const Y = (o: number) => fy + o * S;
+      const W = (n: number) => n * S;
       if (!grounded) {
         // A real wake: two foam arms trailing in a V astern,
         // crawling outward as she runs in, plus the churn right
@@ -7320,47 +7380,58 @@ export class GameEngine {
           const back = 48 + t * 52 + phase;
           const spread = 8 + t * 30;
           const w = 9 - k;
-          ctx.fillRect(fx - back, fy - spread, w, 3);
-          ctx.fillRect(fx - back, fy + spread, w, 3);
+          ctx.fillRect(X(-back), Y(-spread), W(w), W(3));
+          ctx.fillRect(X(-back), Y(spread), W(w), W(3));
         }
         ctx.fillStyle = "rgba(226,238,234,0.65)";
-        ctx.fillRect(fx - 54 - phase / 2, fy - 10, 8, 4);
-        ctx.fillRect(fx - 54 - phase / 2, fy + 6, 8, 4);
+        ctx.fillRect(X(-54 - phase / 2), Y(-10), W(8), W(4));
+        ctx.fillRect(X(-54 - phase / 2), Y(6), W(8), W(4));
       }
-      // The hull, properly sized against a man: 96 long, 38 wide.
+      // The hull: 147 long, 60 wide now. The outer plate is
+      // the shadow side; inside it the hull is lit along the
+      // near gunwale and falls to a dark waterline band along
+      // the far side, so the boat has depth in the water.
       ctx.fillStyle = "#1D2226";
-      ctx.fillRect(fx - 49, fy - 20, 98, 40);
+      ctx.fillRect(X(-49), Y(-20), W(98), W(40));
       ctx.fillStyle = "#3A4148";
-      ctx.fillRect(fx - 47, fy - 18, 94, 36);
+      ctx.fillRect(X(-47), Y(-18), W(94), W(36));
       ctx.fillStyle = "#454F58";
-      ctx.fillRect(fx - 47, fy - 18, 94, 4);
-      // The troop well, with helmet dots for the men still aboard.
+      ctx.fillRect(X(-47), Y(-18), W(94), W(4));
+      ctx.fillStyle = "#272D33";
+      ctx.fillRect(X(-47), Y(13), W(94), W(5));
+      // The bow shoulders catch the light ahead of the ramp.
+      ctx.fillStyle = "#454F58";
+      ctx.fillRect(X(38), Y(-13), W(7), W(26));
+      // The troop well, with bench shadows and helmet dots
+      // for the men still aboard.
       ctx.fillStyle = "#23282D";
-      ctx.fillRect(fx - 38, fy - 13, 64, 26);
+      ctx.fillRect(X(-38), Y(-13), W(64), W(26));
+      ctx.fillStyle = "#1A1E22";
+      ctx.fillRect(X(-38), Y(-2), W(64), W(3));
       ctx.fillStyle = "#5C6E3E";
       const aboard = b.men.length - b.out;
       for (let i = 0; i < Math.min(aboard, 8); i++) {
-        ctx.fillRect(fx - 32 + (i % 4) * 13, fy - 9 + Math.floor(i / 4) * 12, 8, 8);
+        ctx.fillRect(X(-32 + (i % 4) * 13), Y(-9 + Math.floor(i / 4) * 12), W(8), W(8));
       }
       // Coxswain's post and the stern deck.
       ctx.fillStyle = "#4A545E";
-      ctx.fillRect(fx - 46, fy - 5, 7, 10);
+      ctx.fillRect(X(-46), Y(-5), W(7), W(10));
       ctx.fillStyle = "#31383F";
-      ctx.fillRect(fx - 47, fy - 18, 8, 36);
+      ctx.fillRect(X(-47), Y(-18), W(8), W(36));
       // The bow ramp, and you can watch it drop: up it is a
       // 4-wide plate edge-on at the bow; over 0.6s it tips
       // forward and flattens onto the sand, growing to its full
       // 26-long footprint on the ground.
       const rampT = grounded ? Math.min(1, b.timer / 0.6) : 0;
       ctx.fillStyle = rampT >= 1 ? "#5A5342" : "#4A545E";
-      ctx.fillRect(fx + 45, fy - 15, 4 + 22 * rampT, 30);
+      ctx.fillRect(X(45), Y(-15), W(4 + 22 * rampT), W(30));
       if (rampT > 0 && rampT < 1) {
         ctx.fillStyle = "rgba(226,238,234,0.5)";
-        ctx.fillRect(fx + 47 + 22 * rampT, fy - 13, 3, 26);
+        ctx.fillRect(X(47 + 22 * rampT), Y(-13), W(3), W(26));
       }
       ctx.fillStyle = "#2A3036";
-      ctx.fillRect(fx + 45, fy - 15, 4 + 22 * rampT, 3);
-      ctx.fillRect(fx + 45, fy + 12, 4 + 22 * rampT, 3);
+      ctx.fillRect(X(45), Y(-15), W(4 + 22 * rampT), W(3));
+      ctx.fillRect(X(45), Y(12), W(4 + 22 * rampT), W(3));
     }
     // Foam rings at the feet of men still wading ashore.
     if (this.introKind === "boats" && this.introT >= 0) {
@@ -7390,52 +7461,74 @@ export class GameEngine {
   }
 
   private drawC47(ctx: CanvasRenderingContext2D, px: number, py: number) {
+    // Phase C: the C-47 at 1.35x — 230 long, 159 of span —
+    // drawn in the old design units x PLANE_SCALE. Her
+    // shadow's altitude offset stays in world units: she
+    // flies no higher for being bigger.
+    const S = PLANE_SCALE;
+    const X = (o: number) => px + o * S;
+    const Y = (o: number) => py + o * S;
+    const W = (n: number) => n * S;
     // Her shadow on the fields below, offset by her altitude.
     ctx.fillStyle = "rgba(0,0,0,0.16)";
-    ctx.fillRect(px - 78 + 22, py - 10 + 30, 168, 20);
-    ctx.fillRect(px - 4 + 22, py - 52 + 30, 20, 104);
-    // Wing first, under the fuselage: 118 of span, with the
-    // black and white invasion stripes at the rear of it.
+    ctx.fillRect(X(-78) + 22, Y(-10) + 30, W(168), W(20));
+    ctx.fillRect(X(-4) + 22, Y(-52) + 30, W(20), W(104));
+    // Wing first, under the fuselage: 159 of span, lit along
+    // its leading edge and shadowed at the trailing edge,
+    // with the black and white invasion stripes at the rear
+    // of it.
     ctx.fillStyle = "#33393B";
-    ctx.fillRect(px - 2, py - 59, 20, 118);
+    ctx.fillRect(X(-2), Y(-59), W(20), W(118));
+    ctx.fillStyle = "#454D4F";
+    ctx.fillRect(X(15), Y(-59), W(3), W(118));
     ctx.fillStyle = "#CFC8B0";
-    ctx.fillRect(px - 2, py - 59, 7, 118);
+    ctx.fillRect(X(-2), Y(-59), W(7), W(118));
     ctx.fillStyle = "#1E2122";
-    ctx.fillRect(px - 2, py - 40, 7, 20);
-    ctx.fillRect(px - 2, py - 6, 7, 20);
-    ctx.fillRect(px - 2, py + 28, 7, 20);
+    ctx.fillRect(X(-2), Y(-40), W(7), W(20));
+    ctx.fillRect(X(-2), Y(-6), W(7), W(20));
+    ctx.fillRect(X(-2), Y(28), W(7), W(20));
+    ctx.fillStyle = "rgba(0,0,0,0.20)";
+    ctx.fillRect(X(-2), Y(-59), W(2), W(118));
     // Engines on the wing, propellers a blurred disc.
     for (const s of [-1, 1]) {
       ctx.fillStyle = "#2A2F31";
-      ctx.fillRect(px - 8, py + s * 32 - 6, 34, 12);
+      ctx.fillRect(X(-8), Y(s * 32 - 6), W(34), W(12));
+      ctx.fillStyle = "#3A4143";
+      ctx.fillRect(X(-8), Y(s * 32 - 6), W(34), W(3));
       ctx.fillStyle = "rgba(205,210,205,0.20)";
       ctx.beginPath();
-      ctx.arc(px + 24, py + s * 32, 15, 0, Math.PI * 2);
+      ctx.arc(X(24), Y(s * 32), 15 * S, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = "#15181A";
-      ctx.fillRect(px + 22, py + s * 32 - 2, 4, 4);
+      ctx.fillRect(X(22), Y(s * 32 - 2), W(4), W(4));
     }
-    // Fuselage, 170 long, nose east.
+    // Fuselage, 230 long, nose east: lit along the spine,
+    // shadowed along the belly, the nose cap a shade lighter
+    // where it catches the light.
     ctx.fillStyle = "#3A4042";
-    ctx.fillRect(px - 85, py - 11, 170, 22);
+    ctx.fillRect(X(-85), Y(-11), W(170), W(22));
     ctx.fillStyle = "#4A5152";
-    ctx.fillRect(px - 85, py - 11, 170, 5);
+    ctx.fillRect(X(-85), Y(-11), W(170), W(5));
+    ctx.fillStyle = "#2E3334";
+    ctx.fillRect(X(-85), Y(7), W(170), W(4));
+    ctx.fillStyle = "#454C4D";
+    ctx.fillRect(X(70), Y(-11), W(15), W(22));
     // Invasion stripes around the rear fuselage.
     ctx.fillStyle = "#CFC8B0";
-    ctx.fillRect(px - 66, py - 11, 16, 22);
+    ctx.fillRect(X(-66), Y(-11), W(16), W(22));
     ctx.fillStyle = "#1E2122";
-    ctx.fillRect(px - 61, py - 11, 5, 22);
-    ctx.fillRect(px - 53, py - 11, 4, 22);
+    ctx.fillRect(X(-61), Y(-11), W(5), W(22));
+    ctx.fillRect(X(-53), Y(-11), W(4), W(22));
     // Tailplane and fin.
     ctx.fillStyle = "#33393B";
-    ctx.fillRect(px - 85, py - 23, 12, 46);
+    ctx.fillRect(X(-85), Y(-23), W(12), W(46));
     ctx.fillStyle = "#2A2F31";
-    ctx.fillRect(px - 88, py - 3, 8, 6);
+    ctx.fillRect(X(-88), Y(-3), W(8), W(6));
     // Cockpit glass and the open jump door the men pour from.
     ctx.fillStyle = "#6A7A80";
-    ctx.fillRect(px + 62, py - 7, 14, 14);
+    ctx.fillRect(X(62), Y(-7), W(14), W(14));
     ctx.fillStyle = "#141617";
-    ctx.fillRect(px - 34, py - 4, 12, 8);
+    ctx.fillRect(X(-34), Y(-4), W(12), W(8));
   }
 
   /** Moving water at the Overlord shoreline (Slice 1): the
@@ -7483,51 +7576,58 @@ export class GameEngine {
       const fx = snap(w.x);
       const fy = snap(w.y);
       const age = this.elapsed - w.t0;
-      // Scorch, sized to the wreck (the footprints match the
-      // live vehicles: tank 120, halftrack 92, truck 80 long).
-      const scorchW = w.kind === "halftrack" ? 114 : w.kind === "truck" ? 100 : 146;
-      const scorchH = w.kind === "halftrack" ? 56 : w.kind === "truck" ? 50 : 72;
+      // Scorch and body, sized to the wreck — the footprints
+      // match the live vehicles at their Phase C sizes (tank
+      // 156, halftrack 120, truck 104 long), so each wreck is
+      // painted in its own kind's scale.
+      const S = w.kind === "halftrack" ? HALFTRACK_SCALE : w.kind === "truck" ? TRUCK_SCALE : TANK_SCALE;
+      const X = (o: number) => fx + o * S;
+      const Y = (o: number) => fy + o * S;
+      const Wd = (n: number) => n * S;
+      const scorchW = (w.kind === "halftrack" ? 114 : w.kind === "truck" ? 100 : 146) * S;
+      const scorchH = (w.kind === "halftrack" ? 56 : w.kind === "truck" ? 50 : 72) * S;
       ctx.fillStyle = "rgba(12,10,8,0.55)";
       ctx.fillRect(fx - scorchW / 2, fy - scorchH / 2, scorchW, scorchH);
       ctx.fillStyle = "rgba(12,10,8,0.35)";
-      ctx.fillRect(fx - scorchW / 2 - 7, fy - scorchH / 2 + 6, scorchW + 14, scorchH - 12);
+      ctx.fillRect(fx - scorchW / 2 - 7 * S, fy - scorchH / 2 + 6 * S, scorchW + 14 * S, scorchH - 12 * S);
       const char1 = "#1B1B15";
       const char2 = "#26241C";
       const char3 = "#12120D";
       if (w.kind === "halftrack") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 46, fy - 20, 92, 9);
-        ctx.fillRect(fx - 46, fy + 11, 92, 9);
+        ctx.fillRect(X(-46), Y(-20), Wd(92), Wd(9));
+        ctx.fillRect(X(-46), Y(11), Wd(92), Wd(9));
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 43, fy - 14, 86, 28);
+        ctx.fillRect(X(-43), Y(-14), Wd(86), Wd(28));
         ctx.fillStyle = char3;
-        const bayX = w.flip ? fx - 4 : fx - 39;
-        ctx.fillRect(bayX, fy - 10, 35, 20);
+        const bayD = w.flip ? -4 : -39;
+        ctx.fillRect(X(bayD), Y(-10), Wd(35), Wd(20));
         ctx.fillStyle = char2;
-        ctx.fillRect(w.flip ? fx - 41 : fx + 27, fy - 13, 16, 26);
+        ctx.fillRect(X(w.flip ? -41 : 27), Y(-13), Wd(16), Wd(26));
       } else if (w.kind === "truck") {
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 40, fy - 16, 80, 7);
-        ctx.fillRect(fx - 40, fy + 9, 80, 7);
+        ctx.fillRect(X(-40), Y(-16), Wd(80), Wd(7));
+        ctx.fillRect(X(-40), Y(9), Wd(80), Wd(7));
         ctx.fillStyle = char1;
-        ctx.fillRect(w.flip ? fx - 6 : fx - 39, fy - 12, 45, 24);
+        const bedD = w.flip ? -6 : -39;
+        ctx.fillRect(X(bedD), Y(-12), Wd(45), Wd(24));
         ctx.fillStyle = char2;
-        for (let r = 0; r < 3; r++) ctx.fillRect((w.flip ? fx - 6 : fx - 39) + 7 + r * 14, fy - 12, 3, 24);
+        for (let r = 0; r < 3; r++) ctx.fillRect(X(bedD + 7 + r * 14), Y(-12), Wd(3), Wd(24));
         ctx.fillStyle = char3;
-        ctx.fillRect(w.flip ? fx - 34 : fx + 6, fy - 11, 28, 22);
+        ctx.fillRect(X(w.flip ? -34 : 6), Y(-11), Wd(28), Wd(22));
       } else {
         // Panzer or the player's Sherman: same charred shape.
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 60, fy - 24, 120, 12);
-        ctx.fillRect(fx - 60, fy + 12, 120, 12);
+        ctx.fillRect(X(-60), Y(-24), Wd(120), Wd(12));
+        ctx.fillRect(X(-60), Y(12), Wd(120), Wd(12));
         ctx.fillStyle = char1;
-        ctx.fillRect(fx - 54, fy - 16, 108, 32);
+        ctx.fillRect(X(-54), Y(-16), Wd(108), Wd(32));
         // Turret knocked askew, hatch blown open, barrel drooped.
         ctx.fillStyle = char2;
-        ctx.fillRect(fx - 14, fy - 27, 34, 16);
+        ctx.fillRect(X(-14), Y(-27), Wd(34), Wd(16));
         ctx.fillStyle = char3;
-        ctx.fillRect(fx - 7, fy - 27, 13, 7);
-        ctx.fillRect(w.flip ? fx - 52 : fx + 18, fy - 14, 34, 4);
+        ctx.fillRect(X(-7), Y(-27), Wd(13), Wd(7));
+        ctx.fillRect(X(w.flip ? -52 : 18), Y(-14), Wd(34), Wd(4));
       }
       // Fire life (Slice 1): a fresh wreck burns — two flame
       // tongues licking at different rates over an orange
@@ -7538,30 +7638,30 @@ export class GameEngine {
         const f1 = Math.sin(this.elapsed * 13 + w.x * 1.7);
         const f2 = Math.sin(this.elapsed * 17 + w.y * 2.3);
         ctx.fillStyle = "#B34A1F";
-        ctx.fillRect(fx - 7, fy - 4, 4, 4);
-        ctx.fillRect(fx + 4, fy + 1, 3, 3);
+        ctx.fillRect(X(-7), Y(-4), 4, 4);
+        ctx.fillRect(X(4), Y(1), 3, 3);
         ctx.fillStyle = "#E2692E";
-        ctx.fillRect(fx - 5, fy - 8 - Math.max(0, f1) * 3, 3, 5 + Math.max(0, f1) * 3);
-        ctx.fillRect(fx + 1, fy - 6 - Math.max(0, f2) * 2, 2, 4 + Math.max(0, f2) * 2);
+        ctx.fillRect(X(-5), Y(-8) - Math.max(0, f1) * 3, 3, 5 + Math.max(0, f1) * 3);
+        ctx.fillRect(X(1), Y(-6) - Math.max(0, f2) * 2, 2, 4 + Math.max(0, f2) * 2);
         if (f1 > -0.2) {
           ctx.fillStyle = "#E5A93C";
-          ctx.fillRect(fx - 4, fy - 10 - Math.max(0, f1) * 3, 2, 3);
+          ctx.fillRect(X(-4), Y(-10) - Math.max(0, f1) * 3, 2, 3);
         }
       } else if (age < 70) {
         const pulse = Math.sin(this.elapsed * 3 + w.x) > 0.1;
         ctx.fillStyle = pulse ? "#C85A24" : "#7A3416";
-        ctx.fillRect(fx - 5, fy - 3, 3, 3);
-        ctx.fillRect(fx + 5, fy + 2, 2, 2);
+        ctx.fillRect(X(-5), Y(-3), 3, 3);
+        ctx.fillRect(X(5), Y(2), 2, 2);
       }
       if (age < 240) {
         const heat = age < 26 ? 1 : age < 70 ? 0.6 : 0.32;
         const fade = 1 - Math.max(0, (age - 60) / 180);
         const rise = (this.elapsed * 7 + w.x) % 16;
         ctx.fillStyle = `rgba(70,68,60,${0.34 * heat * fade})`;
-        ctx.fillRect(fx - 3 - rise / 3, fy - 16 - rise, 6, 4);
-        ctx.fillRect(fx + 2 - rise / 2, fy - 24 - rise * 1.4, 5, 3);
+        ctx.fillRect(X(-3) - rise / 3, Y(-16) - rise, 6, 4);
+        ctx.fillRect(X(2) - rise / 2, Y(-24) - rise * 1.4, 5, 3);
         ctx.fillStyle = `rgba(88,86,78,${0.20 * heat * fade})`;
-        ctx.fillRect(fx - 1 - rise / 2, fy - 34 - rise * 1.8, 7, 3);
+        ctx.fillRect(X(-1) - rise / 2, Y(-34) - rise * 1.8, 7, 3);
       }
     }
   }
@@ -7704,68 +7804,107 @@ export class GameEngine {
       }
     }
     if (u.vehicle && u.enemyType === "truck") {
-      // The convoy truck: cab at the front (the way it faces),
-      // canvas-covered bed behind, wheels as dark blocks. No
-      // turret, no gun — just a target on wheels. No overhead
-      // bar: bars belong to the player's own squad only
-      // (Josh, 2026-11-13).
+      // The convoy truck, scaled up with the rest of the fleet
+      // (Phase C): cab at the front (the way it faces), canvas-
+      // covered bed behind, wheels as dark blocks with hub
+      // squares. No turret, no gun — just a target on wheels,
+      // now 104 long. The canvas is lit along its top edge and
+      // shadowed along the bottom, and the cab roof catches the
+      // light, so the truck has a top and a side like the tanks
+      // do. No overhead bar: bars belong to the player's own
+      // squad only (Josh, 2026-11-13).
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
+      const S = TRUCK_SCALE;
+      const X = (o: number) => fx + o * S;
+      const Y = (o: number) => fy + o * S;
+      const W = (n: number) => n * S;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 40, fy - 16, 80, 7);
-      ctx.fillRect(fx - 40, fy + 9, 80, 7);
+      ctx.fillRect(X(-40), Y(-16), W(80), W(7));
+      ctx.fillRect(X(-40), Y(9), W(80), W(7));
+      ctx.fillStyle = "#3A3A30";
+      for (const hx of [-30, -6, 18, 30]) {
+        ctx.fillRect(X(hx), Y(-14), W(5), W(4));
+        ctx.fillRect(X(hx), Y(10), W(5), W(4));
+      }
       ctx.fillStyle = "#6E6450";
-      const bedX = flip ? fx - 6 : fx - 39;
-      ctx.fillRect(bedX, fy - 12, 45, 24);
+      const bedD = flip ? -6 : -39;
+      ctx.fillRect(X(bedD), Y(-12), W(45), W(24));
+      ctx.fillStyle = "#7E7260";
+      ctx.fillRect(X(bedD), Y(-12), W(45), W(3));
+      ctx.fillStyle = "#4E4636";
+      ctx.fillRect(X(bedD), Y(8), W(45), W(4));
       ctx.fillStyle = "#5D5342";
-      for (let r = 0; r < 3; r++) ctx.fillRect(bedX + 7 + r * 14, fy - 12, 3, 24);
+      for (let r = 0; r < 3; r++) ctx.fillRect(X(bedD + 7 + r * 14), Y(-12), W(3), W(24));
       ctx.fillStyle = "#4C4F45";
-      const cabX = flip ? fx - 34 : fx + 6;
-      ctx.fillRect(cabX, fy - 11, 28, 22);
+      const cabD = flip ? -34 : 6;
+      ctx.fillRect(X(cabD), Y(-11), W(28), W(22));
+      ctx.fillStyle = "#5E6257";
+      ctx.fillRect(X(cabD), Y(-11), W(28), W(3));
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? cabX + 2 : cabX + 20, fy - 7, 6, 14);
+      ctx.fillRect(X(cabD + (flip ? 2 : 20)), Y(-7), W(6), W(14));
       return;
     }
     if (u.vehicle && u.enemyType === "halftrack") {
       // The Sd.Kfz. 251 halftrack, drawn like the tanks and
-      // sized up with them (Josh, 2026-11-13): 92 long, track
-      // bands with road wheels, a sloped nose at the front
-      // (the way it faces), the open troop bay behind with
-      // bench lines and the crew's helmets, and the mounted
-      // MG on a pivot at the bay's front edge — the gun
-      // traverses on u.turret like a tank's. German
-      // gray-green. No overhead bar (own squad only).
+      // sized up with them (Josh, 2026-11-13), and up again in
+      // Phase C: 120 long, track bands with road wheels whose
+      // link shading rolls as she travels, a sloped nose at the
+      // front (the way it faces) with a lit bevel face, the
+      // open troop bay behind with bench lines and the crew's
+      // helmets, and the mounted MG on a pivot at the bay's
+      // front edge — the gun traverses on u.turret like a
+      // tank's. The hull is lit along its top edge and shadowed
+      // along the bottom, so it reads as a body with a top and
+      // a side, not a slab. German gray-green. No overhead bar
+      // (own squad only).
       const fx = snap(u.x);
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
+      const S = HALFTRACK_SCALE;
+      const X = (o: number) => fx + o * S;
+      const Y = (o: number) => fy + o * S;
+      const W = (n: number) => n * S;
       ctx.fillStyle = "#23231C";
-      ctx.fillRect(fx - 46, fy - 20, 92, 9);
-      ctx.fillRect(fx - 46, fy + 11, 92, 9);
-      ctx.fillStyle = "#3B3B30";
-      for (let rwx = -40; rwx <= 38; rwx += 12) {
-        ctx.fillRect(fx + rwx, fy - 19, 7, 5);
-        ctx.fillRect(fx + rwx, fy + 12, 7, 5);
+      ctx.fillRect(X(-46), Y(-20), W(92), W(9));
+      ctx.fillRect(X(-46), Y(11), W(92), W(9));
+      const roll = Math.floor((u.x + u.y) / 7) % 2;
+      for (let i = 0, rwx = -40; rwx <= 38; i++, rwx += 12) {
+        ctx.fillStyle = (i + roll) % 2 === 0 ? "#3B3B30" : "#2E2E24";
+        ctx.fillRect(X(rwx), Y(-19), W(7), W(5));
+        ctx.fillRect(X(rwx), Y(12), W(7), W(5));
       }
+      ctx.fillStyle = "#454538";
+      ctx.fillRect(X(-46), Y(-20), W(92), W(2));
+      ctx.fillRect(X(-46), Y(18), W(92), W(2));
       // Hull.
       ctx.fillStyle = "#4C4F45";
-      ctx.fillRect(fx - 43, fy - 14, 86, 28);
-      // Sloped nose at the front.
-      const noseX = flip ? fx - 43 : fx + 27;
+      ctx.fillRect(X(-43), Y(-14), W(86), W(28));
       ctx.fillStyle = "#565A4C";
-      ctx.fillRect(noseX, fy - 13, 16, 26);
+      ctx.fillRect(X(-43), Y(-14), W(86), W(4));
+      ctx.fillStyle = "#3A3D34";
+      ctx.fillRect(X(-43), Y(9), W(86), W(5));
+      // Sloped nose at the front, its face catching the light.
+      const noseD = flip ? -43 : 27;
+      ctx.fillStyle = "#565A4C";
+      ctx.fillRect(X(noseD), Y(-13), W(16), W(26));
+      ctx.fillStyle = "#686C5A";
+      ctx.fillRect(X(noseD + (flip ? 0 : 12)), Y(-13), W(4), W(26));
       ctx.fillStyle = "#2E3238";
-      ctx.fillRect(flip ? noseX + 2 : noseX + 10, fy - 9, 4, 18);
+      ctx.fillRect(X(noseD + (flip ? 2 : 10)), Y(-9), W(4), W(18));
       // The open troop bay: darker floor, bench lines, helmets.
-      const bayX = flip ? fx - 4 : fx - 39;
+      const bayD = flip ? -4 : -39;
       ctx.fillStyle = "#33362E";
-      ctx.fillRect(bayX, fy - 10, 35, 20);
+      ctx.fillRect(X(bayD), Y(-10), W(35), W(20));
+      ctx.fillStyle = "#454A3E";
+      ctx.fillRect(X(bayD), Y(-10), W(35), W(2));
       ctx.fillStyle = "#3E4238";
-      ctx.fillRect(bayX + 4, fy - 10, 3, 20);
-      ctx.fillRect(bayX + 28, fy - 10, 3, 20);
+      ctx.fillRect(X(bayD + 4), Y(-10), W(3), W(20));
+      ctx.fillRect(X(bayD + 28), Y(-10), W(3), W(20));
       ctx.fillStyle = "#3A4526";
-      ctx.fillRect(bayX + 10, fy - 6, 7, 7);
-      ctx.fillRect(bayX + 20, fy + 3, 7, 7);
+      ctx.fillRect(X(bayD + 10), Y(-6), W(7), W(7));
+      ctx.fillRect(X(bayD + 20), Y(3), W(7), W(7));
       // The top MG, manned and unmistakable (Josh, 2026-11-13):
       // a gunner up out of the bay behind an armoured shield
       // at the bay's front edge, the gun on its pivot turned
@@ -7774,55 +7913,62 @@ export class GameEngine {
       // the old pivot gun was a 20-long dark line on dark
       // green and read as part of the hull. The gunner is
       // hull-fixed (he turns with the vehicle); the gun turns
-      // on its own. Its fire leaves at MUZZLE_LEN 24, right at
+      // on its own. Its fire leaves at MUZZLE_LEN 31, right at
       // this barrel's tip.
-      const mgX = flip ? fx - 11 : fx + 5;
+      const mgD = flip ? -11 : 5;
       const bayDir = flip ? 1 : -1;
       // The gunner: shoulders and a helmet on the bay side of
       // the pivot, up out of the troop bay.
       ctx.fillStyle = "#2E3324";
-      ctx.fillRect(mgX + bayDir * 3 - 4, fy - 5, 9, 10);
+      ctx.fillRect(X(mgD + bayDir * 3 - 4), Y(-5), W(9), W(10));
       ctx.fillStyle = "#49513A";
-      ctx.fillRect(mgX + bayDir * 5 - 4, fy - 4, 7, 8);
+      ctx.fillRect(X(mgD + bayDir * 5 - 4), Y(-4), W(7), W(8));
       ctx.fillStyle = "#79835E";
-      ctx.fillRect(mgX + bayDir * 5 - 4, fy - 4, 7, 2);
+      ctx.fillRect(X(mgD + bayDir * 5 - 4), Y(-4), W(7), W(2));
       ctx.save();
-      ctx.translate(mgX, fy);
+      ctx.translate(X(mgD), fy);
       ctx.rotate(u.turret);
       // Pivot post.
       ctx.fillStyle = "#22241C";
-      ctx.fillRect(-3, -3, 6, 6);
+      ctx.fillRect(-3 * S, -3 * S, W(6), W(6));
       // Receiver, behind the shield.
       ctx.fillStyle = "#26261C";
-      ctx.fillRect(-7, -3, 7, 6);
+      ctx.fillRect(-7 * S, -3 * S, W(7), W(6));
       // The armoured shield across the gun: pale steel so it
       // reads against the hull, lit on top, shaded below.
       ctx.fillStyle = "#6E7264";
-      ctx.fillRect(0, -10, 4, 20);
+      ctx.fillRect(0, -10 * S, W(4), W(20));
       ctx.fillStyle = "#8B8F82";
-      ctx.fillRect(0, -10, 4, 3);
+      ctx.fillRect(0, -10 * S, W(4), W(3));
       ctx.fillStyle = "#54584C";
-      ctx.fillRect(0, 7, 4, 3);
+      ctx.fillRect(0, 7 * S, W(4), W(3));
       // Barrel: long and thick, with a muzzle brake at the
-      // tip and a light line along the top.
+      // tip and a light line along the top. Its fire leaves
+      // at MUZZLE_LEN 31, scaled with the barrel in Phase C.
       ctx.fillStyle = "#17170F";
-      ctx.fillRect(4, -2, 22, 4);
+      ctx.fillRect(4 * S, -2 * S, W(22), W(4));
       ctx.fillStyle = "#43453A";
-      ctx.fillRect(4, -2, 22, 1);
-      ctx.fillRect(23, -3, 5, 6);
+      ctx.fillRect(4 * S, -2 * S, W(22), W(1));
+      ctx.fillRect(23 * S, -3 * S, W(5), W(6));
       // Belt drum at the receiver's side.
       ctx.fillStyle = "#4C4433";
-      ctx.fillRect(-5, 3, 6, 5);
+      ctx.fillRect(-5 * S, 3 * S, W(6), W(5));
       ctx.restore();
       return;
     }
     if (u.vehicle) {
-      // A tank, redrawn bigger (Josh, 2026-11-13): a 120-long
-      // hull on track bands, and a turret that turns on its own
-      // angle (u.turret) with the barrel riding on it. Drawn
-      // from the reference pictures: a dark grey Panzer with
-      // its turret number and a black cross on the rear deck,
-      // an olive Sherman with the white star on the turret.
+      // A tank, redrawn bigger (Josh, 2026-11-13) and bigger
+      // again in Phase C, with a proper shaded hand: a 156-long
+      // hull on track bands whose link shading rolls as she
+      // travels, fenders over the bands, a hull lit on the deck
+      // and shadowed along its lower side, a stepped glacis at
+      // the front, stowage and an exhaust on the rear deck, and
+      // a turret that turns on its own angle (u.turret) with a
+      // bevelled face and the barrel riding on it. Drawn from
+      // the reference pictures: a dark grey Panzer with its
+      // turret number and a black cross on the rear deck, an
+      // olive Sherman with the white star on the turret. The
+      // painter works in the old design units x TANK_SCALE.
       // No pose and no bars at all above it: overhead bars
       // belong to the player's own squad only (Josh,
       // 2026-11-13) — not even the called Sherman gets one.
@@ -7830,60 +7976,95 @@ export class GameEngine {
       const fy = snap(u.y);
       const flip = Math.cos(u.facing) < 0;
       const ally = u.side === "allies";
-      // Track bands first, then the hull over them: 120 long,
-      // 48 deep, two and a half men long on screen.
+      const S = TANK_SCALE;
+      const X = (o: number) => fx + o * S;
+      const Y = (o: number) => fy + o * S;
+      const W = (n: number) => n * S;
+      // Track bands first, then the hull over them: 156 long,
+      // 62 deep, over three men long on screen.
       ctx.fillStyle = "#1E1E14";
-      ctx.fillRect(fx - 60, fy - 24, 120, 12);
-      ctx.fillRect(fx - 60, fy + 12, 120, 12);
-      ctx.fillStyle = "#2C2C20";
-      for (let twx = -56; twx <= 52; twx += 12) {
-        ctx.fillRect(fx + twx, fy - 23, 7, 9);
-        ctx.fillRect(fx + twx, fy + 14, 7, 9);
+      ctx.fillRect(X(-60), Y(-24), W(120), W(12));
+      ctx.fillRect(X(-60), Y(12), W(120), W(12));
+      const roll = Math.floor((u.x + u.y) / 7) % 2;
+      for (let i = 0, twx = -56; twx <= 52; i++, twx += 12) {
+        ctx.fillStyle = (i + roll) % 2 === 0 ? "#2C2C20" : "#22221A";
+        ctx.fillRect(X(twx), Y(-23), W(7), W(9));
+        ctx.fillRect(X(twx), Y(14), W(7), W(9));
       }
-      // Hull plate and its top highlight, front glacis shaded.
+      // The top run of each track catches the light, and a
+      // fender strip rides over each band.
+      ctx.fillStyle = "#3A3A2C";
+      ctx.fillRect(X(-60), Y(-24), W(120), W(2.5));
+      ctx.fillRect(X(-60), Y(21.5), W(120), W(2.5));
+      ctx.fillStyle = ally ? "#42522A" : "#42423E";
+      ctx.fillRect(X(-58), Y(-19), W(116), W(3));
+      ctx.fillRect(X(-58), Y(16), W(116), W(3));
+      // Hull plate: lit deck, mid-tone side, and a shadow band
+      // along the bottom where the hull meets the tracks.
       ctx.fillStyle = ally ? "#4A5A2E" : "#4C4C4A";
-      ctx.fillRect(fx - 54, fy - 16, 108, 32);
+      ctx.fillRect(X(-54), Y(-16), W(108), W(32));
       ctx.fillStyle = ally ? "#556636" : "#595955";
-      ctx.fillRect(fx - 54, fy - 16, 108, 6);
+      ctx.fillRect(X(-54), Y(-16), W(108), W(6));
+      ctx.fillStyle = ally ? "#39491F" : "#383836";
+      ctx.fillRect(X(-54), Y(9), W(108), W(7));
+      // The front glacis: a sloped plate, lit on its face and
+      // stepped darker toward its lower edge.
       ctx.fillStyle = ally ? "#3E4C26" : "#3E3E3C";
-      ctx.fillRect(flip ? fx - 54 : fx + 42, fy - 14, 12, 28);
-      // Engine deck grilles at the rear.
+      ctx.fillRect(X(flip ? -54 : 42), Y(-14), W(12), W(28));
+      ctx.fillStyle = ally ? "#4C5E30" : "#4A4A46";
+      ctx.fillRect(X(flip ? -54 : 47), Y(-14), W(5), W(28));
+      // Engine deck grilles at the rear, stowage boxes, and
+      // an exhaust run: a worked rear deck, not a slab.
       ctx.fillStyle = "rgba(0,0,0,0.25)";
-      const deckX = flip ? fx + 30 : fx - 48;
-      for (let g = 0; g < 3; g++) ctx.fillRect(deckX + g * 6, fy - 9, 3, 18);
+      const deckD = flip ? 30 : -48;
+      for (let g = 0; g < 3; g++) ctx.fillRect(X(deckD + g * 6), Y(-9), W(3), W(18));
+      ctx.fillStyle = ally ? "#46582B" : "#484844";
+      ctx.fillRect(X(flip ? -50 : 34), Y(-13), W(10), W(8));
+      ctx.fillRect(X(flip ? -50 : 34), Y(5), W(10), W(8));
+      ctx.fillStyle = "#2E2E20";
+      ctx.fillRect(X(flip ? -52 : 46), Y(-3), W(6), W(3));
       if (!ally) {
         // The Panzer's cross on the rear deck: white arms,
         // black core.
-        const cxp = flip ? fx + 40 : fx - 40;
+        const cxp = flip ? 40 : -40;
         ctx.fillStyle = "#CFC8B0";
-        ctx.fillRect(cxp - 7, fy - 2, 14, 4);
-        ctx.fillRect(cxp - 2, fy - 7, 4, 14);
+        ctx.fillRect(X(cxp - 7), Y(-2), W(14), W(4));
+        ctx.fillRect(X(cxp - 2), Y(-7), W(4), W(14));
         ctx.fillStyle = "#1B1B15";
-        ctx.fillRect(cxp - 5, fy - 1, 10, 2);
-        ctx.fillRect(cxp - 1, fy - 5, 2, 10);
+        ctx.fillRect(X(cxp - 5), Y(-1), W(10), W(2));
+        ctx.fillRect(X(cxp - 1), Y(-5), W(2), W(10));
       }
-      // The turret, turned on its own angle: body, hatch,
-      // barrel with its muzzle brake, riding over the hull.
+      // The turret, turned on its own angle: body with a lit
+      // top and a shadowed rear, a mantlet block at the
+      // barrel's base, the barrel with its muzzle brake and a
+      // light line along its top, hatch alongside.
       ctx.save();
-      ctx.translate(fx - 4, fy);
+      ctx.translate(X(-4), fy);
       ctx.rotate(u.turret);
       ctx.fillStyle = ally ? "#526432" : "#565650";
-      ctx.fillRect(-20, -11, 38, 22);
+      ctx.fillRect(-20 * S, -11 * S, W(38), W(22));
       ctx.fillStyle = ally ? "#5F7439" : "#63635F";
-      ctx.fillRect(-20, -11, 38, 5);
-      ctx.fillStyle = "#2E2E20";
-      ctx.fillRect(16, -3, 40, 6);
-      ctx.fillRect(50, -5, 7, 10);
+      ctx.fillRect(-20 * S, -11 * S, W(38), W(5));
+      ctx.fillStyle = ally ? "#465A29" : "#4A4A46";
+      ctx.fillRect(-20 * S, -11 * S, W(11), W(22));
       ctx.fillStyle = ally ? "#42522A" : "#484844";
-      ctx.fillRect(-13, -6, 11, 12);
+      ctx.fillRect(-13 * S, -6 * S, W(11), W(12));
+      ctx.fillStyle = "#33331F";
+      ctx.fillRect(13 * S, -6 * S, W(8), W(12));
+      ctx.fillStyle = "#2E2E20";
+      ctx.fillRect(16 * S, -3 * S, W(40), W(6));
+      ctx.fillStyle = "#4A4A3A";
+      ctx.fillRect(16 * S, -3 * S, W(40), W(1.5));
+      ctx.fillStyle = "#2E2E20";
+      ctx.fillRect(50 * S, -5 * S, W(7), W(10));
       if (ally) {
         // The Sherman's white star on the turret top.
         ctx.fillStyle = "#E8E6DA";
         ctx.beginPath();
         for (let i = 0; i < 5; i++) {
           const a = -Math.PI / 2 + (i * 4 * Math.PI) / 5;
-          const sx = 4 + Math.cos(a) * 8;
-          const sy = Math.sin(a) * 8;
+          const sx = 4 * S + Math.cos(a) * 8 * S;
+          const sy = Math.sin(a) * 8 * S;
           if (i === 0) ctx.moveTo(sx, sy);
           else ctx.lineTo(sx, sy);
         }
@@ -7892,9 +8073,9 @@ export class GameEngine {
       } else {
         // The Panzer's turret number.
         ctx.fillStyle = "#D8D2BC";
-        ctx.font = "bold 11px monospace";
+        ctx.font = "bold 14px monospace";
         ctx.textAlign = "center";
-        ctx.fillText("214", 2, 4);
+        ctx.fillText("214", 2 * S, 4 * S);
       }
       ctx.restore();
       return;
